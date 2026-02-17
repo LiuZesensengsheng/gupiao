@@ -1,0 +1,28 @@
+{
+  "market_index": {
+    "symbol": "000300.SH",
+    "name": "沪深300"
+  },
+  "stocks": [
+    {
+      "symbol": "002772.SZ",
+      "name": "众兴菌业"
+    },
+    {
+      "symbol": "603516.SH",
+      "name": "淳中科技"
+    },
+    {
+      "symbol": "600160.SH",
+      "name": "巨化股份"
+    },
+    {
+      "symbol": "000630.SZ",
+      "name": "铜陵有色"
+    },
+    {
+      "symbol": "603619.SH",
+      "name": "中曼石油"
+    }
+  ]
+}
