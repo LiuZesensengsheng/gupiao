@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+import time
 from typing import Dict, List
 
 import pandas as pd
@@ -52,7 +53,8 @@ def fetch_eastmoney_daily(
     symbol: str,
     start: str = "2010-01-01",
     end: str = "2099-12-31",
-    timeout: int = 10,
+    timeout: int = 20,
+    retries: int = 3,
 ) -> pd.DataFrame:
     try:
         info = normalize_symbol(symbol)
@@ -75,12 +77,21 @@ def fetch_eastmoney_daily(
             "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36"
         )
     }
-    try:
-        resp = requests.get(EASTMONEY_KLINE_URL, params=params, headers=headers, timeout=timeout)
-        resp.raise_for_status()
-        payload = resp.json()
-    except Exception as exc:
-        raise DataError(f"{symbol}: eastmoney request failed: {exc}") from exc
+    payload = None
+    last_error: Exception | None = None
+    for attempt in range(1, max(1, int(retries)) + 1):
+        try:
+            resp = requests.get(EASTMONEY_KLINE_URL, params=params, headers=headers, timeout=timeout)
+            resp.raise_for_status()
+            payload = resp.json()
+            break
+        except Exception as exc:  # pragma: no cover - network jitter dependent
+            last_error = exc
+            if attempt >= retries:
+                break
+            time.sleep(0.6 * attempt)
+    if payload is None:
+        raise DataError(f"{symbol}: eastmoney request failed: {last_error}") from last_error
 
     data = payload.get("data") if isinstance(payload, dict) else None
     lines = data.get("klines") if isinstance(data, dict) else None
