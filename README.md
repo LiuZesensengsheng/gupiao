@@ -41,6 +41,53 @@ python3 run_forecast.py --source local --data-dir data
 
 - `reports/latest_report.md`
 
+## Daily Workflow (Simple)
+
+This is the practical flow you asked for:
+
+1. Fill daily news events in `input/news.csv` (you can copy from `input/news_template.csv`).
+2. Run one command:
+
+```bash
+python3 run_daily.py --source eastmoney --news-file input/news.csv
+```
+
+3. Read fusion report:
+
+- `reports/daily_report.md`
+
+The daily report includes:
+
+- Quant baseline probabilities (market + stocks)
+- Fuzzy news matrix (bullish/bearish/neutral memberships)
+- Blended probabilities after news adjustment
+- Suggested total exposure and stock weights
+- Market-effect modules: profit effect, loss effect, chip structure, capital state, sector heat
+
+### News CSV Fields
+
+Required columns:
+
+- `date`
+- `target_type` (`market` or `stock`)
+- `target` (use `MARKET` for market-level events; use symbol like `600160.SH` for stock-level)
+- `direction` (`bullish` / `bearish` / `neutral`)
+
+Optional columns:
+
+- `horizon` (`short`, `mid`, or `both`; default `both`)
+- `strength` (1-5; default 3)
+- `confidence` (0-1; default 0.7)
+- `source_weight` (0-1; default 0.7)
+- `title`
+
+You can tune blending sensitivity:
+
+- `--market-news-strength` (default 0.9)
+- `--stock-news-strength` (default 1.1)
+- `--news-lookback-days` (default 45)
+- `--news-half-life-days` (default 10)
+
 ## Local CSV Format
 
 Each symbol needs one CSV file in `data/`, for example:

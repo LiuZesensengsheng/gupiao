@@ -6,23 +6,28 @@
   "stocks": [
     {
       "symbol": "002772.SZ",
-      "name": "众兴菌业"
+      "name": "众兴菌业",
+      "sector": "农林牧渔"
     },
     {
       "symbol": "603516.SH",
-      "name": "淳中科技"
+      "name": "淳中科技",
+      "sector": "计算机设备"
     },
     {
       "symbol": "600160.SH",
-      "name": "巨化股份"
+      "name": "巨化股份",
+      "sector": "基础化工"
     },
     {
       "symbol": "000630.SZ",
-      "name": "铜陵有色"
+      "name": "铜陵有色",
+      "sector": "有色金属"
     },
     {
       "symbol": "603619.SH",
-      "name": "中曼石油"
+      "name": "中曼石油",
+      "sector": "石油石化"
     }
   ]
 }
