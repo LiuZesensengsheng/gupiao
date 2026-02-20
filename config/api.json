@@ -38,7 +38,7 @@
     "sleep_ms": 80
   },
   "daily": {
-    "news_file": "input/news.csv",
+    "news_file": "input/news_parts",
     "news_lookback_days": 45,
     "learned_news_lookback_days": 720,
     "news_half_life_days": 10.0,
@@ -52,6 +52,7 @@
     "backtest_years": [3, 5],
     "backtest_retrain_days": 20,
     "backtest_weight_threshold": 0.5,
+    "backtest_time_budget_minutes": 0.0,
     "commission_bps": 1.5,
     "slippage_bps": 2.0,
     "use_turnover_control": true,
@@ -67,6 +68,7 @@
     "optimizer_drawdown_penalty": 0.2,
     "optimizer_target_years": 3,
     "optimizer_top_trials": 12,
+    "optimizer_time_budget_minutes": 3.0,
     "report_date": "",
     "report": "reports/daily_report.md",
     "dashboard": "reports/daily_dashboard.html"

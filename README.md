@@ -88,6 +88,7 @@ python3 run_api.py sync-data --source auto --universe-size 500
 This is the practical flow you asked for:
 
 1. Fill daily news events in `input/news.csv` (you can copy from `input/news_template.csv`).
+   For large datasets, you can also split by target/year in a directory (recommended).
 2. Optional: fill margin templates:
    - `input/margin_market_template.csv` -> `input/margin_market.csv`
    - `input/margin_stock_template.csv` -> `input/margin_stock.csv`
@@ -130,6 +131,56 @@ Optional columns:
 - `source_weight` (0-1; default 0.7)
 - `title`
 
+### Scalable News Layout (Recommended)
+
+When news volume gets large, use directory partitions by target and year:
+
+```text
+input/news_parts/
+  MARKET/2024.csv
+  MARKET/2025.csv
+  MARKET/2026.csv
+  600160.SH/2024.csv
+  600160.SH/2025.csv
+  600160.SH/2026.csv
+  603619.SH/2024.csv
+  ...
+```
+
+Each CSV keeps the same columns as `input/news_template.csv`.
+The loader supports both a single CSV path and a directory path.
+
+Example:
+
+```bash
+python3 run_api.py daily --news-file input/news_parts
+```
+
+Optional helper to initialize empty partition files:
+
+```bash
+python3 scripts/init_news_partitions.py \
+  --watchlist config/watchlist.json \
+  --out-dir input/news_parts \
+  --start-year 2022 \
+  --end-year 2026
+```
+
+Automatic collection helper (Eastmoney announcements -> news partitions):
+
+```bash
+python3 scripts/collect_notice_news.py \
+  --watchlist config/watchlist.json \
+  --start-year 2022 \
+  --end-year 2026 \
+  --out-dir input/news_parts
+```
+
+Notes:
+
+- This collector currently focuses on stock announcements (not market macro news).
+- Direction/horizon are inferred from title keywords and should be treated as weak labels.
+
 You can tune blending sensitivity:
 
 - `--market-news-strength` (default 0.9)
@@ -160,6 +211,9 @@ You can customize dashboard output path:
 
 ```bash
 python3 run_api.py daily --source auto --news-file input/news.csv --dashboard reports/my_dashboard.html
+
+# large partitioned dataset
+python3 run_api.py daily --source auto --news-file input/news_parts --dashboard reports/my_dashboard.html
 ```
 
 Dashboard highlights:
@@ -173,6 +227,7 @@ Backtest parameters can be overridden from CLI:
 python3 run_api.py daily \
   --backtest-years 3,5 \
   --backtest-retrain-days 20 \
+  --backtest-time-budget-minutes 3 \
   --commission-bps 1.5 \
   --slippage-bps 2.0 \
   --backtest-weight-threshold 0.5
@@ -198,6 +253,7 @@ python3 run_api.py daily \
   --optimizer-retrain-days 20,40 \
   --optimizer-weight-thresholds 0.5,0.6 \
   --optimizer-max-positions 3,5 \
+  --optimizer-time-budget-minutes 3 \
   --optimizer-turnover-penalty 0.0015 \
   --optimizer-drawdown-penalty 0.2 \
   --optimizer-target-years 3

@@ -1,0 +1,5 @@
+date,target_type,target,horizon,direction,strength,confidence,source_weight,title
+2026-01-06,market,MARKET,mid,bullish,4,0.9,1.0,央行2026年工作会议提出继续实施适度宽松货币政策
+2026-01-16,market,MARKET,mid,bullish,4,0.9,1.0,证监会系统工作会议强调稳市场稳信心并推动中长期资金入市
+2026-02-11,market,MARKET,short,bullish,2,0.9,1.0,国家统计局公布1月CPI同比0.2%且PPI环比继续回升
+2026-02-11,market,MARKET,mid,bearish,2,0.8,0.9,国家统计局数据中PPI同比仍为负显示需求修复斜率仍待验证

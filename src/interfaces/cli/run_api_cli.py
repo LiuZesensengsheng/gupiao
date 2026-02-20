@@ -56,7 +56,7 @@ DEFAULT_TASK: dict[str, dict[str, Any]] = {
         "sleep_ms": 80,
     },
     "daily": {
-        "news_file": "input/news.csv",
+        "news_file": "input/news_parts",
         "news_lookback_days": 45,
         "learned_news_lookback_days": 720,
         "news_half_life_days": 10.0,
@@ -73,6 +73,7 @@ DEFAULT_TASK: dict[str, dict[str, Any]] = {
         "backtest_years": [3, 5],
         "backtest_retrain_days": 20,
         "backtest_weight_threshold": 0.50,
+        "backtest_time_budget_minutes": 0.0,
         "commission_bps": 1.5,
         "slippage_bps": 2.0,
         "use_turnover_control": True,
@@ -88,6 +89,7 @@ DEFAULT_TASK: dict[str, dict[str, Any]] = {
         "optimizer_drawdown_penalty": 0.20,
         "optimizer_target_years": 3,
         "optimizer_top_trials": 12,
+        "optimizer_time_budget_minutes": 0.0,
     },
 }
 
@@ -298,7 +300,12 @@ def build_parser() -> argparse.ArgumentParser:
     daily.add_argument("--min-train-days", dest="min_train_days", type=int, default=None, help="Min train days")
     daily.add_argument("--step-days", dest="step_days", type=int, default=None, help="Walk-forward test block size")
     daily.add_argument("--l2", type=float, default=None, help="L2 regularization strength")
-    daily.add_argument("--news-file", dest="news_file", default=None, help="CSV file for news events")
+    daily.add_argument(
+        "--news-file",
+        dest="news_file",
+        default=None,
+        help="News source path: single CSV file or directory of CSV partitions",
+    )
     daily.add_argument("--news-lookback-days", dest="news_lookback_days", type=int, default=None, help="Lookback")
     daily.add_argument(
         "--learned-news-lookback-days",
@@ -356,6 +363,13 @@ def build_parser() -> argparse.ArgumentParser:
         type=float,
         default=None,
         help="Score threshold for portfolio weights",
+    )
+    daily.add_argument(
+        "--backtest-time-budget-minutes",
+        dest="backtest_time_budget_minutes",
+        type=float,
+        default=None,
+        help="Max backtest runtime in minutes; <=0 means no time limit",
     )
     daily.add_argument("--commission-bps", dest="commission_bps", type=float, default=None, help="Commission in bps")
     daily.add_argument("--slippage-bps", dest="slippage_bps", type=float, default=None, help="Slippage in bps")
@@ -444,6 +458,13 @@ def build_parser() -> argparse.ArgumentParser:
         type=int,
         default=None,
         help="How many top optimizer trials to keep in report",
+    )
+    daily.add_argument(
+        "--optimizer-time-budget-minutes",
+        dest="optimizer_time_budget_minutes",
+        type=float,
+        default=None,
+        help="Max optimizer runtime in minutes; <=0 means no time limit",
     )
 
     forecast = sub.add_parser("forecast", parents=[config_parent], help="Generate base quant forecast report")
@@ -568,6 +589,7 @@ def run_daily(settings: dict[str, Any]) -> int:
         backtest_years=_parse_years(settings["backtest_years"]),
         backtest_retrain_days=int(settings["backtest_retrain_days"]),
         backtest_weight_threshold=float(settings["backtest_weight_threshold"]),
+        backtest_time_budget_minutes=float(settings["backtest_time_budget_minutes"]),
         commission_bps=float(settings["commission_bps"]),
         slippage_bps=float(settings["slippage_bps"]),
         use_turnover_control=_parse_bool(settings["use_turnover_control"]),
@@ -583,6 +605,7 @@ def run_daily(settings: dict[str, Any]) -> int:
         optimizer_drawdown_penalty=float(settings["optimizer_drawdown_penalty"]),
         optimizer_target_years=max(1, int(settings["optimizer_target_years"])),
         optimizer_top_trials=max(1, int(settings["optimizer_top_trials"])),
+        optimizer_time_budget_minutes=float(settings["optimizer_time_budget_minutes"]),
         report_date=settings["report_date"],
     )
 

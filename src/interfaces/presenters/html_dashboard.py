@@ -144,6 +144,29 @@ def _line_chart_html(curve: pd.DataFrame) -> str:
         spread_min -= spread_pad
         spread_max += spread_pad
         spread_span = max(1e-6, spread_max - spread_min)
+        spread_note_html = ""
+        if len(spread) >= 40:
+            spread_move = np.abs(np.diff(spread))
+            move_tol = 1e-10
+            move_idx = np.where(spread_move > move_tol)[0] + 1
+            move_days = int(move_idx.size)
+            sparse_cutoff = max(8, int(len(spread) * 0.08))
+            if move_days <= sparse_cutoff:
+                if move_days > 0:
+                    first_move_date = escape(str(pd.Timestamp(data["date"].iloc[int(move_idx[0])]).date()))
+                    last_move_date = escape(str(pd.Timestamp(data["date"].iloc[int(move_idx[-1])]).date()))
+                    spread_note_html = (
+                        "<div class='subcurve-note'>"
+                        f"提示：回测期仅 {move_days} 个交易日出现融合与基线差异（{first_move_date} 至 {last_move_date}），"
+                        "其余区间两条曲线基本重合。若希望全周期都有区分度，请补充更早历史新闻。"
+                        "</div>"
+                    )
+                else:
+                    spread_note_html = (
+                        "<div class='subcurve-note'>"
+                        "提示：回测期融合与基线曲线完全重合，说明当前新闻样本对该区间未形成有效差异。"
+                        "</div>"
+                    )
 
         def _y_spread(v: float) -> float:
             return py + (1.0 - (v - spread_min) / spread_span) * plot_h
@@ -162,6 +185,7 @@ def _line_chart_html(curve: pd.DataFrame) -> str:
         spread_html = (
             "<div class='subcurve-wrap'>"
             "<div class='subcurve-title'>融合/基线 相对净值 (1.00 为持平)</div>"
+            f"{spread_note_html}"
             "<svg viewBox='0 0 980 310' role='img' aria-label='融合与基线差值曲线'>"
             f"{''.join(spread_grid)}"
             f"<polyline fill='none' stroke='#7a55d1' stroke-width='2.4' points='{spread_pts}'/>"
@@ -527,6 +551,12 @@ def write_daily_dashboard(out_path: str | Path, result: DailyFusionResult) -> Pa
       font-size: 12px;
       color: var(--muted);
       margin-bottom: 4px;
+    }}
+    .subcurve-note {{
+      margin: 0 0 6px;
+      color: #64748b;
+      font-size: 12px;
+      line-height: 1.5;
     }}
     .legend {{
       margin-top: 6px;

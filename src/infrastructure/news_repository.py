@@ -8,6 +8,40 @@ import pandas as pd
 from src.domain.entities import NewsItem
 from src.domain.news import normalize_horizon, normalize_target, normalize_target_type
 
+_REQUIRED_COLUMNS = ("date", "target_type", "target", "direction")
+
+
+def _validate_columns(raw: pd.DataFrame, *, source_label: str) -> dict[str, str]:
+    lower_map = {c.lower(): c for c in raw.columns}
+    for col in _REQUIRED_COLUMNS:
+        if col not in lower_map:
+            raise ValueError(f"News CSV missing required column `{col}`: {source_label}")
+    return lower_map
+
+
+def _load_raw_news(path: Path) -> pd.DataFrame:
+    if path.is_file():
+        raw = pd.read_csv(path)
+        if raw.empty:
+            return raw
+        _validate_columns(raw, source_label=str(path))
+        return raw
+
+    files = sorted(p for p in path.rglob("*.csv") if p.is_file())
+    if not files:
+        return pd.DataFrame()
+
+    frames: list[pd.DataFrame] = []
+    for file in files:
+        raw = pd.read_csv(file)
+        if raw.empty:
+            continue
+        _validate_columns(raw, source_label=str(file))
+        frames.append(raw)
+    if not frames:
+        return pd.DataFrame()
+    return pd.concat(frames, ignore_index=True)
+
 
 def load_news_items(
     csv_path: str | Path,
@@ -18,15 +52,11 @@ def load_news_items(
     if not path.exists():
         return []
 
-    raw = pd.read_csv(path)
+    raw = _load_raw_news(path)
     if raw.empty:
         return []
 
-    lower_map = {c.lower(): c for c in raw.columns}
-    required = ["date", "target_type", "target", "direction"]
-    for col in required:
-        if col not in lower_map:
-            raise ValueError(f"News CSV missing required column: {col}")
+    lower_map = _validate_columns(raw, source_label=str(path))
 
     out: List[NewsItem] = []
     for _, row in raw.iterrows():
@@ -66,5 +96,24 @@ def load_news_items(
                 source_url=source_url,
             )
         )
-    return out
-
+    deduped: list[NewsItem] = []
+    seen: set[tuple[object, ...]] = set()
+    for item in out:
+        key = (
+            item.date,
+            item.target_type,
+            item.target,
+            item.horizon,
+            item.direction,
+            item.strength,
+            item.confidence,
+            item.source_weight,
+            item.title,
+            item.source_url,
+        )
+        if key in seen:
+            continue
+        seen.add(key)
+        deduped.append(item)
+    deduped.sort(key=lambda x: (x.date, x.target_type, x.target, x.horizon, x.direction))
+    return deduped

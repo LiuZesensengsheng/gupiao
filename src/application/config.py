@@ -34,6 +34,7 @@ class DailyConfig(ForecastConfig):
     backtest_years: tuple[int, ...]
     backtest_retrain_days: int
     backtest_weight_threshold: float
+    backtest_time_budget_minutes: float
     commission_bps: float
     slippage_bps: float
     use_turnover_control: bool
@@ -49,6 +50,7 @@ class DailyConfig(ForecastConfig):
     optimizer_drawdown_penalty: float
     optimizer_target_years: int
     optimizer_top_trials: int
+    optimizer_time_budget_minutes: float
     report_date: str = ""
 
 

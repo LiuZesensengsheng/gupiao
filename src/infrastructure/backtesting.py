@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import time
 from typing import Callable, Dict, Sequence
 
 import numpy as np
@@ -382,6 +383,7 @@ def run_portfolio_backtest(
     use_turnover_control: bool = True,
     max_trades_per_stock_per_week: int = 3,
     min_weight_change_to_trade: float = 0.03,
+    max_runtime_seconds: float = 0.0,
     use_margin_features: bool = True,
     margin_market_file: str = "input/margin_market.csv",
     margin_stock_file: str = "input/margin_stock.csv",
@@ -390,6 +392,9 @@ def run_portfolio_backtest(
     total_cost_rate = max(0.0, float(commission_bps) + float(slippage_bps)) / 10000.0
     news_enabled = bool(apply_news_fusion)
     news_list = list(news_items or [])
+    runtime_budget = max(0.0, float(max_runtime_seconds))
+    start_ts = time.monotonic()
+    deadline_ts = start_ts + runtime_budget if runtime_budget > 0.0 else None
 
     sent_cache: Dict[tuple[pd.Timestamp, str, str], SentimentAggregate] = {}
 
@@ -477,6 +482,11 @@ def run_portfolio_backtest(
     aligned_dates = sorted(pd.Timestamp(d) for d in common_dates)
     if len(aligned_dates) <= int(min_train_days) + 1:
         raise DataError("Backtest failed: insufficient aligned rows for training/testing.")
+    total_test_days = max(0, len(aligned_dates) - int(min_train_days) - 1)
+    block_starts = list(range(int(min_train_days), len(aligned_dates) - 1, retrain_days))
+    total_blocks = len(block_starts)
+    budget_text = "unlimited" if deadline_ts is None else f"{runtime_budget:.1f}s"
+    print(f"[BT] backtest start: symbols={len(stock_securities)}, test_days={total_test_days}, blocks={total_blocks}, budget={budget_text}")
 
     symbols = [normalize_symbol(s.symbol).symbol for s in stock_securities if normalize_symbol(s.symbol).symbol in stock_frames]
     prev_weights_quant = np.zeros(len(symbols), dtype=float)
@@ -485,7 +495,15 @@ def run_portfolio_backtest(
     trade_history_fused: list[list[int]] = [[] for _ in symbols]
     records: list[dict[str, object]] = []
 
-    for block_start in range(int(min_train_days), len(aligned_dates) - 1, retrain_days):
+    timeout_hit = False
+    processed_days = 0
+    for block_idx, block_start in enumerate(block_starts, start=1):
+        if deadline_ts is not None and time.monotonic() >= deadline_ts:
+            timeout_hit = True
+            print(f"[BT] time budget reached before block {block_idx}/{total_blocks}, stop.")
+            break
+        elapsed = time.monotonic() - start_ts
+        print(f"[BT] block {block_idx}/{total_blocks} start (elapsed={elapsed:.1f}s, processed_days={processed_days}/{total_test_days})")
         train_dates = aligned_dates[:block_start]
         train_index = pd.Index(train_dates)
 
@@ -592,6 +610,10 @@ def run_portfolio_backtest(
 
         block_end = min(block_start + retrain_days, len(aligned_dates) - 1)
         for i in range(block_start, block_end):
+            if deadline_ts is not None and time.monotonic() >= deadline_ts:
+                timeout_hit = True
+                print(f"[BT] time budget reached inside block {block_idx}/{total_blocks}, stop.")
+                break
             date = aligned_dates[i]
             next_date = aligned_dates[i + 1]
 
@@ -746,8 +768,17 @@ def run_portfolio_backtest(
                     "total_exposure_fused": total_exposure_fused,
                 }
             )
+            processed_days += 1
             prev_weights_quant = curr_weights_quant
             prev_weights_fused = curr_weights_fused
+        if timeout_hit:
+            break
+        elapsed = time.monotonic() - start_ts
+        print(f"[BT] block {block_idx}/{total_blocks} done (elapsed={elapsed:.1f}s, processed_days={processed_days}/{total_test_days})")
+
+    if timeout_hit:
+        elapsed = time.monotonic() - start_ts
+        print(f"[BT] backtest stopped by time budget at {elapsed:.1f}s; partial results returned.")
 
     daily_frame = pd.DataFrame(records).sort_values("date").drop_duplicates(subset=["date"]).reset_index(drop=True)
     if daily_frame.empty:

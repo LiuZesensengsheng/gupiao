@@ -1,0 +1,6 @@
+date,target_type,target,horizon,direction,strength,confidence,source_weight,title,source_url
+2026-01-05,stock,000630.SZ,mid,bearish,3,0.74,1.0,铜陵有色:关于控股子公司项目延期的公告,https://data.eastmoney.com/notices/detail/000630/AN202601041814692387.html
+2026-01-27,stock,000630.SZ,short,bearish,4,0.82,1.0,铜陵有色:股票交易异常波动公告,https://data.eastmoney.com/notices/detail/000630/AN202601261818431004.html
+2026-01-30,stock,000630.SZ,short,bearish,4,0.82,1.0,铜陵有色:股票交易异常波动公告,https://data.eastmoney.com/notices/detail/000630/AN202601291818546587.html
+2026-01-30,stock,000630.SZ,mid,bullish,3,0.9,1.0,铜陵有色公告提及主要产品价格上涨对经营形成支撑,
+2026-01-30,stock,000630.SZ,short,bearish,3,0.85,0.95,铜陵有色提示股价涨幅偏离较大及项目投产时间不确定风险,

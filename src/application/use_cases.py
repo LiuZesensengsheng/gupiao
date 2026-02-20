@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from itertools import product
+import time
 from typing import Dict, List
 
 import numpy as np
@@ -406,6 +407,7 @@ def _run_daily_backtest(
         window_years=config.backtest_years,
         news_items=news_items_train,
         apply_news_fusion=True,
+        max_runtime_seconds=max(0.0, float(config.backtest_time_budget_minutes) * 60.0),
         news_half_life_days=config.news_half_life_days,
         market_news_strength=float(market_news_strength),
         stock_news_strength=float(stock_news_strength),
@@ -514,14 +516,39 @@ def _optimize_strategy_selection(
     best_trial: StrategyTrial | None = None
     best_backtest: BacktestResult | None = None
     best_score = float("-inf")
+    total_trials = (
+        len(retrain_grid)
+        * len(threshold_grid)
+        * len(max_pos_grid)
+        * len(market_strength_grid)
+        * len(stock_strength_grid)
+    )
+    time_budget_sec = max(0.0, float(config.optimizer_time_budget_minutes) * 60.0)
+    start_ts = time.monotonic()
+    budget_text = "unlimited" if time_budget_sec <= 0 else f"{time_budget_sec:.0f}s"
+    print(f"[OPT] strategy search started: trials={total_trials}, budget={budget_text}")
 
-    for retrain_days, threshold, max_pos, market_strength, stock_strength in product(
-        retrain_grid,
-        threshold_grid,
-        max_pos_grid,
-        market_strength_grid,
-        stock_strength_grid,
+    for trial_idx, (retrain_days, threshold, max_pos, market_strength, stock_strength) in enumerate(
+        product(
+            retrain_grid,
+            threshold_grid,
+            max_pos_grid,
+            market_strength_grid,
+            stock_strength_grid,
+        ),
+        start=1,
     ):
+        elapsed = time.monotonic() - start_ts
+        if time_budget_sec > 0 and elapsed >= time_budget_sec:
+            print(
+                f"[OPT] time budget reached at {elapsed:.1f}s, stop search ({trial_idx - 1}/{total_trials} trials)."
+            )
+            break
+        print(
+            f"[OPT] trial {trial_idx}/{total_trials} "
+            f"(retrain={int(retrain_days)}, threshold={float(threshold):.2f}, "
+            f"max_pos={int(max_pos)}, m_news={float(market_strength):.2f}, s_news={float(stock_strength):.2f})"
+        )
         try:
             backtest = _run_daily_backtest(
                 config=config,
@@ -534,7 +561,8 @@ def _optimize_strategy_selection(
                 market_news_strength=float(market_strength),
                 stock_news_strength=float(stock_strength),
             )
-        except Exception:
+        except Exception as exc:
+            print(f"[OPT] trial {trial_idx}/{total_trials} failed: {exc}")
             continue
 
         metric = _pick_target_metric(backtest.metrics, target_years=int(config.optimizer_target_years))
@@ -544,7 +572,13 @@ def _optimize_strategy_selection(
             drawdown_penalty=float(config.optimizer_drawdown_penalty),
         )
         if metric is None:
+            print(f"[OPT] trial {trial_idx}/{total_trials} skipped: missing target metric")
             continue
+        print(
+            f"[OPT] trial {trial_idx}/{total_trials} result: "
+            f"objective={float(score):.4f}, annual={float(metric.annual_return):.2%}, "
+            f"excess={float(metric.excess_annual_return):.2%}, max_dd={float(metric.max_drawdown):.2%}"
+        )
         trial = StrategyTrial(
             rank=0,
             metric_label=metric.label,
@@ -567,6 +601,10 @@ def _optimize_strategy_selection(
             best_score = float(score)
             best_trial = trial
             best_backtest = backtest
+            print(
+                f"[OPT] new best at trial {trial_idx}/{total_trials}: "
+                f"score={best_score:.4f}, label={metric.label}"
+            )
 
     if not trials:
         return baseline
