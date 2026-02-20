@@ -1,6 +1,8 @@
 {
-  "generated_at": "2026-02-20T23:02:38.812818",
-  "source": "file:/Users/liuzesen/gupiao/config/universe_favorites.json",
+  "market_index": {
+    "symbol": "000300.SH",
+    "name": "沪深300"
+  },
   "stocks": [
     {
       "symbol": "605255.SH",
