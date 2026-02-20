@@ -1,0 +1,25 @@
+{
+  "common": {
+    "source": "eastmoney",
+    "watchlist": "config/watchlist.json",
+    "data_dir": "data",
+    "start": "2018-01-01",
+    "end": "2099-12-31",
+    "min_train_days": 240,
+    "step_days": 20,
+    "l2": 0.8
+  },
+  "forecast": {
+    "report": "reports/latest_report.md"
+  },
+  "daily": {
+    "news_file": "input/news.csv",
+    "news_lookback_days": 45,
+    "news_half_life_days": 10.0,
+    "market_news_strength": 0.9,
+    "stock_news_strength": 1.1,
+    "report_date": "",
+    "report": "reports/daily_report.md",
+    "dashboard": "reports/daily_dashboard.html"
+  }
+}

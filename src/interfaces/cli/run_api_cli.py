@@ -1,6 +1,9 @@
 from __future__ import annotations
 
 import argparse
+import json
+from pathlib import Path
+from typing import Any
 
 from src.application.config import DailyConfig, ForecastConfig
 from src.application.use_cases import generate_daily_fusion, generate_forecast
@@ -9,59 +12,146 @@ from src.infrastructure.market_data import DataError
 from src.interfaces.presenters.html_dashboard import write_daily_dashboard
 from src.interfaces.presenters.markdown_reports import write_daily_report, write_forecast_report
 
+DEFAULT_COMMON: dict[str, Any] = {
+    "source": "eastmoney",
+    "watchlist": "config/watchlist.json",
+    "data_dir": "data",
+    "start": "2018-01-01",
+    "end": "2099-12-31",
+    "min_train_days": 240,
+    "step_days": 20,
+    "l2": 0.8,
+}
+
+DEFAULT_TASK: dict[str, dict[str, Any]] = {
+    "forecast": {
+        "report": "reports/latest_report.md",
+    },
+    "daily": {
+        "news_file": "input/news.csv",
+        "news_lookback_days": 45,
+        "news_half_life_days": 10.0,
+        "market_news_strength": 0.9,
+        "stock_news_strength": 1.1,
+        "report_date": "",
+        "report": "reports/daily_report.md",
+        "dashboard": "reports/daily_dashboard.html",
+    },
+}
+
+
+def _read_json_config(path: str) -> dict[str, Any]:
+    config_path = Path(path)
+    if not config_path.exists():
+        return {}
+    with config_path.open("r", encoding="utf-8") as f:
+        payload = json.load(f)
+    if not isinstance(payload, dict):
+        raise ValueError(f"Config root must be an object: {config_path}")
+    return payload
+
+
+def _read_config_section(payload: dict[str, Any], section_name: str) -> dict[str, Any]:
+    section = payload.get(section_name, {})
+    if section is None:
+        return {}
+    if not isinstance(section, dict):
+        raise ValueError(f"Config section `{section_name}` must be an object")
+    return section
+
+
+def _coalesce(*values: Any) -> Any:
+    for value in values:
+        if value is not None:
+            return value
+    return None
+
+
+def _resolve_settings(args: argparse.Namespace, payload: dict[str, Any]) -> dict[str, Any]:
+    common_cfg = _read_config_section(payload, "common")
+    task_cfg = _read_config_section(payload, args.task)
+    defaults = DEFAULT_TASK[args.task]
+    resolved: dict[str, Any] = {}
+
+    for key, default in DEFAULT_COMMON.items():
+        resolved[key] = _coalesce(
+            getattr(args, key),
+            task_cfg.get(key),
+            common_cfg.get(key),
+            default,
+        )
+
+    for key, default in defaults.items():
+        resolved[key] = _coalesce(
+            getattr(args, key),
+            task_cfg.get(key),
+            common_cfg.get(key),
+            default,
+        )
+
+    return resolved
+
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Unified A-share API CLI")
+    config_parent = argparse.ArgumentParser(add_help=False)
+    config_parent.add_argument("--config", default="config/api.json", help="Path to unified API JSON config")
+    config_parent.add_argument(
+        "--print-effective-config",
+        action="store_true",
+        help="Print merged runtime config and exit",
+    )
+
     sub = parser.add_subparsers(dest="task", required=True)
 
-    daily = sub.add_parser("daily", help="Generate daily fusion report (quant + news)")
-    daily.add_argument("--source", default="eastmoney", choices=["eastmoney", "local"], help="Data source")
-    daily.add_argument("--watchlist", default="config/watchlist.json", help="Watchlist JSON path")
-    daily.add_argument("--data-dir", default="data", help="Directory for local CSV when source=local")
-    daily.add_argument("--start", default="2018-01-01", help="Start date YYYY-MM-DD")
-    daily.add_argument("--end", default="2099-12-31", help="End date YYYY-MM-DD")
-    daily.add_argument("--min-train-days", type=int, default=240, help="Min train days for walk-forward")
-    daily.add_argument("--step-days", type=int, default=20, help="Walk-forward test block size")
-    daily.add_argument("--l2", type=float, default=0.8, help="L2 regularization strength")
-    daily.add_argument("--news-file", default="input/news.csv", help="CSV file for news events")
-    daily.add_argument("--news-lookback-days", type=int, default=45, help="News lookback window in days")
-    daily.add_argument("--news-half-life-days", type=float, default=10.0, help="Decay half-life for news")
-    daily.add_argument("--market-news-strength", type=float, default=0.9, help="Market news blend strength")
-    daily.add_argument("--stock-news-strength", type=float, default=1.1, help="Stock news blend strength")
-    daily.add_argument("--report-date", default="", help="Override report date YYYY-MM-DD")
-    daily.add_argument("--report", default="reports/daily_report.md", help="Output markdown report path")
-    daily.add_argument("--dashboard", default="reports/daily_dashboard.html", help="Output HTML dashboard path")
+    daily = sub.add_parser("daily", parents=[config_parent], help="Generate daily fusion report (quant + news)")
+    daily.add_argument("--source", default=None, choices=["eastmoney", "local"], help="Data source")
+    daily.add_argument("--watchlist", default=None, help="Watchlist JSON path")
+    daily.add_argument("--data-dir", dest="data_dir", default=None, help="Directory for local CSV when source=local")
+    daily.add_argument("--start", default=None, help="Start date YYYY-MM-DD")
+    daily.add_argument("--end", default=None, help="End date YYYY-MM-DD")
+    daily.add_argument("--min-train-days", dest="min_train_days", type=int, default=None, help="Min train days")
+    daily.add_argument("--step-days", dest="step_days", type=int, default=None, help="Walk-forward test block size")
+    daily.add_argument("--l2", type=float, default=None, help="L2 regularization strength")
+    daily.add_argument("--news-file", dest="news_file", default=None, help="CSV file for news events")
+    daily.add_argument("--news-lookback-days", dest="news_lookback_days", type=int, default=None, help="Lookback")
+    daily.add_argument("--news-half-life-days", dest="news_half_life_days", type=float, default=None, help="Half-life")
+    daily.add_argument("--market-news-strength", dest="market_news_strength", type=float, default=None, help="Blend")
+    daily.add_argument("--stock-news-strength", dest="stock_news_strength", type=float, default=None, help="Blend")
+    daily.add_argument("--report-date", dest="report_date", default=None, help="Override report date YYYY-MM-DD")
+    daily.add_argument("--report", default=None, help="Output markdown report path")
+    daily.add_argument("--dashboard", default=None, help="Output HTML dashboard path")
 
-    forecast = sub.add_parser("forecast", help="Generate base quant forecast report")
-    forecast.add_argument("--source", default="eastmoney", choices=["eastmoney", "local"], help="Data source")
-    forecast.add_argument("--watchlist", default="config/watchlist.json", help="Watchlist JSON path")
-    forecast.add_argument("--data-dir", default="data", help="Directory for local CSV when source=local")
-    forecast.add_argument("--start", default="2018-01-01", help="Start date YYYY-MM-DD")
-    forecast.add_argument("--end", default="2099-12-31", help="End date YYYY-MM-DD")
-    forecast.add_argument("--min-train-days", type=int, default=240, help="Min train days for walk-forward")
-    forecast.add_argument("--step-days", type=int, default=20, help="Walk-forward test block size")
-    forecast.add_argument("--l2", type=float, default=0.8, help="L2 regularization strength")
-    forecast.add_argument("--report", default="reports/latest_report.md", help="Output report path")
+    forecast = sub.add_parser("forecast", parents=[config_parent], help="Generate base quant forecast report")
+    forecast.add_argument("--source", default=None, choices=["eastmoney", "local"], help="Data source")
+    forecast.add_argument("--watchlist", default=None, help="Watchlist JSON path")
+    forecast.add_argument("--data-dir", dest="data_dir", default=None, help="Directory for local CSV when source=local")
+    forecast.add_argument("--start", default=None, help="Start date YYYY-MM-DD")
+    forecast.add_argument("--end", default=None, help="End date YYYY-MM-DD")
+    forecast.add_argument("--min-train-days", dest="min_train_days", type=int, default=None, help="Min train days")
+    forecast.add_argument("--step-days", dest="step_days", type=int, default=None, help="Walk-forward test block size")
+    forecast.add_argument("--l2", type=float, default=None, help="L2 regularization strength")
+    forecast.add_argument("--report", default=None, help="Output report path")
 
     return parser
 
 
-def run_daily(args: argparse.Namespace) -> int:
-    market_security, stocks, sector_map = load_watchlist(args.watchlist)
+def run_daily(settings: dict[str, Any]) -> int:
+    market_security, stocks, sector_map = load_watchlist(settings["watchlist"])
     config = DailyConfig(
-        source=args.source,
-        data_dir=args.data_dir,
-        start=args.start,
-        end=args.end,
-        min_train_days=args.min_train_days,
-        step_days=args.step_days,
-        l2=args.l2,
-        news_file=args.news_file,
-        news_lookback_days=args.news_lookback_days,
-        news_half_life_days=args.news_half_life_days,
-        market_news_strength=args.market_news_strength,
-        stock_news_strength=args.stock_news_strength,
-        report_date=args.report_date,
+        source=settings["source"],
+        data_dir=settings["data_dir"],
+        start=settings["start"],
+        end=settings["end"],
+        min_train_days=settings["min_train_days"],
+        step_days=settings["step_days"],
+        l2=settings["l2"],
+        news_file=settings["news_file"],
+        news_lookback_days=settings["news_lookback_days"],
+        news_half_life_days=settings["news_half_life_days"],
+        market_news_strength=settings["market_news_strength"],
+        stock_news_strength=settings["stock_news_strength"],
+        report_date=settings["report_date"],
     )
 
     result = generate_daily_fusion(
@@ -70,28 +160,28 @@ def run_daily(args: argparse.Namespace) -> int:
         stocks=stocks,
         sector_map=sector_map,
     )
-    report_path = write_daily_report(args.report, result)
+    report_path = write_daily_report(settings["report"], result)
     print(f"[OK] Daily report generated: {report_path.resolve()}")
 
-    if args.dashboard.strip():
-        dashboard_path = write_daily_dashboard(args.dashboard, result)
+    if settings["dashboard"].strip():
+        dashboard_path = write_daily_dashboard(settings["dashboard"], result)
         print(f"[OK] Daily dashboard generated: {dashboard_path.resolve()}")
     return 0
 
 
-def run_forecast(args: argparse.Namespace) -> int:
-    market_security, stocks, _ = load_watchlist(args.watchlist)
+def run_forecast(settings: dict[str, Any]) -> int:
+    market_security, stocks, _ = load_watchlist(settings["watchlist"])
     config = ForecastConfig(
-        source=args.source,
-        data_dir=args.data_dir,
-        start=args.start,
-        end=args.end,
-        min_train_days=args.min_train_days,
-        step_days=args.step_days,
-        l2=args.l2,
+        source=settings["source"],
+        data_dir=settings["data_dir"],
+        start=settings["start"],
+        end=settings["end"],
+        min_train_days=settings["min_train_days"],
+        step_days=settings["step_days"],
+        l2=settings["l2"],
     )
     result = generate_forecast(config=config, market_security=market_security, stocks=stocks)
-    path = write_forecast_report(args.report, result.market_forecast, result.stock_rows)
+    path = write_forecast_report(settings["report"], result.market_forecast, result.stock_rows)
     print(f"[OK] Report generated: {path.resolve()}")
     return 0
 
@@ -100,11 +190,19 @@ def main() -> int:
     parser = build_parser()
     args = parser.parse_args()
     try:
+        payload = _read_json_config(args.config)
+        settings = _resolve_settings(args, payload)
+        if args.print_effective_config:
+            print(json.dumps({"task": args.task, "settings": settings}, indent=2, ensure_ascii=False))
+            return 0
         if args.task == "daily":
-            return run_daily(args)
+            return run_daily(settings)
         if args.task == "forecast":
-            return run_forecast(args)
+            return run_forecast(settings)
         parser.error(f"Unknown task: {args.task}")
+    except (OSError, json.JSONDecodeError, ValueError) as exc:
+        print(f"[ERROR] Config failure: {exc}")
+        return 4
     except DataError as exc:
         print(f"[ERROR] {exc}")
         print("Hint: if online source fails, use `--source local --data-dir data`.")
@@ -117,4 +215,3 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
-

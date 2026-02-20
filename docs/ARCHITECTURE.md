@@ -30,10 +30,13 @@ src/
 
   interfaces/
     cli/
-      run_api_cli.py
+      run_api_cli.py   # single API entrypoint + config merge
     presenters/
       markdown_reports.py
       html_dashboard.py
+
+config/
+  api.json             # unified runtime config (common + daily + forecast)
 ```
 
 ## Dependency Direction

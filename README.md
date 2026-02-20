@@ -38,13 +38,14 @@ Architecture details:
 ## Quick Start
 
 1. Prepare watchlist (already provided in `config/watchlist.json`).
-2. Run forecast:
+2. Optional: edit unified runtime config in `config/api.json`.
+3. Run forecast:
 
 ```bash
-python3 run_api.py forecast --source eastmoney
+python3 run_api.py forecast
 ```
 
-If your environment cannot access network, use local CSV mode:
+If your environment cannot access network, override from CLI:
 
 ```bash
 python3 run_api.py forecast --source local --data-dir data
@@ -62,7 +63,7 @@ This is the practical flow you asked for:
 2. Run one command:
 
 ```bash
-python3 run_api.py daily --source eastmoney --news-file input/news.csv
+python3 run_api.py daily
 ```
 
 3. Read fusion report:
@@ -106,6 +107,27 @@ You can customize dashboard output path:
 
 ```bash
 python3 run_api.py daily --source eastmoney --news-file input/news.csv --dashboard reports/my_dashboard.html
+```
+
+## Unified API Config
+
+`run_api.py` loads `config/api.json` by default.
+
+Merge priority:
+
+- CLI args
+- task section (`daily`/`forecast`) in config file
+- `common` section in config file
+- built-in defaults
+
+Useful commands:
+
+```bash
+# Use custom config file
+python3 run_api.py daily --config config/api.json
+
+# Inspect final merged params
+python3 run_api.py forecast --print-effective-config
 ```
 
 ## Local CSV Format
