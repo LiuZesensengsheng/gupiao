@@ -25,6 +25,7 @@ src/
     features.py        # Factor engineering
     modeling.py        # Logistic model + metrics
     forecast_engine.py # Quant forecast engine
+    news_fusion.py     # Learned news impact + quant/news calibration
     backtesting.py     # Portfolio backtest + risk/return metrics
     news_repository.py # News CSV ingestion
     effect_analysis.py # Profit/loss/chip/capital/sector analytics

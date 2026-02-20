@@ -18,9 +18,15 @@ class ForecastConfig:
 class DailyConfig(ForecastConfig):
     news_file: str
     news_lookback_days: int
+    learned_news_lookback_days: int
     news_half_life_days: float
     market_news_strength: float
     stock_news_strength: float
+    use_learned_news_fusion: bool
+    learned_news_min_samples: int
+    learned_holdout_ratio: float
+    learned_news_l2: float
+    learned_fusion_l2: float
     backtest_years: tuple[int, ...]
     backtest_retrain_days: int
     backtest_weight_threshold: float

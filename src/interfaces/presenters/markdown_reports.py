@@ -114,7 +114,7 @@ def write_daily_report(out_path: str | Path, result: DailyFusionResult) -> Path:
     exposure = target_exposure(result.market_final_short, result.market_final_mid)
 
     lines: list[str] = []
-    lines.append("# A股每日融合报告 (量化 + 新闻模糊矩阵)")
+    lines.append("# A股每日融合报告 (量化 + 学习型新闻融合)")
     lines.append("")
     lines.append(f"- 报告日期: {result.as_of_date.date()}")
     lines.append(f"- 数据源: {result.source}")
@@ -125,22 +125,22 @@ def write_daily_report(out_path: str | Path, result: DailyFusionResult) -> Path:
     lines.append("")
     lines.append("## 大盘融合结果")
     lines.append("")
-    lines.append("| 维度 | 模型概率 | 新闻净分 | 融合后概率 |")
-    lines.append("|---|---:|---:|---:|")
+    lines.append("| 维度 | 模型概率 | 新闻净分 | 新闻模型概率 | 融合后概率 | 融合方式 |")
+    lines.append("|---|---:|---:|---:|---:|---|")
     lines.append(
-        f"| 短期(1日) | {_to_percent(result.market_forecast.short_prob)} | {result.market_short_sent.score:+.3f} | {_to_percent(result.market_final_short)} |"
+        f"| 短期(1日) | {_to_percent(result.market_forecast.short_prob)} | {result.market_short_sent.score:+.3f} | {_to_percent(result.market_news_short_prob)} | {_to_percent(result.market_final_short)} | {result.market_fusion_mode_short} |"
     )
     lines.append(
-        f"| 中期(20日) | {_to_percent(result.market_forecast.mid_prob)} | {result.market_mid_sent.score:+.3f} | {_to_percent(result.market_final_mid)} |"
+        f"| 中期(20日) | {_to_percent(result.market_forecast.mid_prob)} | {result.market_mid_sent.score:+.3f} | {_to_percent(result.market_news_mid_prob)} | {_to_percent(result.market_final_mid)} | {result.market_fusion_mode_mid} |"
     )
     lines.append("")
     lines.append("## 个股融合结果")
     lines.append("")
-    lines.append("| 个股 | 模型短期 | 模型中期 | 新闻短期净分 | 新闻中期净分 | 融合短期 | 融合中期 | 综合分数 | 建议权重 |")
-    lines.append("|---|---:|---:|---:|---:|---:|---:|---:|---:|")
+    lines.append("| 个股 | 模型短期 | 模型中期 | 新闻短期净分 | 新闻中期净分 | 新闻短期概率 | 新闻中期概率 | 融合短期 | 融合中期 | 综合分数 | 建议权重 | 短期方式 | 中期方式 |")
+    lines.append("|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---|---|")
     for row in result.blended_rows:
         lines.append(
-            f"| {row.name} ({row.symbol}) | {_to_percent(row.base_short)} | {_to_percent(row.base_mid)} | {row.short_sent.score:+.3f} | {row.mid_sent.score:+.3f} | {_to_percent(row.final_short)} | {_to_percent(row.final_mid)} | {row.final_score:.3f} | {_to_percent(row.suggested_weight)} |"
+            f"| {row.name} ({row.symbol}) | {_to_percent(row.base_short)} | {_to_percent(row.base_mid)} | {row.short_sent.score:+.3f} | {row.mid_sent.score:+.3f} | {_to_percent(row.news_short_prob)} | {_to_percent(row.news_mid_prob)} | {_to_percent(row.final_short)} | {_to_percent(row.final_mid)} | {row.final_score:.3f} | {_to_percent(row.suggested_weight)} | {row.fusion_mode_short} | {row.fusion_mode_mid} |"
         )
     lines.append("")
     lines.append("## 新闻模糊矩阵")
@@ -160,6 +160,18 @@ def write_daily_report(out_path: str | Path, result: DailyFusionResult) -> Path:
         lines.append(
             f"| {row.name} ({row.symbol}) | 中期 | {row.mid_sent.bullish:.3f} | {row.mid_sent.bearish:.3f} | {row.mid_sent.neutral:.3f} | {row.mid_sent.items} |"
         )
+    lines.append("")
+    lines.append("## 学习型融合诊断")
+    lines.append("")
+    lines.append("| 标的 | 周期 | 模式 | 原因 | 样本数 | 验证样本 | 验证准确率 | 验证AUC | 验证Brier | 新闻系数(sent_score) | 融合系数(quant) | 融合系数(news) |")
+    lines.append("|---|---|---|---|---:|---:|---:|---:|---:|---:|---:|---:|")
+    if not result.learning_diagnostics:
+        lines.append("| NA | NA | NA | NA | 0 | 0 | NA | NA | NA | NA | NA | NA |")
+    else:
+        for diag in result.learning_diagnostics:
+            lines.append(
+                f"| {diag.target} | {diag.horizon} | {diag.mode} | {diag.reason} | {diag.samples} | {diag.holdout_n} | {_to_percent(diag.holdout_accuracy)} | {_to_float(diag.holdout_auc, 3)} | {_to_float(diag.holdout_brier, 3)} | {_to_float(diag.news_coef_score, 3)} | {_to_float(diag.fusion_coef_quant, 3)} | {_to_float(diag.fusion_coef_news, 3)} |"
+            )
     lines.append("")
     lines.append("## 市场效应分析")
     lines.append("")
@@ -194,7 +206,7 @@ def write_daily_report(out_path: str | Path, result: DailyFusionResult) -> Path:
     lines.append("## 使用说明")
     lines.append("")
     lines.append("- 新闻净分范围为 [-1, +1]，正值偏利好，负值偏利空。")
-    lines.append("- 融合后概率 = 模型概率经过新闻净分的非线性修正。")
+    lines.append("- `learned` 模式下先学习新闻影响，再校准 quant+news；`rule` 模式下回退为新闻净分非线性修正。")
     lines.append("- 若你希望更保守，可降低 `--stock-news-strength` 与 `--market-news-strength`。")
     lines.append("- 本结果为研究支持，不构成投资建议。")
     lines.append("")

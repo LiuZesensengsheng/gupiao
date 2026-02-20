@@ -31,9 +31,15 @@ DEFAULT_TASK: dict[str, dict[str, Any]] = {
     "daily": {
         "news_file": "input/news.csv",
         "news_lookback_days": 45,
+        "learned_news_lookback_days": 720,
         "news_half_life_days": 10.0,
         "market_news_strength": 0.9,
         "stock_news_strength": 1.1,
+        "use_learned_news_fusion": True,
+        "learned_news_min_samples": 80,
+        "learned_holdout_ratio": 0.2,
+        "learned_news_l2": 0.8,
+        "learned_fusion_l2": 0.6,
         "report_date": "",
         "report": "reports/daily_report.md",
         "dashboard": "reports/daily_dashboard.html",
@@ -85,6 +91,17 @@ def _parse_years(value: Any) -> tuple[int, ...]:
     parts = [p.strip() for p in text.split(",") if p.strip()]
     parsed = [int(p) for p in parts if int(p) > 0]
     return tuple(sorted(set(parsed))) if parsed else (3, 5)
+
+
+def _parse_bool(value: Any) -> bool:
+    if isinstance(value, bool):
+        return value
+    text = str(value).strip().lower()
+    if text in {"1", "true", "yes", "y", "on"}:
+        return True
+    if text in {"0", "false", "no", "n", "off"}:
+        return False
+    raise ValueError(f"Invalid boolean value: {value}")
 
 
 def _resolve_settings(args: argparse.Namespace, payload: dict[str, Any]) -> dict[str, Any]:
@@ -152,9 +169,51 @@ def build_parser() -> argparse.ArgumentParser:
     daily.add_argument("--l2", type=float, default=None, help="L2 regularization strength")
     daily.add_argument("--news-file", dest="news_file", default=None, help="CSV file for news events")
     daily.add_argument("--news-lookback-days", dest="news_lookback_days", type=int, default=None, help="Lookback")
+    daily.add_argument(
+        "--learned-news-lookback-days",
+        dest="learned_news_lookback_days",
+        type=int,
+        default=None,
+        help="Lookback window used by learned news models",
+    )
     daily.add_argument("--news-half-life-days", dest="news_half_life_days", type=float, default=None, help="Half-life")
     daily.add_argument("--market-news-strength", dest="market_news_strength", type=float, default=None, help="Blend")
     daily.add_argument("--stock-news-strength", dest="stock_news_strength", type=float, default=None, help="Blend")
+    daily.add_argument(
+        "--use-learned-news-fusion",
+        dest="use_learned_news_fusion",
+        choices=["true", "false"],
+        default=None,
+        help="Enable learned news impact + fusion calibration",
+    )
+    daily.add_argument(
+        "--learned-news-min-samples",
+        dest="learned_news_min_samples",
+        type=int,
+        default=None,
+        help="Minimum samples required for learned news model",
+    )
+    daily.add_argument(
+        "--learned-holdout-ratio",
+        dest="learned_holdout_ratio",
+        type=float,
+        default=None,
+        help="Holdout ratio for diagnostics",
+    )
+    daily.add_argument(
+        "--learned-news-l2",
+        dest="learned_news_l2",
+        type=float,
+        default=None,
+        help="L2 regularization for news model",
+    )
+    daily.add_argument(
+        "--learned-fusion-l2",
+        dest="learned_fusion_l2",
+        type=float,
+        default=None,
+        help="L2 regularization for fusion calibrator",
+    )
     daily.add_argument("--report-date", dest="report_date", default=None, help="Override report date YYYY-MM-DD")
     daily.add_argument("--report", default=None, help="Output markdown report path")
     daily.add_argument("--dashboard", default=None, help="Output HTML dashboard path")
@@ -201,9 +260,15 @@ def run_daily(settings: dict[str, Any]) -> int:
         l2=settings["l2"],
         news_file=settings["news_file"],
         news_lookback_days=settings["news_lookback_days"],
+        learned_news_lookback_days=int(settings["learned_news_lookback_days"]),
         news_half_life_days=settings["news_half_life_days"],
         market_news_strength=settings["market_news_strength"],
         stock_news_strength=settings["stock_news_strength"],
+        use_learned_news_fusion=_parse_bool(settings["use_learned_news_fusion"]),
+        learned_news_min_samples=int(settings["learned_news_min_samples"]),
+        learned_holdout_ratio=float(settings["learned_holdout_ratio"]),
+        learned_news_l2=float(settings["learned_news_l2"]),
+        learned_fusion_l2=float(settings["learned_fusion_l2"]),
         backtest_years=_parse_years(settings["backtest_years"]),
         backtest_retrain_days=int(settings["backtest_retrain_days"]),
         backtest_weight_threshold=float(settings["backtest_weight_threshold"]),

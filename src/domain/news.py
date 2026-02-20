@@ -80,6 +80,8 @@ def aggregate_sentiment(
     signs: list[int] = []
 
     for item in news_items:
+        if item.date > as_of_date:
+            continue
         if item.target not in {target_norm, "MARKET"} and target_norm != "MARKET":
             continue
         if target_norm == "MARKET" and item.target != "MARKET":
@@ -124,4 +126,3 @@ def blend_probability(base_prob: float, sentiment_score: float, sentiment_streng
     z_adj = z + float(sentiment_strength) * float(np.clip(sentiment_score, -1.0, 1.0))
     p_adj = 1.0 / (1.0 + np.exp(-z_adj))
     return float(np.clip(p_adj, 1e-6, 1 - 1e-6))
-

@@ -22,6 +22,7 @@ It is designed for A-shares and includes your initial symbols:
 - Market + stock layered modeling
 - Walk-forward out-of-sample evaluation
 - Portfolio backtest (3y/5y windows) with equity curve and trading-cost simulation
+- Learned news fusion: train `news -> impact` and calibrate `quant + news -> final probability`
 
 ## Architecture
 
@@ -82,9 +83,10 @@ The daily report includes:
 
 - Quant baseline probabilities (market + stocks)
 - Fuzzy news matrix (bullish/bearish/neutral memberships)
-- Blended probabilities after news adjustment
+- Learned news probabilities + calibrated final probabilities
 - Suggested total exposure and stock weights
 - Market-effect modules: profit effect, loss effect, chip structure, capital state, sector heat
+- Learning diagnostics (samples, holdout metrics, learned coefficients)
 - Backtest metrics: annual return/excess, max drawdown, Sharpe, Sortino, Calmar, Information Ratio, turnover, cost drag
 
 ### News CSV Fields
@@ -110,6 +112,25 @@ You can tune blending sensitivity:
 - `--stock-news-strength` (default 1.1)
 - `--news-lookback-days` (default 45)
 - `--news-half-life-days` (default 10)
+
+Learned fusion controls (daily task):
+
+- `--use-learned-news-fusion true|false` (default true)
+- `--learned-news-lookback-days` (default 720)
+- `--learned-news-min-samples` (default 80)
+- `--learned-holdout-ratio` (default 0.2)
+- `--learned-news-l2` (default 0.8)
+- `--learned-fusion-l2` (default 0.6)
+
+Example:
+
+```bash
+# Learned mode (default)
+python3 run_api.py daily --source eastmoney
+
+# Force rule-only mode (no learned fitting)
+python3 run_api.py daily --source eastmoney --use-learned-news-fusion false
+```
 
 You can customize dashboard output path:
 

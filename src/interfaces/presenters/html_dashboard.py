@@ -160,6 +160,8 @@ def write_daily_dashboard(out_path: str | Path, result: DailyFusionResult) -> Pa
             f"<td class='score' style='color:{_score_color(row.final_score * 2 - 1)}'>{row.final_score:.3f}</td>"
             f"<td>{_bar_html(row.final_score, scale=1.0, color=_prob_color(row.final_score))}</td>"
             f"<td>{_pct(row.suggested_weight)}</td>"
+            f"<td>{escape(row.fusion_mode_short)}</td>"
+            f"<td>{escape(row.fusion_mode_mid)}</td>"
             "</tr>"
         )
         matrix_rows.append(
@@ -221,6 +223,24 @@ def write_daily_dashboard(out_path: str | Path, result: DailyFusionResult) -> Pa
             f"<td>{_pct(metrics.win_rate)}</td>"
             f"<td>{_pct(metrics.annual_turnover)}</td>"
             f"<td>{_pct(metrics.total_cost)}</td>"
+            "</tr>"
+        )
+    learning_rows: list[str] = []
+    for diag in result.learning_diagnostics:
+        learning_rows.append(
+            "<tr>"
+            f"<td>{escape(diag.target)}</td>"
+            f"<td>{escape(diag.horizon)}</td>"
+            f"<td>{escape(diag.mode)}</td>"
+            f"<td>{escape(diag.reason)}</td>"
+            f"<td>{diag.samples}</td>"
+            f"<td>{diag.holdout_n}</td>"
+            f"<td>{_pct(diag.holdout_accuracy)}</td>"
+            f"<td>{_num(diag.holdout_auc, 3)}</td>"
+            f"<td>{_num(diag.holdout_brier, 3)}</td>"
+            f"<td>{_num(diag.news_coef_score, 3)}</td>"
+            f"<td>{_num(diag.fusion_coef_quant, 3)}</td>"
+            f"<td>{_num(diag.fusion_coef_news, 3)}</td>"
             "</tr>"
         )
     curve_html = _line_chart_html(result.backtest_curve)
@@ -412,12 +432,12 @@ def write_daily_dashboard(out_path: str | Path, result: DailyFusionResult) -> Pa
       <article class="card">
         <div class="k">大盘短期概率</div>
         <div class="v">{_pct(result.market_final_short)}</div>
-        <div class="sub">模型 {_pct(market.short_prob)} / 新闻净分 {_score(result.market_short_sent.score)}</div>
+        <div class="sub">模型 {_pct(market.short_prob)} / 新闻模型 {_pct(result.market_news_short_prob)} / {escape(result.market_fusion_mode_short)}</div>
       </article>
       <article class="card">
         <div class="k">大盘中期概率</div>
         <div class="v">{_pct(result.market_final_mid)}</div>
-        <div class="sub">模型 {_pct(market.mid_prob)} / 新闻净分 {_score(result.market_mid_sent.score)}</div>
+        <div class="sub">模型 {_pct(market.mid_prob)} / 新闻模型 {_pct(result.market_news_mid_prob)} / {escape(result.market_fusion_mode_mid)}</div>
       </article>
       <article class="card">
         <div class="k">风险温度</div>
@@ -431,10 +451,10 @@ def write_daily_dashboard(out_path: str | Path, result: DailyFusionResult) -> Pa
         <h2>个股综合排序</h2>
         <table>
           <thead>
-            <tr><th>个股</th><th>融合短期</th><th>融合中期</th><th>综合分数</th><th>分数强度</th><th>建议权重</th></tr>
+            <tr><th>个股</th><th>融合短期</th><th>融合中期</th><th>综合分数</th><th>分数强度</th><th>建议权重</th><th>短期方式</th><th>中期方式</th></tr>
           </thead>
           <tbody>
-            {''.join(stock_table_rows) if stock_table_rows else '<tr><td colspan="6">无数据</td></tr>'}
+            {''.join(stock_table_rows) if stock_table_rows else '<tr><td colspan="8">无数据</td></tr>'}
           </tbody>
         </table>
       </section>
@@ -491,6 +511,18 @@ def write_daily_dashboard(out_path: str | Path, result: DailyFusionResult) -> Pa
           <tr><td><div class="sym">{escape(market.name)}</div><div class="code">{escape(market.symbol)}</div></td><td>短期</td><td><span class="pill bull">{result.market_short_sent.bullish:.3f}</span></td><td><span class="pill bear">{result.market_short_sent.bearish:.3f}</span></td><td>{result.market_short_sent.neutral:.3f}</td><td>{result.market_short_sent.items}</td></tr>
           <tr><td><div class="sym">{escape(market.name)}</div><div class="code">{escape(market.symbol)}</div></td><td>中期</td><td><span class="pill bull">{result.market_mid_sent.bullish:.3f}</span></td><td><span class="pill bear">{result.market_mid_sent.bearish:.3f}</span></td><td>{result.market_mid_sent.neutral:.3f}</td><td>{result.market_mid_sent.items}</td></tr>
           {''.join(matrix_rows) if matrix_rows else '<tr><td colspan="6">无数据</td></tr>'}
+        </tbody>
+      </table>
+    </section>
+
+    <section>
+      <h2>学习型融合诊断</h2>
+      <table>
+        <thead>
+          <tr><th>标的</th><th>周期</th><th>模式</th><th>原因</th><th>样本</th><th>验证样本</th><th>验证准确率</th><th>验证AUC</th><th>验证Brier</th><th>新闻系数</th><th>融合系数(quant)</th><th>融合系数(news)</th></tr>
+        </thead>
+        <tbody>
+          {''.join(learning_rows) if learning_rows else '<tr><td colspan="12">无数据</td></tr>'}
         </tbody>
       </table>
     </section>

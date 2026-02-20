@@ -81,12 +81,32 @@ class BlendedRow:
     name: str
     base_short: float
     base_mid: float
+    news_short_prob: float
+    news_mid_prob: float
     final_short: float
     final_mid: float
     final_score: float
     short_sent: SentimentAggregate
     mid_sent: SentimentAggregate
+    fusion_mode_short: str = "rule"
+    fusion_mode_mid: str = "rule"
     suggested_weight: float = 0.0
+
+
+@dataclass
+class FusionDiagnostics:
+    target: str
+    horizon: str
+    mode: str
+    reason: str
+    samples: int
+    holdout_n: int
+    holdout_accuracy: float
+    holdout_brier: float
+    holdout_auc: float
+    news_coef_score: float
+    fusion_coef_quant: float
+    fusion_coef_news: float
 
 
 @dataclass
