@@ -1,0 +1,31 @@
+{
+  "generated_at": "2026-02-20T20:56:52.196697",
+  "source": "data_dir_fallback",
+  "stocks": [
+    {
+      "symbol": "000630.SZ",
+      "name": "000630.SZ",
+      "sector": "其他"
+    },
+    {
+      "symbol": "002772.SZ",
+      "name": "002772.SZ",
+      "sector": "其他"
+    },
+    {
+      "symbol": "600160.SH",
+      "name": "600160.SH",
+      "sector": "其他"
+    },
+    {
+      "symbol": "603516.SH",
+      "name": "603516.SH",
+      "sector": "其他"
+    },
+    {
+      "symbol": "603619.SH",
+      "name": "603619.SH",
+      "sector": "其他"
+    }
+  ]
+}

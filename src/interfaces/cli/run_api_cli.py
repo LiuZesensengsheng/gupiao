@@ -5,12 +5,15 @@ import json
 from pathlib import Path
 from typing import Any
 
-from src.application.config import DailyConfig, ForecastConfig
-from src.application.use_cases import generate_daily_fusion, generate_forecast
+from src.application.config import DailyConfig, DiscoverConfig, ForecastConfig
+from src.application.use_cases import generate_daily_fusion, generate_discovery, generate_forecast
 from src.application.watchlist import load_watchlist
+from src.domain.symbols import SymbolError, normalize_symbol
+from src.infrastructure.data_sync import sync_market_data
+from src.infrastructure.margin_sync import sync_margin_data
 from src.infrastructure.market_data import DataError, set_tushare_token
 from src.interfaces.presenters.html_dashboard import write_daily_dashboard
-from src.interfaces.presenters.markdown_reports import write_daily_report, write_forecast_report
+from src.interfaces.presenters.markdown_reports import write_daily_report, write_discovery_report, write_forecast_report
 
 DEFAULT_COMMON: dict[str, Any] = {
     "source": "auto",
@@ -22,11 +25,35 @@ DEFAULT_COMMON: dict[str, Any] = {
     "min_train_days": 240,
     "step_days": 20,
     "l2": 0.8,
+    "max_positions": 5,
+    "use_margin_features": True,
+    "margin_market_file": "input/margin_market.csv",
+    "margin_stock_file": "input/margin_stock.csv",
 }
 
 DEFAULT_TASK: dict[str, dict[str, Any]] = {
     "forecast": {
         "report": "reports/latest_report.md",
+    },
+    "discover": {
+        "universe_file": "",
+        "candidate_limit": 120,
+        "top_k": 20,
+        "exclude_watchlist": False,
+        "report": "reports/discovery_report.md",
+    },
+    "sync-data": {
+        "universe_size": 500,
+        "universe_file": "",
+        "include_indices": True,
+        "force_refresh": False,
+        "sleep_ms": 80,
+        "max_failures": 100,
+        "write_universe_file": "config/universe_auto.json",
+    },
+    "sync-margin": {
+        "symbols": "",
+        "sleep_ms": 80,
     },
     "daily": {
         "news_file": "input/news.csv",
@@ -48,6 +75,19 @@ DEFAULT_TASK: dict[str, dict[str, Any]] = {
         "backtest_weight_threshold": 0.50,
         "commission_bps": 1.5,
         "slippage_bps": 2.0,
+        "use_turnover_control": True,
+        "max_trades_per_stock_per_week": 3,
+        "min_weight_change_to_trade": 0.03,
+        "use_strategy_optimizer": True,
+        "optimizer_retrain_days": [20, 40],
+        "optimizer_weight_thresholds": [0.50, 0.60],
+        "optimizer_max_positions": [3, 5],
+        "optimizer_market_news_strengths": [0.8, 1.0],
+        "optimizer_stock_news_strengths": [1.0, 1.2],
+        "optimizer_turnover_penalty": 0.0015,
+        "optimizer_drawdown_penalty": 0.20,
+        "optimizer_target_years": 3,
+        "optimizer_top_trials": 12,
     },
 }
 
@@ -93,6 +133,53 @@ def _parse_years(value: Any) -> tuple[int, ...]:
     return tuple(sorted(set(parsed))) if parsed else (3, 5)
 
 
+def _parse_int_list(value: Any, *, min_value: int = 1) -> tuple[int, ...]:
+    if value is None:
+        return ()
+    raw: list[Any]
+    if isinstance(value, (list, tuple)):
+        raw = list(value)
+    else:
+        text = str(value).strip()
+        if not text:
+            return ()
+        raw = [p.strip() for p in text.split(",") if str(p).strip()]
+
+    out: list[int] = []
+    for item in raw:
+        try:
+            v = int(item)
+        except (TypeError, ValueError):
+            continue
+        if v >= int(min_value):
+            out.append(v)
+    return tuple(sorted(set(out)))
+
+
+def _parse_float_list(value: Any, *, min_value: float | None = None) -> tuple[float, ...]:
+    if value is None:
+        return ()
+    raw: list[Any]
+    if isinstance(value, (list, tuple)):
+        raw = list(value)
+    else:
+        text = str(value).strip()
+        if not text:
+            return ()
+        raw = [p.strip() for p in text.split(",") if str(p).strip()]
+
+    out: list[float] = []
+    for item in raw:
+        try:
+            v = float(item)
+        except (TypeError, ValueError):
+            continue
+        if min_value is None or v >= float(min_value):
+            out.append(v)
+    uniq = sorted({round(x, 6) for x in out})
+    return tuple(float(x) for x in uniq)
+
+
 def _parse_bool(value: Any) -> bool:
     if isinstance(value, bool):
         return value
@@ -104,6 +191,24 @@ def _parse_bool(value: Any) -> bool:
     raise ValueError(f"Invalid boolean value: {value}")
 
 
+def _parse_symbol_list(value: Any) -> list[str]:
+    if value is None:
+        return []
+    text = str(value).strip()
+    if not text:
+        return []
+    out: list[str] = []
+    for token in text.replace("\n", ",").replace(";", ",").split(","):
+        code = token.strip()
+        if not code:
+            continue
+        try:
+            out.append(normalize_symbol(code).symbol)
+        except SymbolError:
+            continue
+    return sorted(set(out))
+
+
 def _resolve_settings(args: argparse.Namespace, payload: dict[str, Any]) -> dict[str, Any]:
     common_cfg = _read_config_section(payload, "common")
     task_cfg = _read_config_section(payload, args.task)
@@ -112,7 +217,7 @@ def _resolve_settings(args: argparse.Namespace, payload: dict[str, Any]) -> dict
 
     for key, default in DEFAULT_COMMON.items():
         resolved[key] = _coalesce(
-            getattr(args, key),
+            getattr(args, key, None),
             task_cfg.get(key),
             common_cfg.get(key),
             default,
@@ -120,7 +225,7 @@ def _resolve_settings(args: argparse.Namespace, payload: dict[str, Any]) -> dict
 
     for key, default in defaults.items():
         resolved[key] = _coalesce(
-            getattr(args, key),
+            getattr(args, key, None),
             task_cfg.get(key),
             common_cfg.get(key),
             default,
@@ -150,6 +255,32 @@ def build_parser() -> argparse.ArgumentParser:
         "--print-effective-config",
         action="store_true",
         help="Print merged runtime config and exit",
+    )
+    config_parent.add_argument(
+        "--max-positions",
+        dest="max_positions",
+        type=int,
+        default=None,
+        help="Max simultaneous stock positions for weight allocation",
+    )
+    config_parent.add_argument(
+        "--use-margin-features",
+        dest="use_margin_features",
+        choices=["true", "false"],
+        default=None,
+        help="Enable margin financing/securities lending feature module",
+    )
+    config_parent.add_argument(
+        "--margin-market-file",
+        dest="margin_market_file",
+        default=None,
+        help="CSV path for market-level margin data",
+    )
+    config_parent.add_argument(
+        "--margin-stock-file",
+        dest="margin_stock_file",
+        default=None,
+        help="CSV path for stock-level margin data",
     )
 
     sub = parser.add_subparsers(dest="task", required=True)
@@ -228,6 +359,92 @@ def build_parser() -> argparse.ArgumentParser:
     )
     daily.add_argument("--commission-bps", dest="commission_bps", type=float, default=None, help="Commission in bps")
     daily.add_argument("--slippage-bps", dest="slippage_bps", type=float, default=None, help="Slippage in bps")
+    daily.add_argument(
+        "--use-turnover-control",
+        dest="use_turnover_control",
+        choices=["true", "false"],
+        default=None,
+        help="Enable turnover/frequency guardrail in backtest execution",
+    )
+    daily.add_argument(
+        "--max-trades-per-stock-per-week",
+        dest="max_trades_per_stock_per_week",
+        type=int,
+        default=None,
+        help="Maximum rebalance trades per stock in a rolling 5-day window",
+    )
+    daily.add_argument(
+        "--min-weight-change-to-trade",
+        dest="min_weight_change_to_trade",
+        type=float,
+        default=None,
+        help="Minimum absolute weight change required to execute a trade",
+    )
+    daily.add_argument(
+        "--use-strategy-optimizer",
+        dest="use_strategy_optimizer",
+        choices=["true", "false"],
+        default=None,
+        help="Enable strategy objective search (maximize excess return with turnover/drawdown penalties)",
+    )
+    daily.add_argument(
+        "--optimizer-retrain-days",
+        dest="optimizer_retrain_days",
+        default=None,
+        help="Grid of retrain days, e.g. 20,30,40",
+    )
+    daily.add_argument(
+        "--optimizer-weight-thresholds",
+        dest="optimizer_weight_thresholds",
+        default=None,
+        help="Grid of weight thresholds, e.g. 0.50,0.55,0.60",
+    )
+    daily.add_argument(
+        "--optimizer-max-positions",
+        dest="optimizer_max_positions",
+        default=None,
+        help="Grid of max positions, e.g. 3,5",
+    )
+    daily.add_argument(
+        "--optimizer-market-news-strengths",
+        dest="optimizer_market_news_strengths",
+        default=None,
+        help="Grid of market news strengths, e.g. 0.8,1.0",
+    )
+    daily.add_argument(
+        "--optimizer-stock-news-strengths",
+        dest="optimizer_stock_news_strengths",
+        default=None,
+        help="Grid of stock news strengths, e.g. 1.0,1.2",
+    )
+    daily.add_argument(
+        "--optimizer-turnover-penalty",
+        dest="optimizer_turnover_penalty",
+        type=float,
+        default=None,
+        help="Penalty coefficient on annual turnover in objective",
+    )
+    daily.add_argument(
+        "--optimizer-drawdown-penalty",
+        dest="optimizer_drawdown_penalty",
+        type=float,
+        default=None,
+        help="Penalty coefficient on absolute max drawdown in objective",
+    )
+    daily.add_argument(
+        "--optimizer-target-years",
+        dest="optimizer_target_years",
+        type=int,
+        default=None,
+        help="Target window years for objective evaluation (default 3)",
+    )
+    daily.add_argument(
+        "--optimizer-top-trials",
+        dest="optimizer_top_trials",
+        type=int,
+        default=None,
+        help="How many top optimizer trials to keep in report",
+    )
 
     forecast = sub.add_parser("forecast", parents=[config_parent], help="Generate base quant forecast report")
     forecast.add_argument(
@@ -244,6 +461,81 @@ def build_parser() -> argparse.ArgumentParser:
     forecast.add_argument("--l2", type=float, default=None, help="L2 regularization strength")
     forecast.add_argument("--report", default=None, help="Output report path")
 
+    discover = sub.add_parser("discover", parents=[config_parent], help="Discover candidate stocks for your pool")
+    discover.add_argument(
+        "--source",
+        default=None,
+        help="Data source: eastmoney/tushare/akshare/baostock/local/auto or comma chain",
+    )
+    discover.add_argument("--watchlist", default=None, help="Watchlist JSON path (market index + optional exclusions)")
+    discover.add_argument("--data-dir", dest="data_dir", default=None, help="Data directory")
+    discover.add_argument("--start", default=None, help="Start date YYYY-MM-DD")
+    discover.add_argument("--end", default=None, help="End date YYYY-MM-DD")
+    discover.add_argument("--min-train-days", dest="min_train_days", type=int, default=None, help="Min train days")
+    discover.add_argument("--step-days", dest="step_days", type=int, default=None, help="Walk-forward test block size")
+    discover.add_argument("--l2", type=float, default=None, help="L2 regularization strength")
+    discover.add_argument("--universe-file", dest="universe_file", default=None, help="Universe file (csv/json)")
+    discover.add_argument("--candidate-limit", dest="candidate_limit", type=int, default=None, help="Candidate pool size before ranking")
+    discover.add_argument("--top-k", dest="top_k", type=int, default=None, help="Output top-k candidates")
+    discover.add_argument(
+        "--exclude-watchlist",
+        dest="exclude_watchlist",
+        choices=["true", "false"],
+        default=None,
+        help="Exclude current watchlist symbols from discovered candidates",
+    )
+    discover.add_argument("--report", default=None, help="Output discovery report path")
+
+    sync = sub.add_parser("sync-data", parents=[config_parent], help="Sync local A-share universe data (300-1000 stocks)")
+    sync.add_argument(
+        "--source",
+        default=None,
+        help="Data source chain used for bar download: eastmoney/tushare/akshare/baostock/local/auto",
+    )
+    sync.add_argument("--data-dir", dest="data_dir", default=None, help="Local data directory")
+    sync.add_argument("--start", default=None, help="Start date YYYY-MM-DD")
+    sync.add_argument("--end", default=None, help="End date YYYY-MM-DD")
+    sync.add_argument("--universe-size", dest="universe_size", type=int, default=None, help="Universe size target")
+    sync.add_argument("--universe-file", dest="universe_file", default=None, help="Optional universe file (csv/json)")
+    sync.add_argument(
+        "--include-indices",
+        dest="include_indices",
+        choices=["true", "false"],
+        default=None,
+        help="Also sync main index files (000300/000001/399001/399006)",
+    )
+    sync.add_argument(
+        "--force-refresh",
+        dest="force_refresh",
+        choices=["true", "false"],
+        default=None,
+        help="Refresh files even if local data is recent",
+    )
+    sync.add_argument("--sleep-ms", dest="sleep_ms", type=int, default=None, help="Sleep between requests in ms")
+    sync.add_argument("--max-failures", dest="max_failures", type=int, default=None, help="Stop after N failures")
+    sync.add_argument(
+        "--write-universe-file",
+        dest="write_universe_file",
+        default=None,
+        help="Write discovered universe json for discovery task",
+    )
+
+    sync_margin = sub.add_parser("sync-margin", parents=[config_parent], help="Sync margin financing/securities lending (两融) CSV data")
+    sync_margin.add_argument(
+        "--source",
+        default=None,
+        help="Margin source chain: akshare/tushare/auto or comma chain",
+    )
+    sync_margin.add_argument("--watchlist", default=None, help="Watchlist JSON path when --symbols is not provided")
+    sync_margin.add_argument("--start", default=None, help="Start date YYYY-MM-DD")
+    sync_margin.add_argument("--end", default=None, help="End date YYYY-MM-DD")
+    sync_margin.add_argument(
+        "--symbols",
+        default=None,
+        help="Comma separated symbols, e.g. 600160.SH,000630.SZ (overrides watchlist stocks)",
+    )
+    sync_margin.add_argument("--sleep-ms", dest="sleep_ms", type=int, default=None, help="Sleep between requests in ms")
+
     return parser
 
 
@@ -258,6 +550,10 @@ def run_daily(settings: dict[str, Any]) -> int:
         min_train_days=settings["min_train_days"],
         step_days=settings["step_days"],
         l2=settings["l2"],
+        max_positions=int(settings["max_positions"]),
+        use_margin_features=_parse_bool(settings["use_margin_features"]),
+        margin_market_file=settings["margin_market_file"],
+        margin_stock_file=settings["margin_stock_file"],
         news_file=settings["news_file"],
         news_lookback_days=settings["news_lookback_days"],
         learned_news_lookback_days=int(settings["learned_news_lookback_days"]),
@@ -274,6 +570,19 @@ def run_daily(settings: dict[str, Any]) -> int:
         backtest_weight_threshold=float(settings["backtest_weight_threshold"]),
         commission_bps=float(settings["commission_bps"]),
         slippage_bps=float(settings["slippage_bps"]),
+        use_turnover_control=_parse_bool(settings["use_turnover_control"]),
+        max_trades_per_stock_per_week=max(1, int(settings["max_trades_per_stock_per_week"])),
+        min_weight_change_to_trade=max(0.0, float(settings["min_weight_change_to_trade"])),
+        use_strategy_optimizer=_parse_bool(settings["use_strategy_optimizer"]),
+        optimizer_retrain_days=_parse_int_list(settings["optimizer_retrain_days"], min_value=1) or (20, 40),
+        optimizer_weight_thresholds=_parse_float_list(settings["optimizer_weight_thresholds"], min_value=0.0) or (0.50, 0.60),
+        optimizer_max_positions=_parse_int_list(settings["optimizer_max_positions"], min_value=1) or (3, 5),
+        optimizer_market_news_strengths=_parse_float_list(settings["optimizer_market_news_strengths"], min_value=0.0) or (0.8, 1.0),
+        optimizer_stock_news_strengths=_parse_float_list(settings["optimizer_stock_news_strengths"], min_value=0.0) or (1.0, 1.2),
+        optimizer_turnover_penalty=float(settings["optimizer_turnover_penalty"]),
+        optimizer_drawdown_penalty=float(settings["optimizer_drawdown_penalty"]),
+        optimizer_target_years=max(1, int(settings["optimizer_target_years"])),
+        optimizer_top_trials=max(1, int(settings["optimizer_top_trials"])),
         report_date=settings["report_date"],
     )
 
@@ -303,10 +612,98 @@ def run_forecast(settings: dict[str, Any]) -> int:
         min_train_days=settings["min_train_days"],
         step_days=settings["step_days"],
         l2=settings["l2"],
+        max_positions=int(settings["max_positions"]),
+        use_margin_features=_parse_bool(settings["use_margin_features"]),
+        margin_market_file=settings["margin_market_file"],
+        margin_stock_file=settings["margin_stock_file"],
     )
     result = generate_forecast(config=config, market_security=market_security, stocks=stocks)
     path = write_forecast_report(settings["report"], result.market_forecast, result.stock_rows)
     print(f"[OK] Report generated: {path.resolve()}")
+    return 0
+
+
+def run_discover(settings: dict[str, Any]) -> int:
+    set_tushare_token(settings.get("tushare_token", ""))
+    market_security, stocks, _ = load_watchlist(settings["watchlist"])
+    config = DiscoverConfig(
+        source=settings["source"],
+        data_dir=settings["data_dir"],
+        start=settings["start"],
+        end=settings["end"],
+        min_train_days=settings["min_train_days"],
+        step_days=settings["step_days"],
+        l2=settings["l2"],
+        max_positions=int(settings["max_positions"]),
+        use_margin_features=_parse_bool(settings["use_margin_features"]),
+        margin_market_file=settings["margin_market_file"],
+        margin_stock_file=settings["margin_stock_file"],
+        universe_file=settings["universe_file"],
+        candidate_limit=int(settings["candidate_limit"]),
+        top_k=int(settings["top_k"]),
+        exclude_watchlist=_parse_bool(settings["exclude_watchlist"]),
+    )
+    result = generate_discovery(config=config, market_security=market_security, watchlist_stocks=stocks)
+    path = write_discovery_report(settings["report"], result)
+    print(f"[OK] Discovery report generated: {path.resolve()}")
+    return 0
+
+
+def run_sync_data(settings: dict[str, Any]) -> int:
+    set_tushare_token(settings.get("tushare_token", ""))
+    result = sync_market_data(
+        source=settings["source"],
+        data_dir=settings["data_dir"],
+        start=settings["start"],
+        end=settings["end"],
+        universe_size=int(settings["universe_size"]),
+        universe_file=settings["universe_file"],
+        include_indices=_parse_bool(settings["include_indices"]),
+        force_refresh=_parse_bool(settings["force_refresh"]),
+        sleep_ms=int(settings["sleep_ms"]),
+        max_failures=int(settings["max_failures"]),
+        write_universe_file=settings["write_universe_file"],
+    )
+    print(f"[OK] Universe source: {result.universe_source}")
+    print(f"[OK] Universe size: {result.universe_size} (requested {result.requested_universe_size})")
+    print(f"[OK] Downloaded: {result.downloaded}, skipped: {result.skipped}, failed: {result.failed}, attempted: {result.attempted}")
+    if result.universe_file:
+        print(f"[OK] Universe file written: {Path(result.universe_file).resolve()}")
+    if result.failed_symbols:
+        print(f"[WARN] Failed symbols (first 20): {', '.join(result.failed_symbols)}")
+    if result.downloaded <= 0 and result.skipped <= 0:
+        print("[ERROR] No symbols were synced.")
+        return 2
+    return 0
+
+
+def run_sync_margin(settings: dict[str, Any]) -> int:
+    set_tushare_token(settings.get("tushare_token", ""))
+    symbols = _parse_symbol_list(settings.get("symbols", ""))
+    if not symbols:
+        _, stocks, _ = load_watchlist(settings["watchlist"])
+        symbols = [normalize_symbol(sec.symbol).symbol for sec in stocks]
+    if not symbols:
+        print("[ERROR] No valid symbols for margin sync. Set --symbols or check watchlist.")
+        return 2
+
+    result = sync_margin_data(
+        source=settings["source"],
+        symbols=symbols,
+        start=settings["start"],
+        end=settings["end"],
+        market_out=settings["margin_market_file"],
+        stock_out=settings["margin_stock_file"],
+        tushare_token=str(settings.get("tushare_token", "")),
+        sleep_ms=int(settings["sleep_ms"]),
+    )
+    print(f"[OK] Margin source used: {result.source_used}")
+    print(f"[OK] Symbols: {len(symbols)}")
+    print(f"[OK] Market rows: {result.market_rows} -> {Path(result.market_path).resolve()}")
+    print(f"[OK] Stock rows: {result.stock_rows} -> {Path(result.stock_path).resolve()}")
+    if result.notes:
+        for note in result.notes:
+            print(f"[WARN] {note}")
     return 0
 
 
@@ -323,6 +720,12 @@ def main() -> int:
             return run_daily(settings)
         if args.task == "forecast":
             return run_forecast(settings)
+        if args.task == "discover":
+            return run_discover(settings)
+        if args.task == "sync-data":
+            return run_sync_data(settings)
+        if args.task == "sync-margin":
+            return run_sync_margin(settings)
         parser.error(f"Unknown task: {args.task}")
     except (OSError, json.JSONDecodeError, ValueError) as exc:
         print(f"[ERROR] Config failure: {exc}")

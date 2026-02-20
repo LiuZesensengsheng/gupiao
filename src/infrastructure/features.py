@@ -22,6 +22,8 @@ BASE_FEATURE_COLUMNS = [
     "amihud_20",
     "atr_14",
     "gap_1",
+    "bear_body_1",
+    "hvbd_recent_5",
 ]
 
 MARKET_FEATURE_COLUMNS = [f"mkt_{c}" for c in BASE_FEATURE_COLUMNS]
@@ -76,6 +78,13 @@ def build_features(df: pd.DataFrame) -> pd.DataFrame:
     out["atr_14"] = tr.rolling(14).mean() / (close + 1e-9)
 
     out["gap_1"] = open_ / close.shift(1) - 1.0
+    out["bear_body_1"] = np.clip((open_ - close) / (open_ + 1e-9), -0.25, 0.25)
+    hvbd_today = (
+        (out["ret_1"] <= -0.04)
+        & (out["vol_ratio_20"] >= 2.0)
+        & (out["price_pos_20"].shift(1) >= 0.75)
+    ).astype(float)
+    out["hvbd_recent_5"] = hvbd_today.rolling(5).max()
 
     out["fwd_ret_1"] = close.shift(-1) / close - 1.0
     out["fwd_ret_20"] = close.shift(-20) / close - 1.0
@@ -102,6 +111,13 @@ def make_stock_feature_frame(stock_df: pd.DataFrame, market_df: pd.DataFrame) ->
     return merged
 
 
-def stock_feature_columns() -> List[str]:
-    return BASE_FEATURE_COLUMNS + MARKET_FEATURE_COLUMNS
-
+def stock_feature_columns(
+    extra_market_cols: List[str] | None = None,
+    extra_stock_cols: List[str] | None = None,
+) -> List[str]:
+    cols = BASE_FEATURE_COLUMNS + MARKET_FEATURE_COLUMNS
+    if extra_market_cols:
+        cols = cols + [str(c) for c in extra_market_cols]
+    if extra_stock_cols:
+        cols = cols + [str(c) for c in extra_stock_cols]
+    return cols

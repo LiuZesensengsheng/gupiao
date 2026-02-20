@@ -18,15 +18,20 @@ src/
   application/
     config.py          # Use-case configuration objects
     watchlist.py       # Watchlist loading
-    use_cases.py       # Forecast/Daily fusion orchestration
+    use_cases.py       # Forecast/Daily fusion/Discovery orchestration + strategy objective search
 
   infrastructure/
     market_data.py     # Market data adapters (eastmoney/tushare/akshare/baostock/local + fallback chain)
+    market_context.py  # Multi-index + breadth context feature builder
+    margin_features.py # Margin financing/securities lending feature builder (market + stock)
     features.py        # Factor engineering
     modeling.py        # Logistic model + metrics
     forecast_engine.py # Quant forecast engine
     news_fusion.py     # Learned news impact + quant/news calibration
     backtesting.py     # Portfolio backtest + risk/return metrics
+    discovery.py       # Candidate-universe builder + volume/chip risk scanner
+    data_sync.py       # Local universe sync (300-1000 symbols) + universe file generation
+    margin_sync.py     # Margin financing/securities lending (两融) data sync to CSV
     news_repository.py # News CSV ingestion
     effect_analysis.py # Profit/loss/chip/capital/sector analytics
 
@@ -38,7 +43,7 @@ src/
       html_dashboard.py
 
 config/
-  api.json             # unified runtime config (common + daily + forecast)
+  api.json             # unified runtime config (common + daily + forecast + discover)
 ```
 
 ## Dependency Direction
@@ -61,6 +66,15 @@ Avoid:
 3. Data/model adapters in `infrastructure`.
 4. Rendering-only in `interfaces`.
 
+For long-term iterative modeling, treat each analysis perspective as an independent module:
+
+- quant timing module (price/volume/volatility/chip)
+- news impact module (rule-based or learned fusion)
+- market/beta module (regime and exposure)
+- candidate discovery module (pool expansion + filtering)
+
+Application use-cases compose these modules and keep their outputs explainable.
+
 ## Where to Add New Modules
 
 For new analysis dimensions (fundamental, cost trend, shipment, commodity prices):
@@ -69,6 +83,13 @@ For new analysis dimensions (fundamental, cost trend, shipment, commodity prices
 2. Add infrastructure adapter for data ingestion.
 3. Add application use-case step for orchestration.
 4. Add presenter blocks for report/dashboard.
+
+Recommended extensibility pattern:
+
+1. Keep pure scoring logic in module-level analyzers (stateless, testable).
+2. Use application-level service orchestration to merge analyzers.
+3. Use domain entities as stable contracts (avoid passing raw DataFrame everywhere).
+4. If construction complexity grows, add simple factories in application/infrastructure (not in domain entities).
 
 ## Attention + Embedding Integration Plan
 
@@ -91,6 +112,7 @@ Use the new module paths directly:
 - Modeling: `src.infrastructure.modeling`
 - Forecast engine: `src.infrastructure.forecast_engine`
 - Portfolio backtest: `src.infrastructure.backtesting`
+- Candidate discovery: `src.infrastructure.discovery`
 - News ingestion/fusion: `src.infrastructure.news_repository` + `src.domain.news`
 - Effect analytics: `src.infrastructure.effect_analysis`
 - Report rendering: `src.interfaces.presenters.*`

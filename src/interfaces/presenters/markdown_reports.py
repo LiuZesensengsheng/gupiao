@@ -5,8 +5,8 @@ from typing import Sequence
 
 import pandas as pd
 
-from src.application.use_cases import DailyFusionResult
-from src.domain.entities import BacktestMetrics, BinaryMetrics, ForecastRow, MarketForecast
+from src.application.use_cases import DailyFusionResult, DiscoveryResult
+from src.domain.entities import BacktestMetrics, BinaryMetrics, DiscoveryRow, ForecastRow, MarketForecast
 from src.domain.policies import market_regime, target_exposure
 
 
@@ -42,7 +42,7 @@ def _bt_line(metrics: BacktestMetrics) -> str:
         f"{_to_percent(metrics.total_return)} | {_to_percent(metrics.annual_return)} | {_to_percent(metrics.excess_annual_return)} | "
         f"{_to_percent(metrics.max_drawdown)} | {_to_float(metrics.sharpe)} | {_to_float(metrics.sortino)} | "
         f"{_to_float(metrics.calmar)} | {_to_float(metrics.information_ratio)} | {_to_percent(metrics.win_rate)} | "
-        f"{_to_percent(metrics.annual_turnover)} | {_to_percent(metrics.total_cost)} |"
+        f"{_to_percent(metrics.annual_turnover)} | {_to_percent(metrics.total_cost)} | {_to_float(metrics.avg_trades_per_stock_per_week, 2)} |"
     )
 
 
@@ -136,13 +136,24 @@ def write_daily_report(out_path: str | Path, result: DailyFusionResult) -> Path:
     lines.append("")
     lines.append("## 个股融合结果")
     lines.append("")
-    lines.append("| 个股 | 模型短期 | 模型中期 | 新闻短期净分 | 新闻中期净分 | 新闻短期概率 | 新闻中期概率 | 融合短期 | 融合中期 | 综合分数 | 建议权重 | 短期方式 | 中期方式 |")
-    lines.append("|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---|---|")
+    lines.append("| 个股 | 模型短期 | 模型中期 | 新闻短期净分 | 新闻中期净分 | 新闻短期概率 | 新闻中期概率 | 融合短期 | 融合中期 | 综合分数 | 建议权重 | 短期方式 | 中期方式 | 量价风险 |")
+    lines.append("|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---|---|---|")
     for row in result.blended_rows:
+        risk_text = "高位巨量阴线风险" if row.volume_risk_flag else "正常"
         lines.append(
-            f"| {row.name} ({row.symbol}) | {_to_percent(row.base_short)} | {_to_percent(row.base_mid)} | {row.short_sent.score:+.3f} | {row.mid_sent.score:+.3f} | {_to_percent(row.news_short_prob)} | {_to_percent(row.news_mid_prob)} | {_to_percent(row.final_short)} | {_to_percent(row.final_mid)} | {row.final_score:.3f} | {_to_percent(row.suggested_weight)} | {row.fusion_mode_short} | {row.fusion_mode_mid} |"
+            f"| {row.name} ({row.symbol}) | {_to_percent(row.base_short)} | {_to_percent(row.base_mid)} | {row.short_sent.score:+.3f} | {row.mid_sent.score:+.3f} | {_to_percent(row.news_short_prob)} | {_to_percent(row.news_mid_prob)} | {_to_percent(row.final_short)} | {_to_percent(row.final_mid)} | {row.final_score:.3f} | {_to_percent(row.suggested_weight)} | {row.fusion_mode_short} | {row.fusion_mode_mid} | {risk_text} |"
         )
     lines.append("")
+    lines.append("## 因子解释 (最新截面)")
+    lines.append("")
+    for row in result.blended_rows:
+        short_d = ", ".join(row.short_drivers) if row.short_drivers else "NA"
+        mid_d = ", ".join(row.mid_drivers) if row.mid_drivers else "NA"
+        lines.append(f"### {row.name} ({row.symbol})")
+        lines.append(f"- 短期驱动: {short_d}")
+        lines.append(f"- 中期驱动: {mid_d}")
+        lines.append(f"- 风险备注: {row.volume_risk_note or 'NA'}")
+        lines.append("")
     lines.append("## 新闻模糊矩阵")
     lines.append("")
     lines.append("| 标的 | 维度 | 利好隶属 | 利空隶属 | 中性隶属 | 事件条数 |")
@@ -203,25 +214,113 @@ def write_daily_report(out_path: str | Path, result: DailyFusionResult) -> Path:
                 f"| {row['sector']} | {row['heat_score']:+.3f} | {_to_percent(float(row['win_rate_1d']))} | {_to_bp(float(row['median_ret_5d']))} | {float(row['money_score']):+.3f} | {float(row['chip_score']):+.3f} | {int(row['count'])} |"
             )
     lines.append("")
+    lines.append("## 策略优化 (收益目标 + 换手约束)")
+    lines.append("")
+    lines.append(f"- 目标函数: `{result.strategy_objective_text}`")
+    lines.append(f"- 评估窗口: `{result.strategy_target_metric_label}`")
+    if result.strategy_selected is None:
+        lines.append("- 结果: 使用默认参数（优化器关闭或未找到有效试验）")
+    else:
+        s = result.strategy_selected
+        lines.append(
+            f"- 选中参数: retrain={s.retrain_days}日, 阈值={s.weight_threshold:.2f}, 持仓上限={s.max_positions}, "
+            f"市场新闻强度={s.market_news_strength:.2f}, 个股新闻强度={s.stock_news_strength:.2f}"
+        )
+        lines.append(
+            f"- 选中表现: 年化超额 {_to_percent(s.excess_annual_return)} | 年化换手 {_to_percent(s.annual_turnover)} | "
+            f"最大回撤 {_to_percent(s.max_drawdown)} | 单票周交易 {_to_float(s.avg_trades_per_stock_per_week, 2)} 次 | 目标得分 {_to_float(s.objective_score, 4)}"
+        )
+    lines.append("")
+    lines.append("| 排名 | 指标窗口 | retrain(日) | 阈值 | 持仓上限 | 市场新闻强度 | 个股新闻强度 | 目标得分 | 年化收益 | 年化超额 | 最大回撤 | 年化换手 | 成本损耗 | 单票周交易 | Sharpe |")
+    lines.append("|---:|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|")
+    if not result.strategy_trials:
+        lines.append("| - | NA | NA | NA | NA | NA | NA | NA | NA | NA | NA | NA | NA | NA | NA |")
+    else:
+        for t in result.strategy_trials:
+            lines.append(
+                f"| {t.rank} | {t.metric_label} | {t.retrain_days} | {t.weight_threshold:.2f} | {t.max_positions} | "
+                f"{t.market_news_strength:.2f} | {t.stock_news_strength:.2f} | {_to_float(t.objective_score, 4)} | "
+                f"{_to_percent(t.annual_return)} | {_to_percent(t.excess_annual_return)} | {_to_percent(t.max_drawdown)} | "
+                f"{_to_percent(t.annual_turnover)} | {_to_percent(t.total_cost)} | {_to_float(t.avg_trades_per_stock_per_week, 2)} | {_to_float(t.sharpe)} |"
+            )
+    lines.append("")
     lines.append("## 使用说明")
     lines.append("")
     lines.append("- 新闻净分范围为 [-1, +1]，正值偏利好，负值偏利空。")
     lines.append("- `learned` 模式下先学习新闻影响，再校准 quant+news；`rule` 模式下回退为新闻净分非线性修正。")
     lines.append("- 若你希望更保守，可降低 `--stock-news-strength` 与 `--market-news-strength`。")
+    lines.append("- 换手约束建议: `--max-trades-per-stock-per-week 2~3`，并设置 `--min-weight-change-to-trade` 过滤微小调仓。")
     lines.append("- 本结果为研究支持，不构成投资建议。")
     lines.append("")
     lines.append("## 回测表现 (交易级, 含成本)")
     lines.append("")
-    lines.append("| 窗口 | 开始 | 结束 | 交易日 | 策略总收益 | 年化收益 | 年化超额 | 最大回撤 | Sharpe | Sortino | Calmar | 信息比率 | 日胜率 | 年化换手 | 成本损耗 |")
-    lines.append("|---|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|")
+    lines.append("| 窗口 | 开始 | 结束 | 交易日 | 策略总收益 | 年化收益 | 年化超额 | 最大回撤 | Sharpe | Sortino | Calmar | 信息比率 | 日胜率 | 年化换手 | 成本损耗 | 单票周交易 |")
+    lines.append("|---|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|")
     if not result.backtest_metrics:
-        lines.append("| 无数据 | NA | NA | 0 | NA | NA | NA | NA | NA | NA | NA | NA | NA | NA | NA |")
+        lines.append("| 无数据 | NA | NA | 0 | NA | NA | NA | NA | NA | NA | NA | NA | NA | NA | NA | NA |")
     else:
         for metrics in result.backtest_metrics:
             lines.append(_bt_line(metrics))
     lines.append("")
     lines.append("- 指标口径: 策略按日调仓，收益为次日收益，成本=换手*(佣金bps+滑点bps)。")
-    lines.append("- 回测曲线已在 dashboard 中可视化展示。")
+    lines.append("- 当启用新闻融合回测时，表格同时展示 `融合策略-*` 与 `量化基线-*` 对比。")
+    lines.append("- 回测曲线已在 dashboard 中可视化展示（主曲线为当前融合策略）。")
+
+    report_path.write_text("\n".join(lines), encoding="utf-8")
+    return report_path
+
+
+def _discovery_row_line(row: DiscoveryRow) -> str:
+    risk = "高位巨量阴线风险" if row.volume_risk_flag else "正常"
+    short_d = ", ".join(row.short_drivers) if row.short_drivers else "NA"
+    mid_d = ", ".join(row.mid_drivers) if row.mid_drivers else "NA"
+    return (
+        f"| {row.name} ({row.symbol}) | {_to_percent(row.short_prob)} | {_to_percent(row.mid_prob)} | "
+        f"{row.score:.3f} | {_to_percent(row.suggested_weight)} | {risk} | {short_d} | {mid_d} |"
+    )
+
+
+def write_discovery_report(out_path: str | Path, result: DiscoveryResult) -> Path:
+    report_path = Path(out_path)
+    report_path.parent.mkdir(parents=True, exist_ok=True)
+
+    regime = market_regime(result.market_forecast.short_prob, result.market_forecast.mid_prob)
+    exposure = target_exposure(result.market_forecast.short_prob, result.market_forecast.mid_prob)
+
+    lines: list[str] = []
+    lines.append("# A股候选发掘报告 (选股补充 + 择时辅助)")
+    lines.append("")
+    lines.append(f"- 数据截至: {result.as_of_date.date()}")
+    lines.append(f"- 数据源: {result.source}")
+    lines.append(f"- 市场基准: {result.market_forecast.name} ({result.market_forecast.symbol})")
+    lines.append(f"- 市场状态: {regime}")
+    lines.append(f"- 建议总仓位(择时): {_to_percent(exposure)}")
+    lines.append(f"- 候选池来源: {result.universe_source}")
+    lines.append(f"- 候选池规模: {result.universe_size}")
+    lines.append("")
+    if result.warnings:
+        lines.append("## 提示")
+        lines.append("")
+        for w in result.warnings:
+            lines.append(f"- {w}")
+        lines.append("")
+
+    lines.append("## 候选排序")
+    lines.append("")
+    lines.append("| 个股 | 短期概率 | 中期概率 | 综合分数 | 建议权重 | 量价风险 | 短期驱动 | 中期驱动 |")
+    lines.append("|---|---:|---:|---:|---:|---|---|---|")
+    if not result.rows:
+        lines.append("| 无数据 | NA | NA | NA | NA | NA | NA | NA |")
+    else:
+        for row in result.rows:
+            lines.append(_discovery_row_line(row))
+    lines.append("")
+    lines.append("## 使用建议")
+    lines.append("")
+    lines.append("- 这份列表用于补充选股池，不替代你的人工研究。")
+    lines.append("- 你来选股、系统来择时是可行模式：把选股 alpha 与仓位/节奏 beta 分离。")
+    lines.append("- 若出现 `高位巨量阴线风险`，建议降低单票仓位或等待二次确认。")
+    lines.append("- 本结果为研究支持，不构成投资建议。")
 
     report_path.write_text("\n".join(lines), encoding="utf-8")
     return report_path

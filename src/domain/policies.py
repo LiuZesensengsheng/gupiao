@@ -28,13 +28,33 @@ def target_exposure(short_prob: float, mid_prob: float) -> float:
     return 0.72
 
 
-def allocate_weights(scores: list[float], total_exposure: float, threshold: float = 0.50) -> list[float]:
+def allocate_weights(
+    scores: list[float],
+    total_exposure: float,
+    threshold: float = 0.50,
+    max_positions: int | None = None,
+) -> list[float]:
     if not scores:
         return []
+    n = len(scores)
+    max_pos = None if max_positions is None else max(1, min(int(max_positions), n))
     raw = np.array([max(0.0, float(s) - float(threshold)) for s in scores], dtype=float)
+
+    if max_pos is not None and max_pos < n:
+        ranked = np.argsort(-raw)
+        keep = ranked[:max_pos]
+        mask = np.zeros(n, dtype=bool)
+        mask[keep] = True
+        raw = np.where(mask, raw, 0.0)
+
     if np.all(raw <= 1e-12):
+        if max_pos is not None and max_pos < n:
+            ranked_scores = np.argsort(-np.asarray(scores, dtype=float))
+            keep = ranked_scores[:max_pos]
+            out = np.zeros(n, dtype=float)
+            out[keep] = float(total_exposure) / float(len(keep))
+            return out.tolist()
         return [float(total_exposure) / len(scores)] * len(scores)
     raw = raw / raw.sum()
     alloc = raw * float(total_exposure)
     return alloc.tolist()
-

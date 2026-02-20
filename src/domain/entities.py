@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 import numpy as np
 import pandas as pd
@@ -90,6 +90,10 @@ class BlendedRow:
     mid_sent: SentimentAggregate
     fusion_mode_short: str = "rule"
     fusion_mode_mid: str = "rule"
+    volume_risk_flag: bool = False
+    volume_risk_note: str = ""
+    short_drivers: list[str] = field(default_factory=list)
+    mid_drivers: list[str] = field(default_factory=list)
     suggested_weight: float = 0.0
 
 
@@ -107,6 +111,20 @@ class FusionDiagnostics:
     news_coef_score: float
     fusion_coef_quant: float
     fusion_coef_news: float
+
+
+@dataclass
+class DiscoveryRow:
+    symbol: str
+    name: str
+    short_prob: float
+    mid_prob: float
+    score: float
+    suggested_weight: float
+    volume_risk_flag: bool
+    volume_risk_note: str
+    short_drivers: list[str]
+    mid_drivers: list[str]
 
 
 @dataclass
@@ -179,6 +197,8 @@ class BacktestMetrics:
     avg_turnover: float
     annual_turnover: float
     total_cost: float
+    avg_trade_count_per_day: float
+    avg_trades_per_stock_per_week: float
 
     @staticmethod
     def empty(label: str) -> "BacktestMetrics":
@@ -205,4 +225,25 @@ class BacktestMetrics:
             avg_turnover=np.nan,
             annual_turnover=np.nan,
             total_cost=np.nan,
+            avg_trade_count_per_day=np.nan,
+            avg_trades_per_stock_per_week=np.nan,
         )
+
+
+@dataclass
+class StrategyTrial:
+    rank: int
+    metric_label: str
+    retrain_days: int
+    weight_threshold: float
+    max_positions: int
+    market_news_strength: float
+    stock_news_strength: float
+    objective_score: float
+    annual_return: float
+    excess_annual_return: float
+    max_drawdown: float
+    annual_turnover: float
+    total_cost: float
+    sharpe: float
+    avg_trades_per_stock_per_week: float

@@ -9,6 +9,8 @@ from src.domain.entities import BinaryMetrics, ForecastRow, MarketForecast, Secu
 from src.domain.policies import allocate_weights, blend_horizon_score, target_exposure
 from src.domain.symbols import normalize_symbol
 from src.infrastructure.features import MARKET_FEATURE_COLUMNS, make_market_feature_frame, make_stock_feature_frame, stock_feature_columns
+from src.infrastructure.margin_features import build_stock_margin_features
+from src.infrastructure.market_context import build_market_context_features
 from src.infrastructure.market_data import DataError, load_symbol_daily
 from src.infrastructure.modeling import LogisticBinaryModel, binary_metrics
 
@@ -82,6 +84,11 @@ def run_quant_pipeline(
     min_train_days: int,
     step_days: int,
     l2: float,
+    max_positions: int = 5,
+    weight_threshold: float = 0.50,
+    use_margin_features: bool = True,
+    margin_market_file: str = "input/margin_market.csv",
+    margin_stock_file: str = "input/margin_stock.csv",
 ) -> tuple[MarketForecast, list[ForecastRow]]:
     market_raw = load_symbol_daily(
         symbol=market_security.symbol,
@@ -90,26 +97,37 @@ def run_quant_pipeline(
         start=start,
         end=end,
     )
-    market_feat = make_market_feature_frame(market_raw)
+    market_feat_base = make_market_feature_frame(market_raw)
+    market_context = build_market_context_features(
+        source=source,
+        data_dir=data_dir,
+        start=start,
+        end=end,
+        market_dates=market_feat_base["date"],
+        use_margin_features=use_margin_features,
+        margin_market_file=margin_market_file,
+    )
+    market_feat = market_feat_base.merge(market_context.frame, on="date", how="left", validate="1:1")
+    market_feature_cols = MARKET_FEATURE_COLUMNS + market_context.feature_columns
 
     market_short_model = _fit_latest_model(
-        market_feat, feature_cols=MARKET_FEATURE_COLUMNS, target_col="mkt_target_1d_up", l2=l2
+        market_feat, feature_cols=market_feature_cols, target_col="mkt_target_1d_up", l2=l2
     )
     market_mid_model = _fit_latest_model(
-        market_feat, feature_cols=MARKET_FEATURE_COLUMNS, target_col="mkt_target_20d_up", l2=l2
+        market_feat, feature_cols=market_feature_cols, target_col="mkt_target_20d_up", l2=l2
     )
-    mkt_latest = _latest_row_with_features(market_feat, MARKET_FEATURE_COLUMNS)
+    mkt_latest = _latest_row_with_features(market_feat, market_feature_cols)
     mkt_latest_df = pd.DataFrame([mkt_latest])
 
     market_forecast = MarketForecast(
         symbol=normalize_symbol(market_security.symbol).symbol,
         name=market_security.name,
         latest_date=pd.Timestamp(mkt_latest["date"]),
-        short_prob=float(market_short_model.predict_proba(mkt_latest_df, MARKET_FEATURE_COLUMNS)[0]),
-        mid_prob=float(market_mid_model.predict_proba(mkt_latest_df, MARKET_FEATURE_COLUMNS)[0]),
+        short_prob=float(market_short_model.predict_proba(mkt_latest_df, market_feature_cols)[0]),
+        mid_prob=float(market_mid_model.predict_proba(mkt_latest_df, market_feature_cols)[0]),
         short_eval=_walk_forward_eval(
             market_feat,
-            feature_cols=MARKET_FEATURE_COLUMNS,
+            feature_cols=market_feature_cols,
             target_col="mkt_target_1d_up",
             l2=l2,
             min_train_days=min_train_days,
@@ -117,7 +135,7 @@ def run_quant_pipeline(
         ),
         mid_eval=_walk_forward_eval(
             market_feat,
-            feature_cols=MARKET_FEATURE_COLUMNS,
+            feature_cols=market_feature_cols,
             target_col="mkt_target_20d_up",
             l2=l2,
             min_train_days=min_train_days,
@@ -125,7 +143,6 @@ def run_quant_pipeline(
         ),
     )
 
-    feature_cols = stock_feature_columns()
     stock_rows: list[ForecastRow] = []
     for security in stock_securities:
         stock_raw = load_symbol_daily(
@@ -136,6 +153,22 @@ def run_quant_pipeline(
             end=end,
         )
         stock_feat = make_stock_feature_frame(stock_raw, market_feat)
+        stock_margin_cols: list[str] = []
+        if use_margin_features:
+            margin_frame, margin_cols, _ = build_stock_margin_features(
+                margin_stock_file=margin_stock_file,
+                symbol=security.symbol,
+                start=start,
+                end=end,
+            )
+            if margin_cols:
+                stock_feat = stock_feat.merge(margin_frame, on="date", how="left", validate="1:1")
+                stock_margin_cols = list(margin_cols)
+
+        feature_cols = stock_feature_columns(
+            extra_market_cols=market_context.feature_columns,
+            extra_stock_cols=stock_margin_cols,
+        )
 
         short_model = _fit_latest_model(stock_feat, feature_cols=feature_cols, target_col="target_1d_up", l2=l2)
         mid_model = _fit_latest_model(stock_feat, feature_cols=feature_cols, target_col="target_20d_up", l2=l2)
@@ -176,9 +209,13 @@ def run_quant_pipeline(
         )
 
     total_exposure = target_exposure(market_forecast.short_prob, market_forecast.mid_prob)
-    weights = allocate_weights([row.score for row in stock_rows], total_exposure=total_exposure, threshold=0.50)
+    weights = allocate_weights(
+        [row.score for row in stock_rows],
+        total_exposure=total_exposure,
+        threshold=float(weight_threshold),
+        max_positions=int(max_positions),
+    )
     for row, weight in zip(stock_rows, weights):
         row.suggested_weight = float(weight)
     stock_rows.sort(key=lambda x: x.score, reverse=True)
     return market_forecast, stock_rows
-

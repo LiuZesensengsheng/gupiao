@@ -12,6 +12,10 @@ class ForecastConfig:
     min_train_days: int
     step_days: int
     l2: float
+    max_positions: int
+    use_margin_features: bool
+    margin_market_file: str
+    margin_stock_file: str
 
 
 @dataclass(frozen=True)
@@ -32,4 +36,25 @@ class DailyConfig(ForecastConfig):
     backtest_weight_threshold: float
     commission_bps: float
     slippage_bps: float
+    use_turnover_control: bool
+    max_trades_per_stock_per_week: int
+    min_weight_change_to_trade: float
+    use_strategy_optimizer: bool
+    optimizer_retrain_days: tuple[int, ...]
+    optimizer_weight_thresholds: tuple[float, ...]
+    optimizer_max_positions: tuple[int, ...]
+    optimizer_market_news_strengths: tuple[float, ...]
+    optimizer_stock_news_strengths: tuple[float, ...]
+    optimizer_turnover_penalty: float
+    optimizer_drawdown_penalty: float
+    optimizer_target_years: int
+    optimizer_top_trials: int
     report_date: str = ""
+
+
+@dataclass(frozen=True)
+class DiscoverConfig(ForecastConfig):
+    universe_file: str
+    candidate_limit: int
+    top_k: int
+    exclude_watchlist: bool

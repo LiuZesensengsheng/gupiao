@@ -8,10 +8,34 @@
     "end": "2099-12-31",
     "min_train_days": 240,
     "step_days": 20,
-    "l2": 0.8
+    "l2": 0.8,
+    "max_positions": 5,
+    "use_margin_features": true,
+    "margin_market_file": "input/margin_market.csv",
+    "margin_stock_file": "input/margin_stock.csv"
   },
   "forecast": {
     "report": "reports/latest_report.md"
+  },
+  "discover": {
+    "universe_file": "",
+    "candidate_limit": 120,
+    "top_k": 20,
+    "exclude_watchlist": false,
+    "report": "reports/discovery_report.md"
+  },
+  "sync-data": {
+    "universe_size": 500,
+    "universe_file": "",
+    "include_indices": true,
+    "force_refresh": false,
+    "sleep_ms": 80,
+    "max_failures": 100,
+    "write_universe_file": "config/universe_auto.json"
+  },
+  "sync-margin": {
+    "symbols": "",
+    "sleep_ms": 80
   },
   "daily": {
     "news_file": "input/news.csv",
@@ -30,6 +54,19 @@
     "backtest_weight_threshold": 0.5,
     "commission_bps": 1.5,
     "slippage_bps": 2.0,
+    "use_turnover_control": true,
+    "max_trades_per_stock_per_week": 3,
+    "min_weight_change_to_trade": 0.03,
+    "use_strategy_optimizer": true,
+    "optimizer_retrain_days": [20, 40],
+    "optimizer_weight_thresholds": [0.5, 0.6],
+    "optimizer_max_positions": [3, 5],
+    "optimizer_market_news_strengths": [0.8, 1.0],
+    "optimizer_stock_news_strengths": [1.0, 1.2],
+    "optimizer_turnover_penalty": 0.0015,
+    "optimizer_drawdown_penalty": 0.2,
+    "optimizer_target_years": 3,
+    "optimizer_top_trials": 12,
     "report_date": "",
     "report": "reports/daily_report.md",
     "dashboard": "reports/daily_dashboard.html"
