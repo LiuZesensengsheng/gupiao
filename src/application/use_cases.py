@@ -6,9 +6,19 @@ from typing import Dict, List
 import pandas as pd
 
 from src.application.config import DailyConfig, ForecastConfig
-from src.domain.entities import BlendedRow, EffectSummary, ForecastRow, MarketForecast, NewsItem, Security, SentimentAggregate
+from src.domain.entities import (
+    BacktestMetrics,
+    BlendedRow,
+    EffectSummary,
+    ForecastRow,
+    MarketForecast,
+    NewsItem,
+    Security,
+    SentimentAggregate,
+)
 from src.domain.news import aggregate_sentiment, blend_probability
 from src.domain.policies import allocate_weights, blend_horizon_score, target_exposure
+from src.infrastructure.backtesting import run_portfolio_backtest
 from src.infrastructure.effect_analysis import build_latest_snapshot, compute_effect_summary, compute_sector_table
 from src.infrastructure.forecast_engine import run_quant_pipeline
 from src.infrastructure.news_repository import load_news_items
@@ -32,6 +42,8 @@ class DailyFusionResult:
     blended_rows: List[BlendedRow]
     effect_summary: EffectSummary
     sector_table: pd.DataFrame
+    backtest_metrics: List[BacktestMetrics]
+    backtest_curve: pd.DataFrame
     news_items_count: int
     news_items: List[NewsItem]
 
@@ -175,6 +187,21 @@ def generate_daily_fusion(
     )
     effect_summary = compute_effect_summary(snapshot)
     sector_table = compute_sector_table(snapshot)
+    backtest = run_portfolio_backtest(
+        market_security=market_security,
+        stock_securities=stocks,
+        source=config.source,
+        data_dir=config.data_dir,
+        start=config.start,
+        end=config.end,
+        min_train_days=config.min_train_days,
+        l2=config.l2,
+        retrain_days=config.backtest_retrain_days,
+        weight_threshold=config.backtest_weight_threshold,
+        commission_bps=config.commission_bps,
+        slippage_bps=config.slippage_bps,
+        window_years=config.backtest_years,
+    )
 
     return DailyFusionResult(
         as_of_date=as_of_date,
@@ -187,6 +214,8 @@ def generate_daily_fusion(
         blended_rows=blended_rows,
         effect_summary=effect_summary,
         sector_table=sector_table,
+        backtest_metrics=backtest.metrics,
+        backtest_curve=backtest.curve_frame,
         news_items_count=len(news_items),
         news_items=news_items,
     )

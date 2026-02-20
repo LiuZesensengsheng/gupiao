@@ -36,6 +36,11 @@ DEFAULT_TASK: dict[str, dict[str, Any]] = {
         "report_date": "",
         "report": "reports/daily_report.md",
         "dashboard": "reports/daily_dashboard.html",
+        "backtest_years": [3, 5],
+        "backtest_retrain_days": 20,
+        "backtest_weight_threshold": 0.50,
+        "commission_bps": 1.5,
+        "slippage_bps": 2.0,
     },
 }
 
@@ -65,6 +70,20 @@ def _coalesce(*values: Any) -> Any:
         if value is not None:
             return value
     return None
+
+
+def _parse_years(value: Any) -> tuple[int, ...]:
+    if value is None:
+        return (3, 5)
+    if isinstance(value, (list, tuple)):
+        parsed = [int(v) for v in value if int(v) > 0]
+        return tuple(sorted(set(parsed))) if parsed else (3, 5)
+    text = str(value).strip()
+    if not text:
+        return (3, 5)
+    parts = [p.strip() for p in text.split(",") if p.strip()]
+    parsed = [int(p) for p in parts if int(p) > 0]
+    return tuple(sorted(set(parsed))) if parsed else (3, 5)
 
 
 def _resolve_settings(args: argparse.Namespace, payload: dict[str, Any]) -> dict[str, Any]:
@@ -121,6 +140,17 @@ def build_parser() -> argparse.ArgumentParser:
     daily.add_argument("--report-date", dest="report_date", default=None, help="Override report date YYYY-MM-DD")
     daily.add_argument("--report", default=None, help="Output markdown report path")
     daily.add_argument("--dashboard", default=None, help="Output HTML dashboard path")
+    daily.add_argument("--backtest-years", dest="backtest_years", default=None, help="Years list, e.g. 3,5")
+    daily.add_argument("--backtest-retrain-days", dest="backtest_retrain_days", type=int, default=None, help="Model retrain interval in days")
+    daily.add_argument(
+        "--backtest-weight-threshold",
+        dest="backtest_weight_threshold",
+        type=float,
+        default=None,
+        help="Score threshold for portfolio weights",
+    )
+    daily.add_argument("--commission-bps", dest="commission_bps", type=float, default=None, help="Commission in bps")
+    daily.add_argument("--slippage-bps", dest="slippage_bps", type=float, default=None, help="Slippage in bps")
 
     forecast = sub.add_parser("forecast", parents=[config_parent], help="Generate base quant forecast report")
     forecast.add_argument("--source", default=None, choices=["eastmoney", "local"], help="Data source")
@@ -151,6 +181,11 @@ def run_daily(settings: dict[str, Any]) -> int:
         news_half_life_days=settings["news_half_life_days"],
         market_news_strength=settings["market_news_strength"],
         stock_news_strength=settings["stock_news_strength"],
+        backtest_years=_parse_years(settings["backtest_years"]),
+        backtest_retrain_days=int(settings["backtest_retrain_days"]),
+        backtest_weight_threshold=float(settings["backtest_weight_threshold"]),
+        commission_bps=float(settings["commission_bps"]),
+        slippage_bps=float(settings["slippage_bps"]),
         report_date=settings["report_date"],
     )
 

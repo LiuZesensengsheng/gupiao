@@ -25,6 +25,7 @@ src/
     features.py        # Factor engineering
     modeling.py        # Logistic model + metrics
     forecast_engine.py # Quant forecast engine
+    backtesting.py     # Portfolio backtest + risk/return metrics
     news_repository.py # News CSV ingestion
     effect_analysis.py # Profit/loss/chip/capital/sector analytics
 
@@ -88,6 +89,7 @@ Use the new module paths directly:
 - Feature engineering: `src.infrastructure.features`
 - Modeling: `src.infrastructure.modeling`
 - Forecast engine: `src.infrastructure.forecast_engine`
+- Portfolio backtest: `src.infrastructure.backtesting`
 - News ingestion/fusion: `src.infrastructure.news_repository` + `src.domain.news`
 - Effect analytics: `src.infrastructure.effect_analysis`
 - Report rendering: `src.interfaces.presenters.*`

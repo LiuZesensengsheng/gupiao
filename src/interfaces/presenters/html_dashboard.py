@@ -28,6 +28,12 @@ def _score(v: float) -> str:
     return f"{v:+.3f}"
 
 
+def _num(v: float, digits: int = 2) -> str:
+    if pd.isna(v):
+        return "NA"
+    return f"{v:.{digits}f}"
+
+
 def _mix_hex(a: tuple[int, int, int], b: tuple[int, int, int], t: float) -> str:
     t = float(np.clip(t, 0.0, 1.0))
     r = int(a[0] + (b[0] - a[0]) * t)
@@ -55,6 +61,80 @@ def _bar_html(value: float, scale: float = 1.0, color: str = "#3e8cf8") -> str:
         return '<div class="bar"><span style="width:0%"></span></div>'
     width = max(0.0, min(100.0, abs(value / scale) * 100.0))
     return f'<div class="bar"><span style="width:{width:.1f}%; background:{color};"></span></div>'
+
+
+def _line_chart_html(curve: pd.DataFrame) -> str:
+    if curve.empty:
+        return "<div class='empty'>无可用回测曲线数据</div>"
+
+    data = curve.sort_values("date").reset_index(drop=True)
+    values = np.concatenate(
+        [
+            data["strategy_nav"].to_numpy(dtype=float),
+            data["benchmark_nav"].to_numpy(dtype=float),
+            data["excess_nav"].to_numpy(dtype=float),
+        ]
+    )
+    y_min = float(np.nanmin(values))
+    y_max = float(np.nanmax(values))
+    span = max(1e-6, y_max - y_min)
+    y_pad = span * 0.08
+    y_min -= y_pad
+    y_max += y_pad
+    y_span = max(1e-6, y_max - y_min)
+
+    width = 980.0
+    height = 310.0
+    px = 52.0
+    py = 20.0
+    plot_w = width - px - 16.0
+    plot_h = height - py - 40.0
+    n = len(data)
+
+    def _x(i: int) -> float:
+        if n <= 1:
+            return px
+        return px + plot_w * i / float(n - 1)
+
+    def _y(v: float) -> float:
+        return py + (1.0 - (v - y_min) / y_span) * plot_h
+
+    def _poly(col: str, color: str) -> str:
+        pts = " ".join(f"{_x(i):.1f},{_y(float(v)):.1f}" for i, v in enumerate(data[col].to_numpy(dtype=float)))
+        return f"<polyline fill='none' stroke='{color}' stroke-width='2.4' points='{pts}'/>"
+
+    grid_lines = []
+    for r in range(5):
+        y = py + plot_h * r / 4.0
+        v = y_max - (y_max - y_min) * r / 4.0
+        grid_lines.append(
+            f"<line x1='{px:.1f}' y1='{y:.1f}' x2='{(px + plot_w):.1f}' y2='{y:.1f}' stroke='#e6edf7' stroke-width='1'/>"
+        )
+        grid_lines.append(
+            f"<text x='{(px - 6):.1f}' y='{(y + 4):.1f}' text-anchor='end' fill='#6b7280' font-size='11'>{v:.2f}</text>"
+        )
+
+    start_text = escape(str(pd.Timestamp(data["date"].iloc[0]).date()))
+    end_text = escape(str(pd.Timestamp(data["date"].iloc[-1]).date()))
+
+    return (
+        "<div class='curve-wrap'>"
+        "<svg viewBox='0 0 980 310' role='img' aria-label='策略与基准收益曲线'>"
+        f"{''.join(grid_lines)}"
+        f"{_poly('strategy_nav', '#d43030')}"
+        f"{_poly('benchmark_nav', '#1f63d8')}"
+        f"{_poly('excess_nav', '#0f8a64')}"
+        f"<line x1='{px:.1f}' y1='{(py + plot_h):.1f}' x2='{(px + plot_w):.1f}' y2='{(py + plot_h):.1f}' stroke='#9eb0cd' stroke-width='1.1'/>"
+        f"<text x='{px:.1f}' y='{(py + plot_h + 18):.1f}' fill='#6b7280' font-size='11'>{start_text}</text>"
+        f"<text x='{(px + plot_w):.1f}' y='{(py + plot_h + 18):.1f}' text-anchor='end' fill='#6b7280' font-size='11'>{end_text}</text>"
+        "</svg>"
+        "<div class='legend'>"
+        "<span><i style='background:#d43030;'></i>策略净值</span>"
+        "<span><i style='background:#1f63d8;'></i>沪深300基准</span>"
+        "<span><i style='background:#0f8a64;'></i>超额净值</span>"
+        "</div>"
+        "</div>"
+    )
 
 
 def write_daily_dashboard(out_path: str | Path, result: DailyFusionResult) -> Path:
@@ -119,6 +199,31 @@ def write_daily_dashboard(out_path: str | Path, result: DailyFusionResult) -> Pa
             f"<td>{_bar_html(heat, scale=1.0, color=color)}</td>"
             "</tr>"
         )
+
+    backtest_rows: list[str] = []
+    for metrics in result.backtest_metrics:
+        start_text = escape(str(metrics.start_date.date())) if not pd.isna(metrics.start_date) else "NA"
+        end_text = escape(str(metrics.end_date.date())) if not pd.isna(metrics.end_date) else "NA"
+        backtest_rows.append(
+            "<tr>"
+            f"<td>{escape(metrics.label)}</td>"
+            f"<td>{start_text}</td>"
+            f"<td>{end_text}</td>"
+            f"<td>{metrics.n_days}</td>"
+            f"<td>{_pct(metrics.total_return)}</td>"
+            f"<td>{_pct(metrics.annual_return)}</td>"
+            f"<td>{_pct(metrics.excess_annual_return)}</td>"
+            f"<td>{_pct(metrics.max_drawdown)}</td>"
+            f"<td>{_num(metrics.sharpe)}</td>"
+            f"<td>{_num(metrics.sortino)}</td>"
+            f"<td>{_num(metrics.calmar)}</td>"
+            f"<td>{_num(metrics.information_ratio)}</td>"
+            f"<td>{_pct(metrics.win_rate)}</td>"
+            f"<td>{_pct(metrics.annual_turnover)}</td>"
+            f"<td>{_pct(metrics.total_cost)}</td>"
+            "</tr>"
+        )
+    curve_html = _line_chart_html(result.backtest_curve)
 
     eff = result.effect_summary
     market = result.market_forecast
@@ -239,6 +344,45 @@ def write_daily_dashboard(out_path: str | Path, result: DailyFusionResult) -> Pa
       grid-template-columns: 2fr 1fr;
       margin-top: 14px;
     }}
+    .curve-wrap {{
+      background: #fff;
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      padding: 10px 10px 8px;
+      box-shadow: 0 8px 22px rgba(15, 32, 64, 0.05);
+    }}
+    .curve-wrap svg {{
+      width: 100%;
+      height: auto;
+      display: block;
+    }}
+    .legend {{
+      margin-top: 6px;
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px 14px;
+      color: var(--muted);
+      font-size: 12px;
+    }}
+    .legend span {{
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+    }}
+    .legend i {{
+      width: 10px;
+      height: 10px;
+      border-radius: 999px;
+      display: inline-block;
+    }}
+    .empty {{
+      border: 1px dashed var(--line);
+      border-radius: 12px;
+      color: var(--muted);
+      padding: 18px;
+      text-align: center;
+      background: #fbfcff;
+    }}
     .note {{ margin-top: 14px; color: var(--muted); font-size: 12px; }}
     @media (max-width: 960px) {{
       .grid {{ grid-template-columns: repeat(2, minmax(0, 1fr)); }}
@@ -321,6 +465,23 @@ def write_daily_dashboard(out_path: str | Path, result: DailyFusionResult) -> Pa
     </div>
 
     <section>
+      <h2>组合回测曲线 (交易级, 含成本)</h2>
+      {curve_html}
+    </section>
+
+    <section>
+      <h2>回测指标 (全样本 + 近3/5年)</h2>
+      <table>
+        <thead>
+          <tr><th>窗口</th><th>开始</th><th>结束</th><th>交易日</th><th>策略总收益</th><th>年化收益</th><th>年化超额</th><th>最大回撤</th><th>Sharpe</th><th>Sortino</th><th>Calmar</th><th>信息比率</th><th>日胜率</th><th>年化换手</th><th>成本损耗</th></tr>
+        </thead>
+        <tbody>
+          {''.join(backtest_rows) if backtest_rows else '<tr><td colspan="15">无可用回测数据</td></tr>'}
+        </tbody>
+      </table>
+    </section>
+
+    <section>
       <h2>新闻模糊矩阵</h2>
       <table>
         <thead>
@@ -354,4 +515,3 @@ def write_daily_dashboard(out_path: str | Path, result: DailyFusionResult) -> Pa
 
     path.write_text(html, encoding="utf-8")
     return path
-

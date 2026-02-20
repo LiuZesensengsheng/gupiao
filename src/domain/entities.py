@@ -135,3 +135,54 @@ class EffectSummary:
             risk_label="NA",
         )
 
+
+@dataclass
+class BacktestMetrics:
+    label: str
+    start_date: pd.Timestamp
+    end_date: pd.Timestamp
+    n_days: int
+    total_return: float
+    annual_return: float
+    annual_vol: float
+    sharpe: float
+    sortino: float
+    max_drawdown: float
+    calmar: float
+    benchmark_total_return: float
+    benchmark_annual_return: float
+    excess_total_return: float
+    excess_annual_return: float
+    information_ratio: float
+    tracking_error: float
+    win_rate: float
+    avg_turnover: float
+    annual_turnover: float
+    total_cost: float
+
+    @staticmethod
+    def empty(label: str) -> "BacktestMetrics":
+        nat = pd.NaT
+        return BacktestMetrics(
+            label=label,
+            start_date=nat,
+            end_date=nat,
+            n_days=0,
+            total_return=np.nan,
+            annual_return=np.nan,
+            annual_vol=np.nan,
+            sharpe=np.nan,
+            sortino=np.nan,
+            max_drawdown=np.nan,
+            calmar=np.nan,
+            benchmark_total_return=np.nan,
+            benchmark_annual_return=np.nan,
+            excess_total_return=np.nan,
+            excess_annual_return=np.nan,
+            information_ratio=np.nan,
+            tracking_error=np.nan,
+            win_rate=np.nan,
+            avg_turnover=np.nan,
+            annual_turnover=np.nan,
+            total_cost=np.nan,
+        )

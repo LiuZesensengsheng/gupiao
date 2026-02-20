@@ -21,6 +21,7 @@ It is designed for A-shares and includes your initial symbols:
 - Capital/chip proxies (without Level-2): OBV, Amihud proxy, volume concentration
 - Market + stock layered modeling
 - Walk-forward out-of-sample evaluation
+- Portfolio backtest (3y/5y windows) with equity curve and trading-cost simulation
 
 ## Architecture
 
@@ -78,6 +79,7 @@ The daily report includes:
 - Blended probabilities after news adjustment
 - Suggested total exposure and stock weights
 - Market-effect modules: profit effect, loss effect, chip structure, capital state, sector heat
+- Backtest metrics: annual return/excess, max drawdown, Sharpe, Sortino, Calmar, Information Ratio, turnover, cost drag
 
 ### News CSV Fields
 
@@ -109,6 +111,17 @@ You can customize dashboard output path:
 python3 run_api.py daily --source eastmoney --news-file input/news.csv --dashboard reports/my_dashboard.html
 ```
 
+Backtest parameters can be overridden from CLI:
+
+```bash
+python3 run_api.py daily \
+  --backtest-years 3,5 \
+  --backtest-retrain-days 20 \
+  --commission-bps 1.5 \
+  --slippage-bps 2.0 \
+  --backtest-weight-threshold 0.5
+```
+
 ## Unified API Config
 
 `run_api.py` loads `config/api.json` by default.
@@ -128,7 +141,24 @@ python3 run_api.py daily --config config/api.json
 
 # Inspect final merged params
 python3 run_api.py forecast --print-effective-config
+
+# Inspect effective daily params (including backtest config)
+python3 run_api.py daily --print-effective-config
 ```
+
+## Backtest Metrics
+
+The dashboard and daily report now include these core quant metrics:
+
+- Strategy total return / annualized return
+- Benchmark total return / annualized return
+- Excess return (total + annualized)
+- Max Drawdown (MDD)
+- Sharpe / Sortino / Calmar
+- Information Ratio / Tracking Error
+- Daily win rate
+- Turnover (daily average + annualized)
+- Cost drag (commission + slippage)
 
 ## Local CSV Format
 

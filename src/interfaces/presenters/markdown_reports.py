@@ -6,7 +6,7 @@ from typing import Sequence
 import pandas as pd
 
 from src.application.use_cases import DailyFusionResult
-from src.domain.entities import BinaryMetrics, ForecastRow, MarketForecast
+from src.domain.entities import BacktestMetrics, BinaryMetrics, ForecastRow, MarketForecast
 from src.domain.policies import market_regime, target_exposure
 
 
@@ -22,10 +22,28 @@ def _to_bp(v: float) -> str:
     return f"{v * 10000:.0f}bp"
 
 
+def _to_float(v: float, digits: int = 2) -> str:
+    if pd.isna(v):
+        return "NA"
+    return f"{v:.{digits}f}"
+
+
 def _metrics_line(metrics: BinaryMetrics) -> str:
     auc_text = f"{metrics.auc:.3f}" if not pd.isna(metrics.auc) else "NA"
     brier_text = f"{metrics.brier:.3f}" if not pd.isna(metrics.brier) else "NA"
     return f"n={metrics.n}, acc={_to_percent(metrics.accuracy)}, auc={auc_text}, brier={brier_text}"
+
+
+def _bt_line(metrics: BacktestMetrics) -> str:
+    start_text = str(metrics.start_date.date()) if not pd.isna(metrics.start_date) else "NA"
+    end_text = str(metrics.end_date.date()) if not pd.isna(metrics.end_date) else "NA"
+    return (
+        f"| {metrics.label} | {start_text} | {end_text} | {metrics.n_days} | "
+        f"{_to_percent(metrics.total_return)} | {_to_percent(metrics.annual_return)} | {_to_percent(metrics.excess_annual_return)} | "
+        f"{_to_percent(metrics.max_drawdown)} | {_to_float(metrics.sharpe)} | {_to_float(metrics.sortino)} | "
+        f"{_to_float(metrics.calmar)} | {_to_float(metrics.information_ratio)} | {_to_percent(metrics.win_rate)} | "
+        f"{_to_percent(metrics.annual_turnover)} | {_to_percent(metrics.total_cost)} |"
+    )
 
 
 def write_forecast_report(
@@ -179,7 +197,19 @@ def write_daily_report(out_path: str | Path, result: DailyFusionResult) -> Path:
     lines.append("- 融合后概率 = 模型概率经过新闻净分的非线性修正。")
     lines.append("- 若你希望更保守，可降低 `--stock-news-strength` 与 `--market-news-strength`。")
     lines.append("- 本结果为研究支持，不构成投资建议。")
+    lines.append("")
+    lines.append("## 回测表现 (交易级, 含成本)")
+    lines.append("")
+    lines.append("| 窗口 | 开始 | 结束 | 交易日 | 策略总收益 | 年化收益 | 年化超额 | 最大回撤 | Sharpe | Sortino | Calmar | 信息比率 | 日胜率 | 年化换手 | 成本损耗 |")
+    lines.append("|---|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|")
+    if not result.backtest_metrics:
+        lines.append("| 无数据 | NA | NA | 0 | NA | NA | NA | NA | NA | NA | NA | NA | NA | NA | NA |")
+    else:
+        for metrics in result.backtest_metrics:
+            lines.append(_bt_line(metrics))
+    lines.append("")
+    lines.append("- 指标口径: 策略按日调仓，收益为次日收益，成本=换手*(佣金bps+滑点bps)。")
+    lines.append("- 回测曲线已在 dashboard 中可视化展示。")
 
     report_path.write_text("\n".join(lines), encoding="utf-8")
     return report_path
-

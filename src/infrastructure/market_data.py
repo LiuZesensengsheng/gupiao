@@ -10,6 +10,8 @@ from src.domain.symbols import SymbolError, normalize_symbol
 
 
 EASTMONEY_KLINE_URL = "https://push2his.eastmoney.com/api/qt/stock/kline/get"
+EASTMONEY_CACHE_DIR = "_eastmoney_cache"
+_MEM_CACHE: Dict[tuple[str, str, str, str, str], pd.DataFrame] = {}
 
 
 class DataError(RuntimeError):
@@ -37,6 +39,13 @@ def _normalize_daily_columns(df: pd.DataFrame, symbol: str) -> pd.DataFrame:
     out = out.sort_values("date").drop_duplicates(subset=["date"])
     out["symbol"] = normalize_symbol(symbol).symbol
     return out.reset_index(drop=True)
+
+
+def _slice_date_range(df: pd.DataFrame, start: str, end: str) -> pd.DataFrame:
+    start_ts = pd.Timestamp(start)
+    end_ts = pd.Timestamp(end)
+    out = df[(df["date"] >= start_ts) & (df["date"] <= end_ts)].copy()
+    return out.sort_values("date").reset_index(drop=True)
 
 
 def fetch_eastmoney_daily(
@@ -100,6 +109,29 @@ def fetch_eastmoney_daily(
     return _normalize_daily_columns(pd.DataFrame(rows), symbol=symbol)
 
 
+def _eastmoney_cache_path(symbol: str, data_dir: str | Path) -> Path:
+    info = normalize_symbol(symbol)
+    root = Path(data_dir) / EASTMONEY_CACHE_DIR
+    root.mkdir(parents=True, exist_ok=True)
+    return root / f"{info.symbol}.csv"
+
+
+def _load_eastmoney_cache(symbol: str, data_dir: str | Path) -> pd.DataFrame | None:
+    path = _eastmoney_cache_path(symbol, data_dir)
+    if not path.exists():
+        return None
+    try:
+        raw = pd.read_csv(path)
+        return _normalize_daily_columns(raw, symbol=symbol)
+    except Exception:
+        return None
+
+
+def _write_eastmoney_cache(symbol: str, data_dir: str | Path, df: pd.DataFrame) -> None:
+    path = _eastmoney_cache_path(symbol, data_dir)
+    df.to_csv(path, index=False)
+
+
 def load_local_daily(symbol: str, data_dir: str | Path) -> pd.DataFrame:
     try:
         info = normalize_symbol(symbol)
@@ -127,9 +159,48 @@ def load_symbol_daily(
     start: str = "2010-01-01",
     end: str = "2099-12-31",
 ) -> pd.DataFrame:
-    if source == "eastmoney":
-        return fetch_eastmoney_daily(symbol=symbol, start=start, end=end)
-    if source == "local":
-        return load_local_daily(symbol=symbol, data_dir=data_dir)
-    raise DataError(f"Unknown data source: {source}")
+    try:
+        norm_symbol = normalize_symbol(symbol).symbol
+    except SymbolError as exc:
+        raise DataError(str(exc)) from exc
 
+    cache_key = (norm_symbol, source, str(data_dir), start, end)
+    cached_mem = _MEM_CACHE.get(cache_key)
+    if cached_mem is not None:
+        return cached_mem.copy()
+
+    if source == "eastmoney":
+        target_end = min(pd.Timestamp(end), pd.Timestamp.today().normalize())
+        cached_disk = _load_eastmoney_cache(norm_symbol, data_dir=data_dir)
+
+        need_refresh = True
+        if cached_disk is not None and not cached_disk.empty:
+            disk_min = pd.Timestamp(cached_disk["date"].min())
+            disk_max = pd.Timestamp(cached_disk["date"].max())
+            if disk_min <= pd.Timestamp(start) and disk_max >= target_end - pd.Timedelta(days=3):
+                need_refresh = False
+
+        df: pd.DataFrame
+        if need_refresh:
+            try:
+                df = fetch_eastmoney_daily(symbol=norm_symbol, start=start, end=end)
+                _write_eastmoney_cache(norm_symbol, data_dir=data_dir, df=df)
+            except DataError:
+                if cached_disk is None or cached_disk.empty:
+                    raise
+                df = cached_disk
+        else:
+            df = cached_disk
+
+        out = _slice_date_range(df, start=start, end=end)
+        if out.empty:
+            raise DataError(f"{norm_symbol}: no data available after date filtering [{start}, {end}]")
+        _MEM_CACHE[cache_key] = out.copy()
+        return out.copy()
+    if source == "local":
+        out = _slice_date_range(load_local_daily(symbol=norm_symbol, data_dir=data_dir), start=start, end=end)
+        if out.empty:
+            raise DataError(f"{norm_symbol}: no local rows in date range [{start}, {end}]")
+        _MEM_CACHE[cache_key] = out.copy()
+        return out.copy()
+    raise DataError(f"Unknown data source: {source}")

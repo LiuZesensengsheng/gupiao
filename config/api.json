@@ -18,6 +18,11 @@
     "news_half_life_days": 10.0,
     "market_news_strength": 0.9,
     "stock_news_strength": 1.1,
+    "backtest_years": [3, 5],
+    "backtest_retrain_days": 20,
+    "backtest_weight_threshold": 0.5,
+    "commission_bps": 1.5,
+    "slippage_bps": 2.0,
     "report_date": "",
     "report": "reports/daily_report.md",
     "dashboard": "reports/daily_dashboard.html"

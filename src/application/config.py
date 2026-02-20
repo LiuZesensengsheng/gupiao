@@ -21,5 +21,9 @@ class DailyConfig(ForecastConfig):
     news_half_life_days: float
     market_news_strength: float
     stock_news_strength: float
+    backtest_years: tuple[int, ...]
+    backtest_retrain_days: int
+    backtest_weight_threshold: float
+    commission_bps: float
+    slippage_bps: float
     report_date: str = ""
-
