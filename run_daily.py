@@ -11,6 +11,7 @@ import numpy as np
 import pandas as pd
 
 from src.data import DataError
+from src.dashboard import write_dashboard_html
 from src.effect_analysis import EffectSummary, build_latest_snapshot, compute_effect_summary, compute_sector_table
 from src.news_matrix import SentimentAggregate, aggregate_sentiment, blend_probability, load_news_items
 from src.pipeline import ForecastRow, Security, run_pipeline
@@ -47,6 +48,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--stock-news-strength", type=float, default=1.1, help="Stock news blend strength")
     parser.add_argument("--report-date", default="", help="Override report date YYYY-MM-DD")
     parser.add_argument("--report", default="reports/daily_report.md", help="Output report path")
+    parser.add_argument("--dashboard", default="reports/daily_dashboard.html", help="Output HTML dashboard path")
     return parser.parse_args()
 
 
@@ -359,7 +361,62 @@ def main() -> int:
         sector_table=sector_table,
         news_items_count=len(news_items),
     )
+    dashboard_path = None
+    if args.dashboard.strip():
+        stock_payload = []
+        for row in sorted(blended_rows, key=lambda x: x.final_score, reverse=True):
+            stock_payload.append(
+                {
+                    "symbol": row.symbol,
+                    "name": row.name,
+                    "base_short": row.base_short,
+                    "base_mid": row.base_mid,
+                    "final_short": row.final_short,
+                    "final_mid": row.final_mid,
+                    "final_score": row.final_score,
+                    "suggested_weight": row.suggested_weight,
+                    "short_sent_bull": row.short_sent.bullish,
+                    "short_sent_bear": row.short_sent.bearish,
+                    "short_sent_neutral": row.short_sent.neutral,
+                    "short_sent_items": row.short_sent.items,
+                    "mid_sent_bull": row.mid_sent.bullish,
+                    "mid_sent_bear": row.mid_sent.bearish,
+                    "mid_sent_neutral": row.mid_sent.neutral,
+                    "mid_sent_items": row.mid_sent.items,
+                }
+            )
+
+        dashboard_path = write_dashboard_html(
+            out_path=args.dashboard,
+            as_of_date=as_of_date,
+            source=args.source,
+            market_name=market_forecast.name,
+            market_symbol=market_forecast.symbol,
+            market_regime=_market_regime(market_final_short, market_final_mid),
+            target_exposure=total_exposure,
+            market_base_short=market_forecast.short_prob,
+            market_base_mid=market_forecast.mid_prob,
+            market_final_short=market_final_short,
+            market_final_mid=market_final_mid,
+            market_short_sent_score=market_short_sent.score,
+            market_mid_sent_score=market_mid_sent.score,
+            market_short_sent_bull=market_short_sent.bullish,
+            market_short_sent_bear=market_short_sent.bearish,
+            market_short_sent_neutral=market_short_sent.neutral,
+            market_short_sent_items=market_short_sent.items,
+            market_mid_sent_bull=market_mid_sent.bullish,
+            market_mid_sent_bear=market_mid_sent.bearish,
+            market_mid_sent_neutral=market_mid_sent.neutral,
+            market_mid_sent_items=market_mid_sent.items,
+            news_items_count=len(news_items),
+            stocks=stock_payload,
+            effect_summary=effect_summary,
+            sector_table=sector_table,
+        )
+
     print(f"[OK] Daily report generated: {path.resolve()}")
+    if dashboard_path is not None:
+        print(f"[OK] Daily dashboard generated: {dashboard_path.resolve()}")
     return 0
 
 

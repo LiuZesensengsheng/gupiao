@@ -55,6 +55,7 @@ python3 run_daily.py --source eastmoney --news-file input/news.csv
 3. Read fusion report:
 
 - `reports/daily_report.md`
+- `reports/daily_dashboard.html`
 
 The daily report includes:
 
@@ -87,6 +88,12 @@ You can tune blending sensitivity:
 - `--stock-news-strength` (default 1.1)
 - `--news-lookback-days` (default 45)
 - `--news-half-life-days` (default 10)
+
+You can customize dashboard output path:
+
+```bash
+python3 run_daily.py --source eastmoney --news-file input/news.csv --dashboard reports/my_dashboard.html
+```
 
 ## Local CSV Format
 
