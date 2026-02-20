@@ -41,13 +41,13 @@ Architecture details:
 2. Run forecast:
 
 ```bash
-python3 run_forecast.py --source eastmoney
+python3 run_api.py forecast --source eastmoney
 ```
 
 If your environment cannot access network, use local CSV mode:
 
 ```bash
-python3 run_forecast.py --source local --data-dir data
+python3 run_api.py forecast --source local --data-dir data
 ```
 
 3. Read report:
@@ -62,7 +62,7 @@ This is the practical flow you asked for:
 2. Run one command:
 
 ```bash
-python3 run_daily.py --source eastmoney --news-file input/news.csv
+python3 run_api.py daily --source eastmoney --news-file input/news.csv
 ```
 
 3. Read fusion report:
@@ -105,7 +105,7 @@ You can tune blending sensitivity:
 You can customize dashboard output path:
 
 ```bash
-python3 run_daily.py --source eastmoney --news-file input/news.csv --dashboard reports/my_dashboard.html
+python3 run_api.py daily --source eastmoney --news-file input/news.csv --dashboard reports/my_dashboard.html
 ```
 
 ## Local CSV Format
@@ -136,5 +136,5 @@ If `amount` is missing, it will be approximated by `close * volume`.
 - This is a probability model, not certainty prediction.
 - Use it as research support, not standalone trading advice.
 - The script assumes daily bars and predicts next trading bar (`1d`) and `20d`.
-- Root scripts (`run_daily.py`, `run_forecast.py`) are thin interface adapters; business logic lives in `src/application` and below.
+- Root script `run_api.py` is the only API entrypoint; business logic lives in `src/application` and below.
 - Legacy compatibility modules under `src/` were removed; use the layered paths in `docs/ARCHITECTURE.md`.

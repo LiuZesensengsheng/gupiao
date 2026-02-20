@@ -30,8 +30,7 @@ src/
 
   interfaces/
     cli/
-      run_forecast_cli.py
-      run_daily_cli.py
+      run_api_cli.py
     presenters/
       markdown_reports.py
       html_dashboard.py
@@ -90,4 +89,4 @@ Use the new module paths directly:
 - Effect analytics: `src.infrastructure.effect_analysis`
 - Report rendering: `src.interfaces.presenters.*`
 
-Root scripts (`run_daily.py`, `run_forecast.py`) remain stable as thin entrypoints.
+Root script `run_api.py` is the single stable entrypoint.
