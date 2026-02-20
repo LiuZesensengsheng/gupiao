@@ -77,7 +77,17 @@ When introducing news embedding + attention fusion:
 
 This keeps predictive power upgrades compatible with existing explainable reports.
 
-## Compatibility
+## Migration Notes
 
-Legacy modules (`src/data.py`, `src/features.py`, `src/model.py`, `src/pipeline.py`, etc.) are now thin compatibility wrappers that forward to the new layered modules.
+Legacy compatibility wrappers have been removed.  
+Use the new module paths directly:
 
+- Data access: `src.infrastructure.market_data`
+- Feature engineering: `src.infrastructure.features`
+- Modeling: `src.infrastructure.modeling`
+- Forecast engine: `src.infrastructure.forecast_engine`
+- News ingestion/fusion: `src.infrastructure.news_repository` + `src.domain.news`
+- Effect analytics: `src.infrastructure.effect_analysis`
+- Report rendering: `src.interfaces.presenters.*`
+
+Root scripts (`run_daily.py`, `run_forecast.py`) remain stable as thin entrypoints.

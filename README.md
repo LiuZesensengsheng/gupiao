@@ -137,3 +137,4 @@ If `amount` is missing, it will be approximated by `close * volume`.
 - Use it as research support, not standalone trading advice.
 - The script assumes daily bars and predicts next trading bar (`1d`) and `20d`.
 - Root scripts (`run_daily.py`, `run_forecast.py`) are thin interface adapters; business logic lives in `src/application` and below.
+- Legacy compatibility modules under `src/` were removed; use the layered paths in `docs/ARCHITECTURE.md`.
