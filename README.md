@@ -22,6 +22,19 @@ It is designed for A-shares and includes your initial symbols:
 - Market + stock layered modeling
 - Walk-forward out-of-sample evaluation
 
+## Architecture
+
+The project now uses a layered architecture for long-term iteration:
+
+- `src/domain`: business entities/policies (regime, exposure, news semantics)
+- `src/application`: use-cases and orchestration
+- `src/infrastructure`: data/model adapters and analytics engines
+- `src/interfaces`: CLI entrypoints and markdown/html presenters
+
+Architecture details:
+
+- `docs/ARCHITECTURE.md`
+
 ## Quick Start
 
 1. Prepare watchlist (already provided in `config/watchlist.json`).
@@ -123,3 +136,4 @@ If `amount` is missing, it will be approximated by `close * volume`.
 - This is a probability model, not certainty prediction.
 - Use it as research support, not standalone trading advice.
 - The script assumes daily bars and predicts next trading bar (`1d`) and `20d`.
+- Root scripts (`run_daily.py`, `run_forecast.py`) are thin interface adapters; business logic lives in `src/application` and below.
