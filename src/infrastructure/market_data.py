@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 from pathlib import Path
 import time
 from typing import Dict, List
@@ -12,11 +13,25 @@ from src.domain.symbols import SymbolError, normalize_symbol
 
 EASTMONEY_KLINE_URL = "https://push2his.eastmoney.com/api/qt/stock/kline/get"
 EASTMONEY_CACHE_DIR = "_eastmoney_cache"
+AUTO_SOURCE_CHAIN = ("eastmoney", "tushare", "akshare", "baostock")
+SUPPORTED_SOURCES = {"eastmoney", "tushare", "akshare", "baostock", "local", "auto"}
 _MEM_CACHE: Dict[tuple[str, str, str, str, str], pd.DataFrame] = {}
+_TUSHARE_TOKEN: str = ""
 
 
 class DataError(RuntimeError):
     """Raised when market data loading fails."""
+
+
+def set_tushare_token(token: str | None) -> None:
+    global _TUSHARE_TOKEN
+    _TUSHARE_TOKEN = "" if token is None else str(token).strip()
+
+
+def _resolve_tushare_token() -> str:
+    if _TUSHARE_TOKEN.strip():
+        return _TUSHARE_TOKEN.strip()
+    return str(os.getenv("TUSHARE_TOKEN", "")).strip()
 
 
 def _normalize_daily_columns(df: pd.DataFrame, symbol: str) -> pd.DataFrame:
@@ -47,6 +62,15 @@ def _slice_date_range(df: pd.DataFrame, start: str, end: str) -> pd.DataFrame:
     end_ts = pd.Timestamp(end)
     out = df[(df["date"] >= start_ts) & (df["date"] <= end_ts)].copy()
     return out.sort_values("date").reset_index(drop=True)
+
+
+def _pick_column(df: pd.DataFrame, candidates: List[str], required: bool = True) -> pd.Series | None:
+    for name in candidates:
+        if name in df.columns:
+            return df[name]
+    if required:
+        raise DataError(f"missing required column in source dataframe, candidates={candidates}")
+    return None
 
 
 def fetch_eastmoney_daily(
@@ -120,6 +144,155 @@ def fetch_eastmoney_daily(
     return _normalize_daily_columns(pd.DataFrame(rows), symbol=symbol)
 
 
+def fetch_tushare_daily(
+    symbol: str,
+    start: str = "2010-01-01",
+    end: str = "2099-12-31",
+) -> pd.DataFrame:
+    token = _resolve_tushare_token()
+    if not token:
+        raise DataError("tushare token is missing; set `TUSHARE_TOKEN` or pass `--tushare-token`")
+
+    try:
+        import tushare as ts
+    except Exception as exc:  # pragma: no cover - optional dependency
+        raise DataError("tushare is not installed, run: pip install tushare") from exc
+
+    try:
+        info = normalize_symbol(symbol)
+    except SymbolError as exc:
+        raise DataError(str(exc)) from exc
+
+    pro = ts.pro_api(token)
+    ts_code = info.symbol
+    start_date = start.replace("-", "")
+    end_date = end.replace("-", "")
+
+    try:
+        if info.code.startswith(("0", "3", "6", "8", "9")):
+            raw = pro.daily(ts_code=ts_code, start_date=start_date, end_date=end_date)
+        else:
+            raw = pro.index_daily(ts_code=ts_code, start_date=start_date, end_date=end_date)
+    except Exception as exc:
+        raise DataError(f"{symbol}: tushare request failed: {exc}") from exc
+
+    if raw is None or raw.empty:
+        # If daily returns empty for index-like symbols, try index_daily fallback.
+        try:
+            raw = pro.index_daily(ts_code=ts_code, start_date=start_date, end_date=end_date)
+        except Exception:
+            pass
+
+    if raw is None or raw.empty:
+        raise DataError(f"{symbol}: tushare returned no daily bars")
+
+    frame = pd.DataFrame(
+        {
+            "date": _pick_column(raw, ["trade_date", "date"]),
+            "open": _pick_column(raw, ["open"]),
+            "high": _pick_column(raw, ["high"]),
+            "low": _pick_column(raw, ["low"]),
+            "close": _pick_column(raw, ["close"]),
+            "volume": _pick_column(raw, ["vol", "volume"]),
+        }
+    )
+    amount_col = _pick_column(raw, ["amount"], required=False)
+    if amount_col is not None:
+        frame["amount"] = amount_col
+    return _normalize_daily_columns(frame, symbol=symbol)
+
+
+def fetch_akshare_daily(
+    symbol: str,
+    start: str = "2010-01-01",
+    end: str = "2099-12-31",
+) -> pd.DataFrame:
+    try:
+        import akshare as ak
+    except Exception as exc:  # pragma: no cover - optional dependency
+        raise DataError("akshare is not installed, run: pip install akshare") from exc
+
+    try:
+        info = normalize_symbol(symbol)
+    except SymbolError as exc:
+        raise DataError(str(exc)) from exc
+
+    start_date = start.replace("-", "")
+    end_date = end.replace("-", "")
+    try:
+        raw = ak.stock_zh_a_hist(
+            symbol=info.code,
+            period="daily",
+            start_date=start_date,
+            end_date=end_date,
+            adjust="qfq",
+        )
+    except Exception as exc:
+        raise DataError(f"{symbol}: akshare request failed: {exc}") from exc
+
+    if raw is None or raw.empty:
+        raise DataError(f"{symbol}: akshare returned no daily bars")
+
+    frame = pd.DataFrame(
+        {
+            "date": _pick_column(raw, ["日期", "date"]),
+            "open": _pick_column(raw, ["开盘", "open"]),
+            "high": _pick_column(raw, ["最高", "high"]),
+            "low": _pick_column(raw, ["最低", "low"]),
+            "close": _pick_column(raw, ["收盘", "close"]),
+            "volume": _pick_column(raw, ["成交量", "volume"]),
+        }
+    )
+    amount_col = _pick_column(raw, ["成交额", "amount"], required=False)
+    if amount_col is not None:
+        frame["amount"] = amount_col
+    return _normalize_daily_columns(frame, symbol=symbol)
+
+
+def fetch_baostock_daily(
+    symbol: str,
+    start: str = "2010-01-01",
+    end: str = "2099-12-31",
+) -> pd.DataFrame:
+    try:
+        import baostock as bs
+    except Exception as exc:  # pragma: no cover - optional dependency
+        raise DataError("baostock is not installed, run: pip install baostock") from exc
+
+    try:
+        info = normalize_symbol(symbol)
+    except SymbolError as exc:
+        raise DataError(str(exc)) from exc
+
+    login = bs.login()
+    if str(login.error_code) != "0":
+        raise DataError(f"{symbol}: baostock login failed: {login.error_msg}")
+
+    try:
+        rs = bs.query_history_k_data_plus(
+            f"{info.exchange.lower()}.{info.code}",
+            "date,open,high,low,close,volume,amount",
+            start_date=start,
+            end_date=end,
+            frequency="d",
+            adjustflag="2",
+        )
+        if str(rs.error_code) != "0":
+            raise DataError(f"{symbol}: baostock query failed: {rs.error_msg}")
+
+        rows: List[List[str]] = []
+        while rs.next():
+            rows.append(rs.get_row_data())
+    finally:
+        bs.logout()
+
+    if not rows:
+        raise DataError(f"{symbol}: baostock returned no daily bars")
+
+    raw = pd.DataFrame(rows, columns=["date", "open", "high", "low", "close", "volume", "amount"])
+    return _normalize_daily_columns(raw, symbol=symbol)
+
+
 def _eastmoney_cache_path(symbol: str, data_dir: str | Path) -> Path:
     info = normalize_symbol(symbol)
     root = Path(data_dir) / EASTMONEY_CACHE_DIR
@@ -163,6 +336,96 @@ def load_local_daily(symbol: str, data_dir: str | Path) -> pd.DataFrame:
     return _normalize_daily_columns(raw, symbol=info.symbol)
 
 
+def _parse_source_chain(source: str) -> List[str]:
+    text = str(source).strip().lower()
+    if not text:
+        raise DataError("source is empty")
+    if text == "auto":
+        return list(AUTO_SOURCE_CHAIN)
+
+    parts = [p.strip() for p in text.split(",") if p.strip()]
+    if not parts:
+        raise DataError(f"invalid source value: {source}")
+
+    unknown = [p for p in parts if p not in SUPPORTED_SOURCES]
+    if unknown:
+        valid = ", ".join(sorted(SUPPORTED_SOURCES))
+        raise DataError(f"unsupported source(s): {', '.join(unknown)}; valid: {valid}")
+
+    out: List[str] = []
+    for part in parts:
+        if part == "auto":
+            for item in AUTO_SOURCE_CHAIN:
+                if item not in out:
+                    out.append(item)
+            continue
+        if part not in out:
+            out.append(part)
+    return out
+
+
+def _load_single_source(
+    symbol: str,
+    source: str,
+    data_dir: str | Path,
+    start: str,
+    end: str,
+) -> pd.DataFrame:
+    if source == "eastmoney":
+        target_end = min(pd.Timestamp(end), pd.Timestamp.today().normalize())
+        cached_disk = _load_eastmoney_cache(symbol, data_dir=data_dir)
+
+        need_refresh = True
+        if cached_disk is not None and not cached_disk.empty:
+            disk_min = pd.Timestamp(cached_disk["date"].min())
+            disk_max = pd.Timestamp(cached_disk["date"].max())
+            if disk_min <= pd.Timestamp(start) and disk_max >= target_end - pd.Timedelta(days=3):
+                need_refresh = False
+
+        df: pd.DataFrame
+        if need_refresh:
+            try:
+                df = fetch_eastmoney_daily(symbol=symbol, start=start, end=end)
+                _write_eastmoney_cache(symbol, data_dir=data_dir, df=df)
+            except DataError:
+                if cached_disk is None or cached_disk.empty:
+                    raise
+                df = cached_disk
+        else:
+            df = cached_disk
+
+        out = _slice_date_range(df, start=start, end=end)
+        if out.empty:
+            raise DataError(f"{symbol}: no data available after date filtering [{start}, {end}]")
+        return out
+
+    if source == "akshare":
+        out = _slice_date_range(fetch_akshare_daily(symbol=symbol, start=start, end=end), start=start, end=end)
+        if out.empty:
+            raise DataError(f"{symbol}: no akshare rows in date range [{start}, {end}]")
+        return out
+
+    if source == "tushare":
+        out = _slice_date_range(fetch_tushare_daily(symbol=symbol, start=start, end=end), start=start, end=end)
+        if out.empty:
+            raise DataError(f"{symbol}: no tushare rows in date range [{start}, {end}]")
+        return out
+
+    if source == "baostock":
+        out = _slice_date_range(fetch_baostock_daily(symbol=symbol, start=start, end=end), start=start, end=end)
+        if out.empty:
+            raise DataError(f"{symbol}: no baostock rows in date range [{start}, {end}]")
+        return out
+
+    if source == "local":
+        out = _slice_date_range(load_local_daily(symbol=symbol, data_dir=data_dir), start=start, end=end)
+        if out.empty:
+            raise DataError(f"{symbol}: no local rows in date range [{start}, {end}]")
+        return out
+
+    raise DataError(f"unknown data source: {source}")
+
+
 def load_symbol_daily(
     symbol: str,
     source: str,
@@ -175,43 +438,27 @@ def load_symbol_daily(
     except SymbolError as exc:
         raise DataError(str(exc)) from exc
 
-    cache_key = (norm_symbol, source, str(data_dir), start, end)
+    source_chain = _parse_source_chain(source)
+    source_key = ",".join(source_chain)
+    cache_key = (norm_symbol, source_key, str(data_dir), start, end)
     cached_mem = _MEM_CACHE.get(cache_key)
     if cached_mem is not None:
         return cached_mem.copy()
 
-    if source == "eastmoney":
-        target_end = min(pd.Timestamp(end), pd.Timestamp.today().normalize())
-        cached_disk = _load_eastmoney_cache(norm_symbol, data_dir=data_dir)
+    errors: List[str] = []
+    for src in source_chain:
+        try:
+            out = _load_single_source(
+                symbol=norm_symbol,
+                source=src,
+                data_dir=data_dir,
+                start=start,
+                end=end,
+            )
+            _MEM_CACHE[cache_key] = out.copy()
+            return out.copy()
+        except DataError as exc:
+            errors.append(f"{src}: {exc}")
 
-        need_refresh = True
-        if cached_disk is not None and not cached_disk.empty:
-            disk_min = pd.Timestamp(cached_disk["date"].min())
-            disk_max = pd.Timestamp(cached_disk["date"].max())
-            if disk_min <= pd.Timestamp(start) and disk_max >= target_end - pd.Timedelta(days=3):
-                need_refresh = False
-
-        df: pd.DataFrame
-        if need_refresh:
-            try:
-                df = fetch_eastmoney_daily(symbol=norm_symbol, start=start, end=end)
-                _write_eastmoney_cache(norm_symbol, data_dir=data_dir, df=df)
-            except DataError:
-                if cached_disk is None or cached_disk.empty:
-                    raise
-                df = cached_disk
-        else:
-            df = cached_disk
-
-        out = _slice_date_range(df, start=start, end=end)
-        if out.empty:
-            raise DataError(f"{norm_symbol}: no data available after date filtering [{start}, {end}]")
-        _MEM_CACHE[cache_key] = out.copy()
-        return out.copy()
-    if source == "local":
-        out = _slice_date_range(load_local_daily(symbol=norm_symbol, data_dir=data_dir), start=start, end=end)
-        if out.empty:
-            raise DataError(f"{norm_symbol}: no local rows in date range [{start}, {end}]")
-        _MEM_CACHE[cache_key] = out.copy()
-        return out.copy()
-    raise DataError(f"Unknown data source: {source}")
+    detail = "; ".join(errors) if errors else "no source attempted"
+    raise DataError(f"{norm_symbol}: all sources failed ({source_key}). details: {detail}")

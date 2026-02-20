@@ -52,6 +52,12 @@ If your environment cannot access network, override from CLI:
 python3 run_api.py forecast --source local --data-dir data
 ```
 
+If your network is unstable, use automatic fallback:
+
+```bash
+python3 run_api.py forecast --source auto
+```
+
 3. Read report:
 
 - `reports/latest_report.md`
@@ -108,7 +114,7 @@ You can tune blending sensitivity:
 You can customize dashboard output path:
 
 ```bash
-python3 run_api.py daily --source eastmoney --news-file input/news.csv --dashboard reports/my_dashboard.html
+python3 run_api.py daily --source auto --news-file input/news.csv --dashboard reports/my_dashboard.html
 ```
 
 Backtest parameters can be overridden from CLI:
@@ -144,6 +150,58 @@ python3 run_api.py forecast --print-effective-config
 
 # Inspect effective daily params (including backtest config)
 python3 run_api.py daily --print-effective-config
+```
+
+## Data Sources
+
+`source` now supports single source or fallback chain:
+
+- `eastmoney`
+- `tushare`
+- `akshare`
+- `baostock`
+- `local`
+- `auto` (equivalent to `eastmoney,tushare,akshare,baostock`)
+
+Examples:
+
+```bash
+# Automatic fallback
+python3 run_api.py daily --source auto
+
+# Explicit fallback chain
+python3 run_api.py daily --source eastmoney,tushare,akshare,baostock
+
+# Force local CSV only
+python3 run_api.py daily --source local --data-dir data
+```
+
+Optional packages for alternative sources:
+
+```bash
+pip install tushare akshare baostock
+```
+
+Tushare token configuration (any one is enough):
+
+```bash
+# Method 1: environment variable
+export TUSHARE_TOKEN="your_token_here"
+python3 run_api.py daily --source tushare
+
+# Method 2: CLI override
+python3 run_api.py daily --source tushare --tushare-token "your_token_here"
+```
+
+Or store in `config/api.json`:
+
+```json
+{
+  "common": {
+    "source": "auto",
+    "tushare_token": "your_token_here"
+  }
+}
 ```
 
 ## Backtest Metrics

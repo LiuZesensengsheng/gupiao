@@ -8,12 +8,13 @@ from typing import Any
 from src.application.config import DailyConfig, ForecastConfig
 from src.application.use_cases import generate_daily_fusion, generate_forecast
 from src.application.watchlist import load_watchlist
-from src.infrastructure.market_data import DataError
+from src.infrastructure.market_data import DataError, set_tushare_token
 from src.interfaces.presenters.html_dashboard import write_daily_dashboard
 from src.interfaces.presenters.markdown_reports import write_daily_report, write_forecast_report
 
 DEFAULT_COMMON: dict[str, Any] = {
-    "source": "eastmoney",
+    "source": "auto",
+    "tushare_token": "",
     "watchlist": "config/watchlist.json",
     "data_dir": "data",
     "start": "2018-01-01",
@@ -111,10 +112,23 @@ def _resolve_settings(args: argparse.Namespace, payload: dict[str, Any]) -> dict
     return resolved
 
 
+def _masked_settings(settings: dict[str, Any]) -> dict[str, Any]:
+    out = dict(settings)
+    if "tushare_token" in out and str(out["tushare_token"]).strip():
+        out["tushare_token"] = "***"
+    return out
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Unified A-share API CLI")
     config_parent = argparse.ArgumentParser(add_help=False)
     config_parent.add_argument("--config", default="config/api.json", help="Path to unified API JSON config")
+    config_parent.add_argument(
+        "--tushare-token",
+        dest="tushare_token",
+        default=None,
+        help="Tushare token (or set env TUSHARE_TOKEN)",
+    )
     config_parent.add_argument(
         "--print-effective-config",
         action="store_true",
@@ -124,7 +138,11 @@ def build_parser() -> argparse.ArgumentParser:
     sub = parser.add_subparsers(dest="task", required=True)
 
     daily = sub.add_parser("daily", parents=[config_parent], help="Generate daily fusion report (quant + news)")
-    daily.add_argument("--source", default=None, choices=["eastmoney", "local"], help="Data source")
+    daily.add_argument(
+        "--source",
+        default=None,
+        help="Data source: eastmoney/tushare/akshare/baostock/local/auto or comma chain",
+    )
     daily.add_argument("--watchlist", default=None, help="Watchlist JSON path")
     daily.add_argument("--data-dir", dest="data_dir", default=None, help="Directory for local CSV when source=local")
     daily.add_argument("--start", default=None, help="Start date YYYY-MM-DD")
@@ -153,7 +171,11 @@ def build_parser() -> argparse.ArgumentParser:
     daily.add_argument("--slippage-bps", dest="slippage_bps", type=float, default=None, help="Slippage in bps")
 
     forecast = sub.add_parser("forecast", parents=[config_parent], help="Generate base quant forecast report")
-    forecast.add_argument("--source", default=None, choices=["eastmoney", "local"], help="Data source")
+    forecast.add_argument(
+        "--source",
+        default=None,
+        help="Data source: eastmoney/tushare/akshare/baostock/local/auto or comma chain",
+    )
     forecast.add_argument("--watchlist", default=None, help="Watchlist JSON path")
     forecast.add_argument("--data-dir", dest="data_dir", default=None, help="Directory for local CSV when source=local")
     forecast.add_argument("--start", default=None, help="Start date YYYY-MM-DD")
@@ -167,6 +189,7 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def run_daily(settings: dict[str, Any]) -> int:
+    set_tushare_token(settings.get("tushare_token", ""))
     market_security, stocks, sector_map = load_watchlist(settings["watchlist"])
     config = DailyConfig(
         source=settings["source"],
@@ -205,6 +228,7 @@ def run_daily(settings: dict[str, Any]) -> int:
 
 
 def run_forecast(settings: dict[str, Any]) -> int:
+    set_tushare_token(settings.get("tushare_token", ""))
     market_security, stocks, _ = load_watchlist(settings["watchlist"])
     config = ForecastConfig(
         source=settings["source"],
@@ -228,7 +252,7 @@ def main() -> int:
         payload = _read_json_config(args.config)
         settings = _resolve_settings(args, payload)
         if args.print_effective_config:
-            print(json.dumps({"task": args.task, "settings": settings}, indent=2, ensure_ascii=False))
+            print(json.dumps({"task": args.task, "settings": _masked_settings(settings)}, indent=2, ensure_ascii=False))
             return 0
         if args.task == "daily":
             return run_daily(settings)
@@ -240,7 +264,7 @@ def main() -> int:
         return 4
     except DataError as exc:
         print(f"[ERROR] {exc}")
-        print("Hint: if online source fails, use `--source local --data-dir data`.")
+        print("Hint: try `--source auto` or chain fallback like `--source eastmoney,tushare,akshare,baostock`.")
         return 2
     except Exception as exc:
         print(f"[ERROR] Unexpected failure: {exc}")

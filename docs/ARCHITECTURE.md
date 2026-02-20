@@ -21,7 +21,7 @@ src/
     use_cases.py       # Forecast/Daily fusion orchestration
 
   infrastructure/
-    market_data.py     # Eastmoney/local CSV data adapters
+    market_data.py     # Market data adapters (eastmoney/tushare/akshare/baostock/local + fallback chain)
     features.py        # Factor engineering
     modeling.py        # Logistic model + metrics
     forecast_engine.py # Quant forecast engine

@@ -1,6 +1,7 @@
 {
   "common": {
-    "source": "eastmoney",
+    "source": "auto",
+    "tushare_token": "",
     "watchlist": "config/watchlist.json",
     "data_dir": "data",
     "start": "2018-01-01",
