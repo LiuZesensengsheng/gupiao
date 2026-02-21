@@ -35,10 +35,6 @@ NEWS_BACKTEST_FEATURE_COLUMNS = [
     "sent_signed_items",
 ]
 FUSION_BACKTEST_FEATURE_COLUMNS = ["q_logit", "n_logit", "q_minus_n"]
-RANGE_T_SELL_RET_1_MIN = 0.02
-RANGE_T_SELL_PRICE_POS_MIN = 0.80
-RANGE_T_BUY_RET_1_MAX = -0.02
-RANGE_T_BUY_PRICE_POS_MAX = 0.35
 
 
 @dataclass(frozen=True)
@@ -312,8 +308,10 @@ def _apply_turnover_control(
         if delta < -float(prev[i]) - 1e-12:
             oversell_violations += 1
             out[i] = max(0.0, float(prev[i]) - float(prev[i]))
-        recent_trades = int(sum(trade_history[i][-int(TRADING_DAYS_PER_WEEK) :]))
-        if recent_trades >= max_trades:
+        lookback = max(0, int(TRADING_DAYS_PER_WEEK) - 1)
+        projected_window = list(trade_history[i][-lookback:]) + [1]
+        projected_trades = int(sum(projected_window))
+        if projected_trades > max_trades:
             out[i] = prev[i]
             fixed[i] = True
 
@@ -363,6 +361,10 @@ def _apply_range_t_whitelist(
     ret_1: np.ndarray,
     price_pos_20: np.ndarray,
     min_weight_change_to_trade: float,
+    sell_ret_1_min: float,
+    sell_price_pos_20_min: float,
+    buy_ret_1_max: float,
+    buy_price_pos_20_max: float,
 ) -> np.ndarray:
     prev = np.asarray(prev_weights, dtype=float)
     out = np.asarray(target_weights, dtype=float).copy()
@@ -380,8 +382,8 @@ def _apply_range_t_whitelist(
         delta = float(out[i] - prev[i])
         if abs(delta) < min_delta:
             continue
-        sell_trigger = (ret_1[i] >= RANGE_T_SELL_RET_1_MIN) and (price_pos_20[i] >= RANGE_T_SELL_PRICE_POS_MIN)
-        buy_trigger = (ret_1[i] <= RANGE_T_BUY_RET_1_MAX) and (price_pos_20[i] <= RANGE_T_BUY_PRICE_POS_MAX)
+        sell_trigger = (ret_1[i] >= float(sell_ret_1_min)) and (price_pos_20[i] >= float(sell_price_pos_20_min))
+        buy_trigger = (ret_1[i] <= float(buy_ret_1_max)) and (price_pos_20[i] <= float(buy_price_pos_20_max))
         if delta < 0.0 and not bool(sell_trigger):
             out[i] = prev[i]
         elif delta > 0.0 and not bool(buy_trigger):
@@ -433,6 +435,10 @@ def run_portfolio_backtest(
     max_trades_per_stock_per_day: int = 1,
     max_trades_per_stock_per_week: int = 3,
     min_weight_change_to_trade: float = 0.03,
+    range_t_sell_ret_1_min: float = 0.02,
+    range_t_sell_price_pos_20_min: float = 0.80,
+    range_t_buy_ret_1_max: float = -0.02,
+    range_t_buy_price_pos_20_max: float = 0.35,
     max_runtime_seconds: float = 0.0,
     use_margin_features: bool = True,
     margin_market_file: str = "input/margin_market.csv",
@@ -818,6 +824,10 @@ def run_portfolio_backtest(
                     ret_1=ret_1_arr,
                     price_pos_20=price_pos_20_arr,
                     min_weight_change_to_trade=min_weight_change_to_trade,
+                    sell_ret_1_min=range_t_sell_ret_1_min,
+                    sell_price_pos_20_min=range_t_sell_price_pos_20_min,
+                    buy_ret_1_max=range_t_buy_ret_1_max,
+                    buy_price_pos_20_max=range_t_buy_price_pos_20_max,
                 )
             if state_code_fused == "range":
                 target_weights_fused = _apply_range_t_whitelist(
@@ -826,6 +836,10 @@ def run_portfolio_backtest(
                     ret_1=ret_1_arr,
                     price_pos_20=price_pos_20_arr,
                     min_weight_change_to_trade=min_weight_change_to_trade,
+                    sell_ret_1_min=range_t_sell_ret_1_min,
+                    sell_price_pos_20_min=range_t_sell_price_pos_20_min,
+                    buy_ret_1_max=range_t_buy_ret_1_max,
+                    buy_price_pos_20_max=range_t_buy_price_pos_20_max,
                 )
 
             if use_turnover_control:

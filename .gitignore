@@ -1,0 +1,6 @@
+__pycache__/
+.pycache/
+*.pyc
+*.pyo
+*.pyd
+*.py,cover

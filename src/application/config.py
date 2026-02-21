@@ -41,6 +41,10 @@ class DailyConfig(ForecastConfig):
     max_trades_per_stock_per_day: int
     max_trades_per_stock_per_week: int
     min_weight_change_to_trade: float
+    range_t_sell_ret_1_min: float
+    range_t_sell_price_pos_20_min: float
+    range_t_buy_ret_1_max: float
+    range_t_buy_price_pos_20_max: float
     enable_acceptance_checks: bool
     acceptance_target_years: int
     use_strategy_optimizer: bool

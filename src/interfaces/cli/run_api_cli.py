@@ -83,6 +83,10 @@ DEFAULT_TASK: dict[str, dict[str, Any]] = {
         "max_trades_per_stock_per_day": 1,
         "max_trades_per_stock_per_week": 3,
         "min_weight_change_to_trade": 0.03,
+        "range_t_sell_ret_1_min": 0.02,
+        "range_t_sell_price_pos_20_min": 0.80,
+        "range_t_buy_ret_1_max": -0.02,
+        "range_t_buy_price_pos_20_max": 0.35,
         "enable_acceptance_checks": True,
         "acceptance_target_years": 3,
         "use_strategy_optimizer": True,
@@ -416,6 +420,34 @@ def build_parser() -> argparse.ArgumentParser:
         help="Minimum absolute weight change required to execute a trade",
     )
     daily.add_argument(
+        "--range-t-sell-ret-1-min",
+        dest="range_t_sell_ret_1_min",
+        type=float,
+        default=None,
+        help="Range-state T whitelist: minimum daily return to allow reduce/sell action",
+    )
+    daily.add_argument(
+        "--range-t-sell-price-pos-20-min",
+        dest="range_t_sell_price_pos_20_min",
+        type=float,
+        default=None,
+        help="Range-state T whitelist: minimum 20-day price position to allow reduce/sell action",
+    )
+    daily.add_argument(
+        "--range-t-buy-ret-1-max",
+        dest="range_t_buy_ret_1_max",
+        type=float,
+        default=None,
+        help="Range-state T whitelist: maximum daily return to allow add/buy action",
+    )
+    daily.add_argument(
+        "--range-t-buy-price-pos-20-max",
+        dest="range_t_buy_price_pos_20_max",
+        type=float,
+        default=None,
+        help="Range-state T whitelist: maximum 20-day price position to allow add/buy action",
+    )
+    daily.add_argument(
         "--enable-acceptance-checks",
         dest="enable_acceptance_checks",
         choices=["true", "false"],
@@ -653,6 +685,10 @@ def run_daily(settings: dict[str, Any]) -> int:
         max_trades_per_stock_per_day=max(1, int(settings["max_trades_per_stock_per_day"])),
         max_trades_per_stock_per_week=max(1, int(settings["max_trades_per_stock_per_week"])),
         min_weight_change_to_trade=max(0.0, float(settings["min_weight_change_to_trade"])),
+        range_t_sell_ret_1_min=float(settings["range_t_sell_ret_1_min"]),
+        range_t_sell_price_pos_20_min=float(settings["range_t_sell_price_pos_20_min"]),
+        range_t_buy_ret_1_max=float(settings["range_t_buy_ret_1_max"]),
+        range_t_buy_price_pos_20_max=float(settings["range_t_buy_price_pos_20_max"]),
         enable_acceptance_checks=_parse_bool(settings["enable_acceptance_checks"]),
         acceptance_target_years=max(1, int(settings["acceptance_target_years"])),
         use_strategy_optimizer=_parse_bool(settings["use_strategy_optimizer"]),

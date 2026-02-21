@@ -394,6 +394,10 @@ def write_daily_dashboard(out_path: str | Path, result: DailyFusionResult) -> Pa
 
     eff = result.effect_summary
     market = result.market_forecast
+    acceptance_text = "通过" if result.acceptance_ab_pass and result.acceptance_constraints_pass else "未通过"
+    acceptance_sub = (
+        f"A/B {'通过' if result.acceptance_ab_pass else '未通过'} | 约束 {'通过' if result.acceptance_constraints_pass else '未通过'}"
+    )
 
     html = f"""<!doctype html>
 <html lang="zh-CN">
@@ -625,6 +629,11 @@ def write_daily_dashboard(out_path: str | Path, result: DailyFusionResult) -> Pa
         <div class="k">风险温度</div>
         <div class="v">{escape(eff.risk_label)}</div>
         <div class="sub">亏钱效应与回撤共同决定</div>
+      </article>
+      <article class="card">
+        <div class="k">验收状态</div>
+        <div class="v">{acceptance_text}</div>
+        <div class="sub">{escape(acceptance_sub)}</div>
       </article>
     </section>
 

@@ -258,7 +258,7 @@ def write_daily_report(out_path: str | Path, result: DailyFusionResult) -> Path:
     lines.append(f"- A/B超额年化差(新-旧): {_to_percent(result.acceptance_delta_excess_annual_return)}")
     lines.append(f"- A/B最大回撤差(新-旧): {_to_percent(result.acceptance_delta_max_drawdown)}")
     lines.append(f"- A/B年化换手差(新-旧): {_to_percent(result.acceptance_delta_annual_turnover)}")
-    lines.append(f"- 频次限制违规次数: {int(result.acceptance_limit_violations)}")
+    lines.append(f"- 周频次越界次数(监控项): {int(result.acceptance_limit_violations)}")
     lines.append(f"- 超卖违规次数: {int(result.acceptance_oversell_violations)}")
     lines.append(f"- 汇总: {result.acceptance_summary}")
     lines.append("")

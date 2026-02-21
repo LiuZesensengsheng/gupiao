@@ -338,6 +338,13 @@ python3 run_api.py daily \
 This means each stock can trade at most `1` time per day and `3` times in a rolling week (5 trading days),
 and tiny rebalances under `3%` weight change are ignored.
 
+Range-state T whitelist thresholds are configurable:
+
+- `--range-t-sell-ret-1-min` (default `0.02`)
+- `--range-t-sell-price-pos-20-min` (default `0.80`)
+- `--range-t-buy-ret-1-max` (default `-0.02`)
+- `--range-t-buy-price-pos-20-max` (default `0.35`)
+
 Strategy optimizer (maximize excess return with turnover/drawdown controls):
 
 ```bash
