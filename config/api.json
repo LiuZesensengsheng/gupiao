@@ -38,6 +38,8 @@
     "sleep_ms": 80
   },
   "daily": {
+    "universe_file": "config/universe_auto_longtrain.json",
+    "universe_limit": 500,
     "news_file": "input/news_parts",
     "news_lookback_days": 45,
     "learned_news_lookback_days": 720,

@@ -130,7 +130,5 @@ class LogisticBinaryModel:
         order = np.argsort(np.abs(contrib))[::-1][:top_n]
         drivers: List[str] = []
         for idx in order:
-            sign = "+" if contrib[idx] >= 0 else "-"
-            drivers.append(f"{self.feature_names[idx]}({sign})")
+            drivers.append(f"{self.feature_names[idx]}({float(contrib[idx]):+.2f})")
         return drivers
-

@@ -1,0 +1,360 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>A股每日融合仪表盘</title>
+  <style>
+    :root {
+      --bg: #f4f7fb;
+      --card: #ffffff;
+      --ink: #14213d;
+      --muted: #6b7280;
+      --line: #e8edf5;
+      --bull: #cf3131;
+      --bear: #1f63d8;
+      --grad: linear-gradient(145deg, #163877 0%, #2158b6 42%, #4b86e8 100%);
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: "Avenir Next", "PingFang SC", "Hiragino Sans GB", "Noto Sans CJK SC", sans-serif;
+      color: var(--ink);
+      background:
+        radial-gradient(circle at 10% 0%, #e7f0ff 0%, transparent 42%),
+        radial-gradient(circle at 95% 10%, #ffecec 0%, transparent 35%),
+        var(--bg);
+    }
+    .wrap { max-width: 1160px; margin: 0 auto; padding: 20px 14px 36px; }
+    .hero {
+      background: var(--grad);
+      color: #fff;
+      border-radius: 18px;
+      padding: 20px;
+      box-shadow: 0 12px 40px rgba(21, 62, 130, 0.22);
+      position: relative;
+      overflow: hidden;
+    }
+    .hero::after {
+      content: "";
+      position: absolute;
+      right: -120px;
+      top: -80px;
+      width: 280px;
+      height: 280px;
+      border-radius: 50%;
+      background: rgba(255, 255, 255, 0.12);
+    }
+    h1 { margin: 0; font-size: 26px; font-weight: 700; letter-spacing: 0.02em; }
+    .meta {
+      margin-top: 10px;
+      color: rgba(255,255,255,0.92);
+      font-size: 14px;
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px 14px;
+    }
+    .meta span {
+      padding: 4px 10px;
+      border: 1px solid rgba(255,255,255,0.25);
+      border-radius: 999px;
+    }
+    .grid {
+      margin-top: 14px;
+      display: grid;
+      gap: 12px;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+    }
+    .card {
+      background: var(--card);
+      border: 1px solid var(--line);
+      border-radius: 14px;
+      padding: 14px;
+      box-shadow: 0 8px 22px rgba(15, 32, 64, 0.06);
+    }
+    .k { font-size: 12px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.04em; }
+    .v { margin-top: 6px; font-size: 26px; font-weight: 700; }
+    .sub { margin-top: 4px; font-size: 13px; color: var(--muted); }
+    h2 { margin: 18px 0 10px; font-size: 18px; letter-spacing: 0.02em; }
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      overflow: hidden;
+      background: #fff;
+    }
+    th, td {
+      padding: 10px 8px;
+      border-bottom: 1px solid var(--line);
+      text-align: left;
+      font-size: 13px;
+    }
+    th { background: #f6f9ff; color: #31456f; font-weight: 700; }
+    tr:last-child td { border-bottom: none; }
+    .sym { font-weight: 700; }
+    .code { font-size: 11px; color: var(--muted); margin-top: 2px; }
+    .score { font-weight: 700; }
+    .bar { width: 100%; height: 9px; border-radius: 999px; background: #e8edf5; overflow: hidden; }
+    .bar span { display: block; height: 100%; border-radius: 999px; }
+    .pill {
+      display: inline-block;
+      padding: 2px 9px;
+      border-radius: 999px;
+      font-weight: 700;
+      font-size: 12px;
+      min-width: 56px;
+      text-align: center;
+    }
+    .bull { background: rgba(207,49,49,0.1); color: var(--bull); }
+    .bear { background: rgba(31,99,216,0.1); color: var(--bear); }
+    .section-grid {
+      display: grid;
+      gap: 12px;
+      grid-template-columns: 2fr 1fr;
+      margin-top: 14px;
+    }
+    .curve-wrap {
+      background: #fff;
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      padding: 10px 10px 8px;
+      box-shadow: 0 8px 22px rgba(15, 32, 64, 0.05);
+    }
+    .curve-toggle {
+      display: inline-flex;
+      gap: 8px;
+      margin: 4px 0 8px;
+    }
+    .curve-toggle button {
+      border: 1px solid #c7d4ea;
+      background: #f7faff;
+      color: #2d4675;
+      border-radius: 999px;
+      font-size: 12px;
+      padding: 4px 12px;
+      cursor: pointer;
+    }
+    .curve-toggle button.active {
+      border-color: #1f63d8;
+      background: #1f63d8;
+      color: #fff;
+    }
+    .curve-wrap svg {
+      width: 100%;
+      height: auto;
+      display: block;
+    }
+    .subcurve-wrap {
+      margin-top: 10px;
+      border-top: 1px dashed var(--line);
+      padding-top: 10px;
+    }
+    .subcurve-title {
+      font-size: 12px;
+      color: var(--muted);
+      margin-bottom: 4px;
+    }
+    .subcurve-note {
+      margin: 0 0 6px;
+      color: #64748b;
+      font-size: 12px;
+      line-height: 1.5;
+    }
+    .legend {
+      margin-top: 6px;
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px 14px;
+      color: var(--muted);
+      font-size: 12px;
+    }
+    .legend span {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+    }
+    .legend i {
+      width: 10px;
+      height: 10px;
+      border-radius: 999px;
+      display: inline-block;
+    }
+    .empty {
+      border: 1px dashed var(--line);
+      border-radius: 12px;
+      color: var(--muted);
+      padding: 18px;
+      text-align: center;
+      background: #fbfcff;
+    }
+    .note { margin-top: 14px; color: var(--muted); font-size: 12px; }
+    @media (max-width: 960px) {
+      .grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      .section-grid { grid-template-columns: 1fr; }
+    }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <section class="hero">
+      <h1>A股每日融合仪表盘</h1>
+      <div class="meta">
+        <span>报告日期 2026-02-17</span>
+        <span>数据源 local</span>
+        <span>沪深300 (000300.SH)</span>
+        <span>市场状态 偏强 (Risk-On)</span>
+        <span>新闻 53 条</span>
+      </div>
+    </section>
+
+    <section class="grid">
+      <article class="card">
+        <div class="k">建议总仓位</div>
+        <div class="v">72.0%</div>
+        <div class="sub">依据大盘融合概率自动映射</div>
+      </article>
+      <article class="card">
+        <div class="k">大盘短期概率</div>
+        <div class="v">60.2%</div>
+        <div class="sub">模型 48.8% / 新闻模型 66.0% / learned</div>
+      </article>
+      <article class="card">
+        <div class="k">大盘中期概率</div>
+        <div class="v">62.1%</div>
+        <div class="sub">模型 50.7% / 新闻模型 71.9% / learned</div>
+      </article>
+      <article class="card">
+        <div class="k">风险温度</div>
+        <div class="v">低</div>
+        <div class="sub">亏钱效应与回撤共同决定</div>
+      </article>
+    </section>
+
+    <div class="section-grid">
+      <section>
+        <h2>个股综合排序</h2>
+        <table>
+          <thead>
+            <tr><th>个股</th><th>融合短期</th><th>融合中期</th><th>综合分数</th><th>分数强度</th><th>建议权重</th><th>短期方式</th><th>中期方式</th><th>量价风险</th></tr>
+          </thead>
+          <tbody>
+            <tr><td><div class='sym'>铜陵有色</div><div class='code'>000630.SZ</div></td><td>55.0%</td><td>72.3%</td><td class='score' style='color:#e54c4c'>0.628</td><td><div class="bar"><span style="width:62.8%; background:#a35880;"></span></div></td><td>42.4%</td><td>learned</td><td>learned</td><td>正常</td></tr><tr><td><div class='sym'>淳中科技</div><div class='code'>603516.SH</div></td><td>53.6%</td><td>55.7%</td><td class='score' style='color:#e95252'>0.545</td><td><div class="bar"><span style="width:54.5%; background:#975b91;"></span></div></td><td>15.0%</td><td>learned</td><td>learned</td><td>正常</td></tr><tr><td><div class='sym'>中曼石油</div><div class='code'>603619.SH</div></td><td>50.9%</td><td>58.6%</td><td class='score' style='color:#e95252'>0.544</td><td><div class="bar"><span style="width:54.4%; background:#965b91;"></span></div></td><td>14.6%</td><td>learned</td><td>learned</td><td>正常</td></tr><tr><td><div class='sym'>巨化股份</div><div class='code'>600160.SH</div></td><td>47.0%</td><td>50.0%</td><td class='score' style='color:#377cfd'>0.484</td><td><div class="bar"><span style="width:48.4%; background:#8d5e9d;"></span></div></td><td>0.0%</td><td>learned</td><td>learned</td><td>正常</td></tr><tr><td><div class='sym'>众兴菌业</div><div class='code'>002772.SZ</div></td><td>48.7%</td><td>42.4%</td><td class='score' style='color:#367bfb'>0.458</td><td><div class="bar"><span style="width:45.8%; background:#895fa2;"></span></div></td><td>0.0%</td><td>learned</td><td>learned</td><td>正常</td></tr>
+          </tbody>
+        </table>
+      </section>
+
+      <section>
+        <h2>效应面板</h2>
+        <article class="card">
+          <div class="k">赚钱效应</div>
+          <div class="v">偏强</div>
+          <div class="sub">1日胜率 80.0% / 5日胜率 80.0%</div>
+        </article>
+        <article class="card" style="margin-top:10px;">
+          <div class="k">亏钱效应</div>
+          <div class="v">低</div>
+          <div class="sub">深亏率 0.0% / 中位回撤 -1.1%</div>
+        </article>
+        <article class="card" style="margin-top:10px;">
+          <div class="k">资金状态</div>
+          <div class="v">中性</div>
+          <div class="sub">量能比 0.43 / 资金分数 -0.231</div>
+        </article>
+        <article class="card" style="margin-top:10px;">
+          <div class="k">筹码结构</div>
+          <div class="v">中性</div>
+          <div class="sub">20日位置 0.82 / 筹码分数 +0.345</div>
+        </article>
+      </section>
+    </div>
+
+    <section>
+      <h2>因子解释 (最新截面)</h2>
+      <table>
+        <thead>
+          <tr><th>个股</th><th>短期驱动</th><th>中期驱动</th><th>风险备注</th></tr>
+        </thead>
+        <tbody>
+          <tr><td><div class='sym'>铜陵有色</div><div class='code'>000630.SZ</div></td><td>60日波动率:压制(弱, 贡献-0.03)；上证指数1日涨跌幅:压制(弱, 贡献-0.02)；创业板指1日涨跌幅:压制(弱, 贡献-0.02)</td><td>中长期趋势(20/60):推涨(弱, 贡献+0.11)；60日波动率:压制(弱, 贡献-0.09)；大盘20日波动率:推涨(弱, 贡献+0.04)</td><td>量能比=0.37, 位置=0.68</td></tr><tr><td><div class='sym'>淳中科技</div><div class='code'>603516.SH</div></td><td>上证指数1日涨跌幅:压制(弱, 贡献-0.03)；大盘14日真实波幅:推涨(弱, 贡献+0.02)；中长期趋势(20/60):推涨(弱, 贡献+0.02)</td><td>大盘14日真实波幅:推涨(弱, 贡献+0.07)；流动性冲击(Amihud):压制(弱, 贡献-0.05)；大盘5日涨跌幅:推涨(弱, 贡献+0.05)</td><td>量能比=0.52, 位置=1.00</td></tr><tr><td><div class='sym'>中曼石油</div><div class='code'>603619.SH</div></td><td>大盘20日波动率:推涨(弱, 贡献+0.03)；大盘14日真实波幅:推涨(弱, 贡献+0.02)；大盘5日涨跌幅:推涨(弱, 贡献+0.02)</td><td>深证成指20日量比:压制(弱, 贡献-0.04)；OBV强弱:推涨(弱, 贡献+0.04)；大盘14日真实波幅:推涨(弱, 贡献+0.03)</td><td>量能比=0.68, 位置=1.00</td></tr><tr><td><div class='sym'>巨化股份</div><div class='code'>600160.SH</div></td><td>大盘5日涨跌幅:压制(弱, 贡献-0.04)；大盘中长期趋势(20/60):压制(弱, 贡献-0.02)；大盘量能集中度(5/20):推涨(弱, 贡献+0.01)</td><td>深证成指中长期趋势(20/60):压制(弱, 贡献-0.08)；上证指数中长期趋势(20/60):压制(弱, 贡献-0.07)；大盘20日价格位置:压制(弱, 贡献-0.06)</td><td>量能比=0.38, 位置=0.53</td></tr><tr><td><div class='sym'>众兴菌业</div><div class='code'>002772.SZ</div></td><td>短中期趋势(5/20):压制(弱, 贡献-0.03)；20日价格位置:压制(弱, 贡献-0.03)；流动性冲击(Amihud):推涨(弱, 贡献+0.03)</td><td>短中期趋势(5/20):压制(弱, 贡献-0.07)；20日涨跌幅:压制(弱, 贡献-0.05)；深证成指中长期趋势(20/60):推涨(弱, 贡献+0.05)</td><td>量能比=0.19, 位置=0.92</td></tr>
+        </tbody>
+      </table>
+    </section>
+
+    <section>
+      <h2>组合回测曲线 (交易级, 含成本)</h2>
+      <div class='curve-wrap'><div class='curve-toggle'><button type='button' id='toggle-fused' class='active'>看融合策略</button><button type='button' id='toggle-quant'>看量化基线</button></div><svg viewBox='0 0 980 310' role='img' aria-label='策略与基准收益曲线'><line x1='52.0' y1='20.0' x2='964.0' y2='20.0' stroke='#e6edf7' stroke-width='1'/><text x='46.0' y='24.0' text-anchor='end' fill='#6b7280' font-size='11'>1.29</text><line x1='52.0' y1='82.5' x2='964.0' y2='82.5' stroke='#e6edf7' stroke-width='1'/><text x='46.0' y='86.5' text-anchor='end' fill='#6b7280' font-size='11'>1.15</text><line x1='52.0' y1='145.0' x2='964.0' y2='145.0' stroke='#e6edf7' stroke-width='1'/><text x='46.0' y='149.0' text-anchor='end' fill='#6b7280' font-size='11'>1.01</text><line x1='52.0' y1='207.5' x2='964.0' y2='207.5' stroke='#e6edf7' stroke-width='1'/><text x='46.0' y='211.5' text-anchor='end' fill='#6b7280' font-size='11'>0.88</text><line x1='52.0' y1='270.0' x2='964.0' y2='270.0' stroke='#e6edf7' stroke-width='1'/><text x='46.0' y='274.0' text-anchor='end' fill='#6b7280' font-size='11'>0.74</text><polyline id='line-fused' fill='none' stroke='#d43030' stroke-width='2.4' points='52.0,151.6 56.6,151.9 61.2,150.3 65.7,148.4 70.3,149.5 74.9,148.9 79.5,148.8 84.1,149.1 88.7,148.7 93.2,148.2 97.8,150.0 102.4,149.7 107.0,152.4 111.6,152.2 116.2,153.7 120.7,155.2 125.3,156.3 129.9,155.9 134.5,157.6 139.1,157.7 143.7,154.8 148.2,155.8 152.8,155.8 157.4,154.2 162.0,155.2 166.6,154.2 171.2,155.5 175.7,154.3 180.3,154.2 184.9,155.9 189.5,153.9 194.1,154.0 198.7,154.4 203.2,156.4 207.8,156.5 212.4,156.8 217.0,157.4 221.6,155.9 226.2,159.9 230.7,159.8 235.3,159.1 239.9,159.2 244.5,157.5 249.1,156.4 253.6,155.4 258.2,155.2 262.8,155.7 267.4,154.6 272.0,153.4 276.6,153.6 281.1,153.3 285.7,153.9 290.3,152.8 294.9,150.3 299.5,150.8 304.1,152.0 308.6,153.5 313.2,152.7 317.8,152.5 322.4,152.9 327.0,151.1 331.6,151.2 336.1,152.0 340.7,153.6 345.3,153.0 349.9,150.4 354.5,150.4 359.1,149.0 363.6,150.9 368.2,153.2 372.8,154.4 377.4,154.4 382.0,154.1 386.6,154.5 391.1,158.5 395.7,157.1 400.3,156.7 404.9,156.7 409.5,158.3 414.1,158.7 418.6,158.8 423.2,158.3 427.8,160.1 432.4,161.5 437.0,160.5 441.5,156.2 446.1,156.4 450.7,157.8 455.3,160.2 459.9,158.2 464.5,157.4 469.0,155.6 473.6,157.2 478.2,158.2 482.8,158.0 487.4,158.8 492.0,157.8 496.5,157.2 501.1,158.9 505.7,163.4 510.3,166.1 514.9,162.9 519.5,159.0 524.0,159.0 528.6,156.6 533.2,157.0 537.8,157.7 542.4,156.1 547.0,153.9 551.5,157.9 556.1,156.2 560.7,156.2 565.3,156.0 569.9,158.4 574.5,155.1 579.0,156.4 583.6,156.8 588.2,155.0 592.8,155.0 597.4,154.4 601.9,152.5 606.5,154.2 611.1,156.6 615.7,158.5 620.3,158.4 624.9,157.5 629.4,156.9 634.0,158.3 638.6,156.2 643.2,155.6 647.8,156.6 652.4,159.9 656.9,160.2 661.5,159.8 666.1,161.6 670.7,160.1 675.3,158.3 679.9,160.3 684.4,157.0 689.0,160.8 693.6,163.3 698.2,155.3 702.8,153.2 707.4,149.9 711.9,154.6 716.5,157.2 721.1,153.8 725.7,155.1 730.3,156.7 734.9,156.2 739.4,154.3 744.0,157.8 748.6,160.7 753.2,162.8 757.8,167.3 762.4,171.2 766.9,172.7 771.5,169.3 776.1,170.7 780.7,172.1 785.3,170.0 789.8,169.6 794.4,164.9 799.0,164.5 803.6,165.6 808.2,164.0 812.8,156.3 817.3,151.7 821.9,151.5 826.5,149.0 831.1,158.5 835.7,159.7 840.3,155.4 844.8,154.6 849.4,151.4 854.0,151.2 858.6,153.5 863.2,152.1 867.8,155.9 872.3,153.4 876.9,156.0 881.5,159.0 886.1,159.7 890.7,159.8 895.3,157.0 899.8,156.1 904.4,155.0 909.0,148.6 913.6,155.7 918.2,160.8 922.8,158.5 927.3,155.1 931.9,146.6 936.5,143.0 941.1,141.3 945.7,142.1 950.3,138.0 954.8,140.6 959.4,145.5 964.0,148.7'/><polyline id='line-quant' style='display:none;' fill='none' stroke='#c27a00' stroke-width='2.4' stroke-dasharray='6 4' points='52.0,151.6 56.6,151.9 61.2,150.3 65.7,148.4 70.3,149.5 74.9,148.9 79.5,148.8 84.1,149.1 88.7,148.7 93.2,148.2 97.8,150.0 102.4,149.7 107.0,152.4 111.6,152.2 116.2,153.7 120.7,155.2 125.3,156.3 129.9,155.9 134.5,157.6 139.1,157.7 143.7,154.8 148.2,155.8 152.8,155.8 157.4,154.2 162.0,155.2 166.6,154.2 171.2,155.5 175.7,154.3 180.3,154.2 184.9,155.9 189.5,153.9 194.1,154.0 198.7,154.4 203.2,156.4 207.8,156.5 212.4,156.8 217.0,157.4 221.6,155.9 226.2,159.9 230.7,159.8 235.3,159.1 239.9,159.2 244.5,157.5 249.1,156.4 253.6,155.4 258.2,155.2 262.8,155.7 267.4,154.6 272.0,153.4 276.6,153.6 281.1,153.3 285.7,153.9 290.3,152.8 294.9,150.3 299.5,150.8 304.1,152.0 308.6,153.5 313.2,152.7 317.8,152.5 322.4,152.9 327.0,151.1 331.6,151.2 336.1,152.0 340.7,153.6 345.3,153.0 349.9,150.4 354.5,150.4 359.1,149.0 363.6,150.9 368.2,153.2 372.8,154.4 377.4,154.4 382.0,154.1 386.6,154.5 391.1,158.5 395.7,157.1 400.3,156.7 404.9,156.7 409.5,158.3 414.1,158.7 418.6,158.8 423.2,158.3 427.8,160.1 432.4,161.5 437.0,160.5 441.5,156.2 446.1,156.4 450.7,157.8 455.3,160.2 459.9,158.2 464.5,157.4 469.0,155.6 473.6,157.2 478.2,158.2 482.8,158.0 487.4,158.8 492.0,157.8 496.5,157.2 501.1,158.9 505.7,163.4 510.3,166.1 514.9,162.9 519.5,159.0 524.0,159.0 528.6,156.6 533.2,157.0 537.8,157.7 542.4,156.1 547.0,153.9 551.5,157.9 556.1,156.2 560.7,156.2 565.3,156.0 569.9,158.4 574.5,155.1 579.0,156.4 583.6,156.8 588.2,155.0 592.8,155.0 597.4,154.4 601.9,152.5 606.5,154.2 611.1,156.6 615.7,158.5 620.3,158.4 624.9,157.5 629.4,156.9 634.0,158.3 638.6,156.2 643.2,155.6 647.8,156.6 652.4,159.9 656.9,160.2 661.5,159.8 666.1,161.6 670.7,160.1 675.3,158.3 679.9,160.3 684.4,157.0 689.0,160.8 693.6,163.3 698.2,155.3 702.8,153.2 707.4,149.9 711.9,154.6 716.5,157.2 721.1,153.8 725.7,155.1 730.3,156.7 734.9,156.2 739.4,154.3 744.0,157.8 748.6,160.7 753.2,162.8 757.8,167.3 762.4,171.2 766.9,172.7 771.5,169.3 776.1,170.7 780.7,172.1 785.3,170.0 789.8,169.6 794.4,164.9 799.0,164.5 803.6,165.6 808.2,164.0 812.8,156.3 817.3,151.7 821.9,151.5 826.5,149.0 831.1,158.5 835.7,159.7 840.3,155.4 844.8,154.6 849.4,151.4 854.0,151.2 858.6,153.5 863.2,152.1 867.8,155.9 872.3,153.4 876.9,156.0 881.5,159.0 886.1,159.7 890.7,159.8 895.3,157.0 899.8,156.1 904.4,155.0 909.0,148.6 913.6,155.7 918.2,160.8 922.8,158.5 927.3,155.1 931.9,146.6 936.5,143.0 941.1,141.3 945.7,142.1 950.3,138.0 954.8,140.6 959.4,145.5 964.0,148.7'/><polyline fill='none' stroke='#1f63d8' stroke-width='2.4' points='52.0,151.7 56.6,154.2 61.2,158.0 65.7,157.1 70.3,158.6 74.9,150.7 79.5,150.6 84.1,148.8 88.7,143.4 93.2,145.0 97.8,136.8 102.4,140.3 107.0,144.8 111.6,146.7 116.2,147.3 120.7,154.9 125.3,155.0 129.9,163.9 134.5,156.3 139.1,156.7 143.7,160.1 148.2,164.9 152.8,166.8 157.4,167.9 162.0,173.3 166.6,178.0 171.2,178.9 175.7,181.5 180.3,176.6 184.9,170.6 189.5,170.4 194.1,167.9 198.7,174.8 203.2,171.4 207.8,171.5 212.4,168.8 217.0,160.2 221.6,172.2 226.2,170.8 230.7,176.5 235.3,173.3 239.9,180.0 244.5,182.5 249.1,181.4 253.6,178.1 258.2,177.7 262.8,181.7 267.4,184.4 272.0,179.8 276.6,179.8 281.1,188.3 285.7,183.9 290.3,181.7 294.9,177.2 299.5,178.8 304.1,174.4 308.6,179.9 313.2,176.8 317.8,179.3 322.4,175.7 327.0,170.4 331.6,174.2 336.1,174.4 340.7,174.1 345.3,167.7 349.9,163.9 354.5,170.3 359.1,167.8 363.6,163.7 368.2,152.2 372.8,161.2 377.4,164.0 382.0,156.7 386.6,163.9 391.1,170.2 395.7,167.4 400.3,161.9 404.9,165.4 409.5,162.4 414.1,161.7 418.6,153.4 423.2,153.3 427.8,147.8 432.4,152.7 437.0,153.6 441.5,154.1 446.1,147.7 450.7,144.4 455.3,148.5 459.9,144.6 464.5,140.2 469.0,140.8 473.6,142.2 478.2,143.2 482.8,152.5 487.4,151.3 492.0,150.0 496.5,154.6 501.1,150.5 505.7,157.9 510.3,160.8 514.9,163.2 519.5,152.4 524.0,161.0 528.6,157.9 533.2,152.7 537.8,150.5 542.4,143.9 547.0,149.4 551.5,161.7 556.1,157.5 560.7,163.8 565.3,165.5 569.9,171.6 574.5,166.0 579.0,161.3 583.6,165.1 588.2,160.2 592.8,159.4 597.4,160.1 601.9,159.7 606.5,160.7 611.1,157.3 615.7,155.5 620.3,157.4 624.9,151.8 629.4,155.1 634.0,153.4 638.6,151.0 643.2,142.7 647.8,145.5 652.4,135.6 656.9,134.5 661.5,135.5 666.1,139.2 670.7,135.8 675.3,135.5 679.9,141.6 684.4,147.8 689.0,150.8 693.6,154.4 698.2,148.3 702.8,140.6 707.4,135.6 711.9,133.5 716.5,135.8 721.1,135.4 725.7,130.3 730.3,117.8 734.9,112.3 739.4,113.9 744.0,113.6 748.6,116.3 753.2,120.9 757.8,121.9 762.4,120.6 766.9,109.7 771.5,109.2 776.1,101.0 780.7,90.0 785.3,89.4 789.8,79.2 794.4,74.5 799.0,77.1 803.6,75.3 808.2,75.0 812.8,76.4 817.3,77.6 821.9,76.6 826.5,73.7 831.1,79.3 835.7,79.2 840.3,88.7 844.8,87.0 849.4,83.0 854.0,81.9 858.6,80.0 863.2,76.1 867.8,80.2 872.3,81.7 876.9,78.3 881.5,71.8 886.1,69.2 890.7,52.3 895.3,52.8 899.8,46.0 904.4,37.2 909.0,38.1 913.6,43.5 918.2,51.4 922.8,50.2 927.3,42.6 931.9,40.7 936.5,39.4 941.1,41.9 945.7,37.9 950.3,52.3 954.8,50.6 959.4,50.4 964.0,59.4'/><polyline fill='none' stroke='#0f8a64' stroke-width='2.4' points='52.0,150.8 56.6,148.6 61.2,143.2 65.7,142.1 70.3,141.6 74.9,149.3 79.5,149.2 84.1,151.5 88.7,156.4 93.2,154.3 97.8,164.1 102.4,160.5 107.0,158.9 111.6,156.8 116.2,157.7 120.7,151.8 125.3,152.8 129.9,143.4 134.5,153.2 139.1,152.9 143.7,146.5 148.2,142.6 152.8,140.5 157.4,137.8 162.0,133.0 166.6,126.8 171.2,127.2 175.7,123.0 180.3,128.5 184.9,137.0 189.5,135.0 194.1,138.0 198.7,131.0 203.2,136.8 207.8,136.8 212.4,140.0 217.0,149.8 221.6,135.9 226.2,141.7 230.7,135.6 235.3,138.3 239.9,131.1 244.5,126.5 249.1,126.6 253.6,129.2 258.2,129.6 262.8,125.6 267.4,121.3 272.0,125.4 276.6,125.6 281.1,115.7 285.7,121.4 290.3,122.7 294.9,125.3 299.5,124.0 304.1,130.2 308.6,125.8 313.2,128.4 317.8,125.4 322.4,129.9 327.0,133.9 331.6,129.9 336.1,130.5 340.7,132.5 345.3,138.8 349.9,140.2 354.5,133.5 359.1,134.7 363.6,141.1 368.2,155.6 372.8,147.8 377.4,144.9 382.0,152.2 386.6,145.3 391.1,142.8 395.7,144.4 400.3,149.8 404.9,146.2 409.5,150.9 414.1,152.1 418.6,160.6 423.2,160.2 427.8,167.4 432.4,164.2 437.0,162.2 441.5,157.5 446.1,164.0 450.7,168.6 455.3,167.0 459.9,168.8 464.5,172.2 469.0,170.0 473.6,170.2 478.2,170.3 482.8,161.3 487.4,163.1 492.0,163.6 496.5,158.4 501.1,164.2 505.7,161.5 510.3,161.4 514.9,155.6 519.5,162.7 524.0,154.3 528.6,155.0 533.2,160.6 537.8,163.5 542.4,168.3 547.0,161.0 551.5,152.9 556.1,155.5 560.7,149.1 565.3,147.2 569.9,143.2 574.5,145.9 579.0,152.1 583.6,148.6 588.2,151.9 592.8,152.7 597.4,151.4 601.9,149.9 606.5,150.6 611.1,156.4 615.7,160.1 620.3,158.2 624.9,162.8 629.4,159.1 634.0,162.1 638.6,162.4 643.2,169.9 647.8,168.2 652.4,180.8 656.9,182.1 661.5,180.8 666.1,179.2 670.7,180.9 675.3,179.5 679.9,175.8 684.4,166.8 689.0,167.7 693.6,166.7 698.2,164.7 702.8,170.1 707.4,171.6 711.9,178.0 716.5,178.3 721.1,175.5 725.7,181.4 730.3,194.1 734.9,198.3 739.4,195.2 744.0,198.7 748.6,199.0 753.2,197.2 757.8,200.5 762.4,205.1 766.9,215.6 771.5,212.8 776.1,220.7 780.7,230.4 785.3,228.9 789.8,236.0 794.4,235.3 799.0,233.2 803.6,235.4 808.2,234.3 812.8,226.8 817.3,222.0 821.9,222.6 826.5,222.6 831.1,226.6 835.7,227.6 840.3,217.2 844.8,217.8 849.4,218.0 854.0,218.7 858.6,222.1 863.2,223.7 867.8,223.8 872.3,220.7 876.9,225.4 881.5,232.7 886.1,235.0 890.7,246.8 895.3,244.2 899.8,248.0 904.4,252.8 909.0,247.2 913.6,249.3 918.2,248.4 922.8,247.3 927.3,249.5 931.9,243.9 936.5,242.0 941.1,239.0 945.7,242.2 950.3,229.8 954.8,233.0 959.4,237.1 964.0,233.6'/><line x1='52.0' y1='270.0' x2='964.0' y2='270.0' stroke='#9eb0cd' stroke-width='1.1'/><text x='52.0' y='288.0' fill='#6b7280' font-size='11'>2019-02-26</text><text x='964.0' y='288.0' text-anchor='end' fill='#6b7280' font-size='11'>2019-12-02</text></svg><div class='legend'><span><i style='background:#d43030;'></i><span id='legend-mode-text'>融合策略净值</span></span><span id='legend-quant' style='display:none;'><i style='background:#c27a00;'></i>量化基线净值</span><span><i style='background:#1f63d8;'></i>沪深300基准</span><span><i style='background:#0f8a64;'></i>超额净值</span></div><div class='subcurve-wrap'><div class='subcurve-title'>融合/基线 相对净值 (1.00 为持平)</div><div class='subcurve-note'>提示：回测期融合与基线曲线完全重合，说明当前新闻样本对该区间未形成有效差异。</div><svg viewBox='0 0 980 310' role='img' aria-label='融合与基线差值曲线'><line x1='52.0' y1='20.0' x2='964.0' y2='20.0' stroke='#eef3fa' stroke-width='1'/><text x='46.0' y='24.0' text-anchor='end' fill='#6b7280' font-size='11'>1.000</text><line x1='52.0' y1='82.5' x2='964.0' y2='82.5' stroke='#eef3fa' stroke-width='1'/><text x='46.0' y='86.5' text-anchor='end' fill='#6b7280' font-size='11'>1.000</text><line x1='52.0' y1='145.0' x2='964.0' y2='145.0' stroke='#eef3fa' stroke-width='1'/><text x='46.0' y='149.0' text-anchor='end' fill='#6b7280' font-size='11'>1.000</text><line x1='52.0' y1='207.5' x2='964.0' y2='207.5' stroke='#eef3fa' stroke-width='1'/><text x='46.0' y='211.5' text-anchor='end' fill='#6b7280' font-size='11'>1.000</text><line x1='52.0' y1='270.0' x2='964.0' y2='270.0' stroke='#eef3fa' stroke-width='1'/><text x='46.0' y='274.0' text-anchor='end' fill='#6b7280' font-size='11'>1.000</text><polyline fill='none' stroke='#7a55d1' stroke-width='2.4' points='52.0,232.5 56.6,232.5 61.2,232.5 65.7,232.5 70.3,232.5 74.9,232.5 79.5,232.5 84.1,232.5 88.7,232.5 93.2,232.5 97.8,232.5 102.4,232.5 107.0,232.5 111.6,232.5 116.2,232.5 120.7,232.5 125.3,232.5 129.9,232.5 134.5,232.5 139.1,232.5 143.7,232.5 148.2,232.5 152.8,232.5 157.4,232.5 162.0,232.5 166.6,232.5 171.2,232.5 175.7,232.5 180.3,232.5 184.9,232.5 189.5,232.5 194.1,232.5 198.7,232.5 203.2,232.5 207.8,232.5 212.4,232.5 217.0,232.5 221.6,232.5 226.2,232.5 230.7,232.5 235.3,232.5 239.9,232.5 244.5,232.5 249.1,232.5 253.6,232.5 258.2,232.5 262.8,232.5 267.4,232.5 272.0,232.5 276.6,232.5 281.1,232.5 285.7,232.5 290.3,232.5 294.9,232.5 299.5,232.5 304.1,232.5 308.6,232.5 313.2,232.5 317.8,232.5 322.4,232.5 327.0,232.5 331.6,232.5 336.1,232.5 340.7,232.5 345.3,232.5 349.9,232.5 354.5,232.5 359.1,232.5 363.6,232.5 368.2,232.5 372.8,232.5 377.4,232.5 382.0,232.5 386.6,232.5 391.1,232.5 395.7,232.5 400.3,232.5 404.9,232.5 409.5,232.5 414.1,232.5 418.6,232.5 423.2,232.5 427.8,232.5 432.4,232.5 437.0,232.5 441.5,232.5 446.1,232.5 450.7,232.5 455.3,232.5 459.9,232.5 464.5,232.5 469.0,232.5 473.6,232.5 478.2,232.5 482.8,232.5 487.4,232.5 492.0,232.5 496.5,232.5 501.1,232.5 505.7,232.5 510.3,232.5 514.9,232.5 519.5,232.5 524.0,232.5 528.6,232.5 533.2,232.5 537.8,232.5 542.4,232.5 547.0,232.5 551.5,232.5 556.1,232.5 560.7,232.5 565.3,232.5 569.9,232.5 574.5,232.5 579.0,232.5 583.6,232.5 588.2,232.5 592.8,232.5 597.4,232.5 601.9,232.5 606.5,232.5 611.1,232.5 615.7,232.5 620.3,232.5 624.9,232.5 629.4,232.5 634.0,232.5 638.6,232.5 643.2,232.5 647.8,232.5 652.4,232.5 656.9,232.5 661.5,232.5 666.1,232.5 670.7,232.5 675.3,232.5 679.9,232.5 684.4,232.5 689.0,232.5 693.6,232.5 698.2,232.5 702.8,232.5 707.4,232.5 711.9,232.5 716.5,232.5 721.1,232.5 725.7,232.5 730.3,232.5 734.9,232.5 739.4,232.5 744.0,232.5 748.6,232.5 753.2,232.5 757.8,232.5 762.4,232.5 766.9,232.5 771.5,232.5 776.1,232.5 780.7,232.5 785.3,232.5 789.8,232.5 794.4,232.5 799.0,232.5 803.6,232.5 808.2,232.5 812.8,232.5 817.3,232.5 821.9,232.5 826.5,232.5 831.1,232.5 835.7,232.5 840.3,232.5 844.8,232.5 849.4,232.5 854.0,232.5 858.6,232.5 863.2,232.5 867.8,232.5 872.3,232.5 876.9,232.5 881.5,232.5 886.1,232.5 890.7,232.5 895.3,232.5 899.8,232.5 904.4,232.5 909.0,232.5 913.6,232.5 918.2,232.5 922.8,232.5 927.3,232.5 931.9,232.5 936.5,232.5 941.1,232.5 945.7,232.5 950.3,232.5 954.8,232.5 959.4,232.5 964.0,232.5'/><line x1='52.0' y1='232.5' x2='964.0' y2='232.5' stroke='#9aa8be' stroke-dasharray='5 4' stroke-width='1.1'/><line x1='52.0' y1='270.0' x2='964.0' y2='270.0' stroke='#9eb0cd' stroke-width='1.1'/><text x='52.0' y='288.0' fill='#6b7280' font-size='11'>2019-02-26</text><text x='964.0' y='288.0' text-anchor='end' fill='#6b7280' font-size='11'>2019-12-02</text></svg></div></div><script>(function(){const fusedBtn=document.getElementById('toggle-fused');const quantBtn=document.getElementById('toggle-quant');const fusedLine=document.getElementById('line-fused');const quantLine=document.getElementById('line-quant');const modeText=document.getElementById('legend-mode-text');const quantLegend=document.getElementById('legend-quant');if(!fusedBtn||!quantBtn||!fusedLine||!quantLine||!modeText||!quantLegend){return;}function showFused(){fusedBtn.classList.add('active');quantBtn.classList.remove('active');fusedLine.style.display='';quantLine.style.display='none';modeText.textContent='融合策略净值';quantLegend.style.display='none';}function showQuant(){quantBtn.classList.add('active');fusedBtn.classList.remove('active');fusedLine.style.display='none';quantLine.style.display='';modeText.textContent='量化基线净值';quantLegend.style.display='';}fusedBtn.addEventListener('click',showFused);quantBtn.addEventListener('click',showQuant);showFused();})();</script>
+    </section>
+
+    <section>
+      <h2>回测指标 (全样本 + 近3/5年)</h2>
+      <table>
+        <thead>
+          <tr><th>窗口</th><th>开始</th><th>结束</th><th>交易日</th><th>策略总收益</th><th>年化收益</th><th>年化超额</th><th>最大回撤</th><th>Sharpe</th><th>Sortino</th><th>Calmar</th><th>信息比率</th><th>日胜率</th><th>年化换手</th><th>成本损耗</th><th>单票周交易</th></tr>
+        </thead>
+        <tbody>
+          <tr><td>融合策略-全样本</td><td>2019-02-26</td><td>2019-12-02</td><td>200</td><td>0.5%</td><td>0.6%</td><td>-22.2%</td><td>-5.3%</td><td>0.07</td><td>0.12</td><td>0.12</td><td>-1.30</td><td>50.5%</td><td>1970.7%</td><td>0.5%</td><td>1.01</td></tr><tr><td>融合策略-近3年</td><td>2019-02-26</td><td>2019-12-02</td><td>200</td><td>0.5%</td><td>0.6%</td><td>-22.2%</td><td>-5.3%</td><td>0.07</td><td>0.12</td><td>0.12</td><td>-1.30</td><td>50.5%</td><td>1970.7%</td><td>0.5%</td><td>1.01</td></tr><tr><td>融合策略-近5年</td><td>2019-02-26</td><td>2019-12-02</td><td>200</td><td>0.5%</td><td>0.6%</td><td>-22.2%</td><td>-5.3%</td><td>0.07</td><td>0.12</td><td>0.12</td><td>-1.30</td><td>50.5%</td><td>1970.7%</td><td>0.5%</td><td>1.01</td></tr><tr><td>量化基线-全样本</td><td>2019-02-26</td><td>2019-12-02</td><td>200</td><td>0.5%</td><td>0.6%</td><td>-22.2%</td><td>-5.3%</td><td>0.07</td><td>0.12</td><td>0.12</td><td>-1.30</td><td>50.5%</td><td>1970.7%</td><td>0.5%</td><td>1.01</td></tr><tr><td>量化基线-近3年</td><td>2019-02-26</td><td>2019-12-02</td><td>200</td><td>0.5%</td><td>0.6%</td><td>-22.2%</td><td>-5.3%</td><td>0.07</td><td>0.12</td><td>0.12</td><td>-1.30</td><td>50.5%</td><td>1970.7%</td><td>0.5%</td><td>1.01</td></tr><tr><td>量化基线-近5年</td><td>2019-02-26</td><td>2019-12-02</td><td>200</td><td>0.5%</td><td>0.6%</td><td>-22.2%</td><td>-5.3%</td><td>0.07</td><td>0.12</td><td>0.12</td><td>-1.30</td><td>50.5%</td><td>1970.7%</td><td>0.5%</td><td>1.01</td></tr>
+        </tbody>
+      </table>
+    </section>
+
+    <section>
+      <h2>策略优化 (收益目标 + 换手约束)</h2>
+      <article class="card">
+        <div class="k">目标函数</div>
+        <div class="sub"><code>score = excess_annual_return - 0.0015*annual_turnover - 0.200*abs(max_drawdown)</code></div>
+        <div class="sub" style="margin-top:6px;">评估窗口: 融合策略-近3年</div>
+        <div class="sub" style="margin-top:6px;">默认参数（优化器关闭或无有效试验）</div>
+      </article>
+      <table style="margin-top:10px;">
+        <thead>
+          <tr><th>排名</th><th>指标窗口</th><th>retrain(日)</th><th>阈值</th><th>持仓上限</th><th>市场新闻强度</th><th>个股新闻强度</th><th>目标得分</th><th>年化收益</th><th>年化超额</th><th>最大回撤</th><th>年化换手</th><th>成本损耗</th><th>单票周交易</th><th>Sharpe</th></tr>
+        </thead>
+        <tbody>
+          <tr><td colspan="15">无可用优化试验数据</td></tr>
+        </tbody>
+      </table>
+    </section>
+
+    <section>
+      <h2>新闻模糊矩阵</h2>
+      <table>
+        <thead>
+          <tr><th>标的</th><th>周期</th><th>利好隶属</th><th>利空隶属</th><th>中性隶属</th><th>条数</th></tr>
+        </thead>
+        <tbody>
+          <tr><td><div class="sym">沪深300</div><div class="code">000300.SH</div></td><td>短期</td><td><span class="pill bull">0.849</span></td><td><span class="pill bear">0.151</span></td><td>0.000</td><td>4</td></tr>
+          <tr><td><div class="sym">沪深300</div><div class="code">000300.SH</div></td><td>中期</td><td><span class="pill bull">0.482</span></td><td><span class="pill bear">0.518</span></td><td>0.000</td><td>4</td></tr>
+          <tr><td><div class='sym'>铜陵有色</div><div class='code'>000630.SZ</div></td><td>短期</td><td><span class='pill bull'>0.208</span></td><td><span class='pill bear'>0.792</span></td><td>0.000</td><td>9</td></tr><tr><td><div class='sym'>铜陵有色</div><div class='code'>000630.SZ</div></td><td>中期</td><td><span class='pill bull'>0.509</span></td><td><span class='pill bear'>0.491</span></td><td>0.000</td><td>9</td></tr><tr><td><div class='sym'>淳中科技</div><div class='code'>603516.SH</div></td><td>短期</td><td><span class='pill bull'>0.261</span></td><td><span class='pill bear'>0.698</span></td><td>0.041</td><td>10</td></tr><tr><td><div class='sym'>淳中科技</div><div class='code'>603516.SH</div></td><td>中期</td><td><span class='pill bull'>0.313</span></td><td><span class='pill bear'>0.544</span></td><td>0.143</td><td>10</td></tr><tr><td><div class='sym'>中曼石油</div><div class='code'>603619.SH</div></td><td>短期</td><td><span class='pill bull'>0.173</span></td><td><span class='pill bear'>0.804</span></td><td>0.023</td><td>16</td></tr><tr><td><div class='sym'>中曼石油</div><div class='code'>603619.SH</div></td><td>中期</td><td><span class='pill bull'>0.249</span></td><td><span class='pill bear'>0.682</span></td><td>0.069</td><td>16</td></tr><tr><td><div class='sym'>巨化股份</div><div class='code'>600160.SH</div></td><td>短期</td><td><span class='pill bull'>0.833</span></td><td><span class='pill bear'>0.052</span></td><td>0.116</td><td>14</td></tr><tr><td><div class='sym'>巨化股份</div><div class='code'>600160.SH</div></td><td>中期</td><td><span class='pill bull'>0.779</span></td><td><span class='pill bear'>0.068</span></td><td>0.152</td><td>14</td></tr><tr><td><div class='sym'>众兴菌业</div><div class='code'>002772.SZ</div></td><td>短期</td><td><span class='pill bull'>0.566</span></td><td><span class='pill bear'>0.145</span></td><td>0.289</td><td>20</td></tr><tr><td><div class='sym'>众兴菌业</div><div class='code'>002772.SZ</div></td><td>中期</td><td><span class='pill bull'>0.486</span></td><td><span class='pill bear'>0.172</span></td><td>0.343</td><td>20</td></tr>
+        </tbody>
+      </table>
+    </section>
+
+    <section>
+      <h2>学习型融合诊断</h2>
+      <table>
+        <thead>
+          <tr><th>标的</th><th>周期</th><th>模式</th><th>原因</th><th>样本</th><th>验证样本</th><th>验证准确率</th><th>验证AUC</th><th>验证Brier</th><th>新闻系数</th><th>融合系数(quant)</th><th>融合系数(news)</th></tr>
+        </thead>
+        <tbody>
+          <tr><td>MARKET</td><td>short</td><td>learned</td><td>ok</td><td>1821</td><td>365</td><td>46.0%</td><td>0.556</td><td>0.250</td><td>0.003</td><td>0.009</td><td>0.024</td></tr><tr><td>MARKET</td><td>mid</td><td>learned</td><td>ok</td><td>1802</td><td>361</td><td>56.0%</td><td>0.455</td><td>0.248</td><td>0.018</td><td>0.042</td><td>0.043</td></tr><tr><td>000630.SZ</td><td>short</td><td>learned</td><td>ok</td><td>1821</td><td>365</td><td>51.5%</td><td>0.503</td><td>0.250</td><td>-0.016</td><td>0.003</td><td>0.030</td></tr><tr><td>000630.SZ</td><td>mid</td><td>learned</td><td>ok</td><td>1802</td><td>361</td><td>49.0%</td><td>0.382</td><td>0.263</td><td>0.002</td><td>0.010</td><td>0.039</td></tr><tr><td>603516.SH</td><td>short</td><td>learned</td><td>ok</td><td>1821</td><td>365</td><td>49.6%</td><td>0.506</td><td>0.252</td><td>-0.007</td><td>-0.020</td><td>0.022</td></tr><tr><td>603516.SH</td><td>mid</td><td>learned</td><td>ok</td><td>1802</td><td>361</td><td>39.6%</td><td>0.547</td><td>0.277</td><td>-0.003</td><td>-0.024</td><td>0.039</td></tr><tr><td>603619.SH</td><td>short</td><td>learned</td><td>ok</td><td>1821</td><td>365</td><td>53.2%</td><td>0.506</td><td>0.249</td><td>-0.001</td><td>-0.003</td><td>0.024</td></tr><tr><td>603619.SH</td><td>mid</td><td>learned</td><td>ok</td><td>1802</td><td>361</td><td>58.7%</td><td>0.368</td><td>0.249</td><td>-0.017</td><td>0.079</td><td>0.114</td></tr><tr><td>002772.SZ</td><td>short</td><td>learned</td><td>ok</td><td>1821</td><td>365</td><td>47.9%</td><td>0.568</td><td>0.250</td><td>-0.006</td><td>-0.005</td><td>0.025</td></tr><tr><td>002772.SZ</td><td>mid</td><td>learned</td><td>ok</td><td>1802</td><td>361</td><td>49.9%</td><td>0.558</td><td>0.262</td><td>-0.009</td><td>0.003</td><td>0.057</td></tr><tr><td>600160.SH</td><td>short</td><td>learned</td><td>ok</td><td>1821</td><td>365</td><td>46.6%</td><td>0.526</td><td>0.250</td><td>0.000</td><td>0.010</td><td>0.018</td></tr><tr><td>600160.SH</td><td>mid</td><td>learned</td><td>ok</td><td>1802</td><td>361</td><td>32.1%</td><td>0.588</td><td>0.283</td><td>0.013</td><td>0.055</td><td>0.045</td></tr>
+        </tbody>
+      </table>
+    </section>
+
+    <section>
+      <h2>板块热度</h2>
+      <table>
+        <thead>
+          <tr><th>板块</th><th>热度</th><th>1日胜率</th><th>5日中位收益</th><th>资金</th><th>筹码</th><th>样本</th><th>热度条</th></tr>
+        </thead>
+        <tbody>
+          <tr><td>石油石化</td><td class='score' style='color:#e85050'>+0.153</td><td>100.0%</td><td>640bp</td><td>+0.055</td><td>+0.692</td><td>1</td><td><div class="bar"><span style="width:15.3%; background:#e85050;"></span></div></td></tr><tr><td>计算机设备</td><td class='score' style='color:#e85050'>+0.136</td><td>100.0%</td><td>534bp</td><td>-0.017</td><td>+0.627</td><td>1</td><td><div class="bar"><span style="width:13.6%; background:#e85050;"></span></div></td></tr><tr><td>有色金属</td><td class='score' style='color:#e95252'>+0.103</td><td>100.0%</td><td>572bp</td><td>-0.127</td><td>+0.352</td><td>1</td><td><div class="bar"><span style="width:10.3%; background:#e95252;"></span></div></td></tr><tr><td>农林牧渔</td><td class='score' style='color:#eb5555'>+0.005</td><td>0.0%</td><td>413bp</td><td>-0.356</td><td>+0.490</td><td>1</td><td><div class="bar"><span style="width:0.5%; background:#eb5555;"></span></div></td></tr><tr><td>基础化工</td><td class='score' style='color:#367afb'>-0.088</td><td>100.0%</td><td>-164bp</td><td>-0.371</td><td>-0.089</td><td>1</td><td><div class="bar"><span style="width:8.8%; background:#367afb;"></span></div></td></tr>
+        </tbody>
+      </table>
+    </section>
+
+    <p class="note">说明：本仪表盘为统计研究结果，不构成投资建议。请结合交易规则、流动性与风险约束使用。</p>
+  </div>
+</body>
+</html>

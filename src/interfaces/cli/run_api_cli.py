@@ -10,6 +10,7 @@ from src.application.use_cases import generate_daily_fusion, generate_discovery,
 from src.application.watchlist import load_watchlist
 from src.domain.symbols import SymbolError, normalize_symbol
 from src.infrastructure.data_sync import sync_market_data
+from src.infrastructure.discovery import build_candidate_universe
 from src.infrastructure.margin_sync import sync_margin_data
 from src.infrastructure.market_data import DataError, set_tushare_token
 from src.interfaces.presenters.html_dashboard import write_daily_dashboard
@@ -56,6 +57,8 @@ DEFAULT_TASK: dict[str, dict[str, Any]] = {
         "sleep_ms": 80,
     },
     "daily": {
+        "universe_file": "config/universe_auto_longtrain.json",
+        "universe_limit": 500,
         "news_file": "input/news_parts",
         "news_lookback_days": 45,
         "learned_news_lookback_days": 720,
@@ -300,6 +303,14 @@ def build_parser() -> argparse.ArgumentParser:
     daily.add_argument("--min-train-days", dest="min_train_days", type=int, default=None, help="Min train days")
     daily.add_argument("--step-days", dest="step_days", type=int, default=None, help="Walk-forward test block size")
     daily.add_argument("--l2", type=float, default=None, help="L2 regularization strength")
+    daily.add_argument("--universe-file", dest="universe_file", default=None, help="Universe file (csv/json) for large stock pool")
+    daily.add_argument(
+        "--universe-limit",
+        dest="universe_limit",
+        type=int,
+        default=None,
+        help="Maximum symbols loaded from universe file for daily run",
+    )
     daily.add_argument(
         "--news-file",
         dest="news_file",
@@ -563,6 +574,28 @@ def build_parser() -> argparse.ArgumentParser:
 def run_daily(settings: dict[str, Any]) -> int:
     set_tushare_token(settings.get("tushare_token", ""))
     market_security, stocks, sector_map = load_watchlist(settings["watchlist"])
+    universe_file = str(settings.get("universe_file", "")).strip()
+    if not universe_file:
+        raise ValueError(
+            "Daily requires `--universe-file` (large pool). "
+            "The 5-stock watchlist fallback has been disabled."
+        )
+    universe = build_candidate_universe(
+        source=settings["source"],
+        data_dir=settings["data_dir"],
+        universe_file=universe_file,
+        candidate_limit=max(5, int(settings.get("universe_limit", 500))),
+        exclude_symbols=[market_security.symbol],
+    )
+    if not universe.rows:
+        raise ValueError(f"Daily universe is empty: {universe_file}")
+    stocks = universe.rows
+    sector_map = {normalize_symbol(s.symbol).symbol: (s.sector or "其他") for s in stocks}
+    print(f"[OK] Daily universe source: {universe.source_label}")
+    print(f"[OK] Daily universe size: {len(stocks)}")
+    for warning in universe.warnings:
+        print(f"[WARN] {warning}")
+
     config = DailyConfig(
         source=settings["source"],
         data_dir=settings["data_dir"],

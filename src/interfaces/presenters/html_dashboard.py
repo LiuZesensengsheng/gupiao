@@ -8,6 +8,7 @@ import pandas as pd
 
 from src.application.use_cases import DailyFusionResult
 from src.domain.policies import market_regime, target_exposure
+from src.interfaces.presenters.driver_explainer import format_driver_list
 
 
 def _pct(v: float) -> str:
@@ -258,8 +259,8 @@ def write_daily_dashboard(out_path: str | Path, result: DailyFusionResult) -> Pa
     for row in stock_rows:
         name = escape(str(row.name))
         symbol = escape(str(row.symbol))
-        short_drivers = escape(", ".join(row.short_drivers) if row.short_drivers else "NA")
-        mid_drivers = escape(", ".join(row.mid_drivers) if row.mid_drivers else "NA")
+        short_drivers = escape(format_driver_list(row.short_drivers))
+        mid_drivers = escape(format_driver_list(row.mid_drivers))
         stock_table_rows.append(
             "<tr>"
             f"<td><div class='sym'>{name}</div><div class='code'>{symbol}</div></td>"

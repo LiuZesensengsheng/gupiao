@@ -8,6 +8,7 @@ import pandas as pd
 from src.application.use_cases import DailyFusionResult, DiscoveryResult
 from src.domain.entities import BacktestMetrics, BinaryMetrics, DiscoveryRow, ForecastRow, MarketForecast
 from src.domain.policies import market_regime, target_exposure
+from src.interfaces.presenters.driver_explainer import format_driver_list
 
 
 def _to_percent(v: float) -> str:
@@ -87,8 +88,8 @@ def write_forecast_report(
     lines.append("## 因子解释 (最新截面)")
     lines.append("")
     for row in stock_rows:
-        short_d = ", ".join(row.short_drivers) if row.short_drivers else "NA"
-        mid_d = ", ".join(row.mid_drivers) if row.mid_drivers else "NA"
+        short_d = format_driver_list(row.short_drivers)
+        mid_d = format_driver_list(row.mid_drivers)
         lines.append(f"### {row.name} ({row.symbol})")
         lines.append(f"- 短期驱动: {short_d}")
         lines.append(f"- 中期驱动: {mid_d}")
@@ -147,8 +148,8 @@ def write_daily_report(out_path: str | Path, result: DailyFusionResult) -> Path:
     lines.append("## 因子解释 (最新截面)")
     lines.append("")
     for row in result.blended_rows:
-        short_d = ", ".join(row.short_drivers) if row.short_drivers else "NA"
-        mid_d = ", ".join(row.mid_drivers) if row.mid_drivers else "NA"
+        short_d = format_driver_list(row.short_drivers)
+        mid_d = format_driver_list(row.mid_drivers)
         lines.append(f"### {row.name} ({row.symbol})")
         lines.append(f"- 短期驱动: {short_d}")
         lines.append(f"- 中期驱动: {mid_d}")
@@ -272,8 +273,8 @@ def write_daily_report(out_path: str | Path, result: DailyFusionResult) -> Path:
 
 def _discovery_row_line(row: DiscoveryRow) -> str:
     risk = "高位巨量阴线风险" if row.volume_risk_flag else "正常"
-    short_d = ", ".join(row.short_drivers) if row.short_drivers else "NA"
-    mid_d = ", ".join(row.mid_drivers) if row.mid_drivers else "NA"
+    short_d = format_driver_list(row.short_drivers)
+    mid_d = format_driver_list(row.mid_drivers)
     return (
         f"| {row.name} ({row.symbol}) | {_to_percent(row.short_prob)} | {_to_percent(row.mid_prob)} | "
         f"{row.score:.3f} | {_to_percent(row.suggested_weight)} | {risk} | {short_d} | {mid_d} |"
