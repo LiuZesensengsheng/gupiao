@@ -7,7 +7,6 @@ import numpy as np
 import pandas as pd
 
 from src.application.use_cases import DailyFusionResult
-from src.domain.policies import market_regime, target_exposure
 from src.interfaces.presenters.driver_explainer import format_driver_list
 
 
@@ -247,8 +246,8 @@ def write_daily_dashboard(out_path: str | Path, result: DailyFusionResult) -> Pa
     path = Path(out_path)
     path.parent.mkdir(parents=True, exist_ok=True)
 
-    regime = market_regime(result.market_final_short, result.market_final_mid)
-    exposure = target_exposure(result.market_final_short, result.market_final_mid)
+    regime = result.market_state_label
+    exposure = float(result.effective_total_exposure)
 
     stock_rows = sorted(result.blended_rows, key=lambda x: x.final_score, reverse=True)
     sector_rows = result.sector_table.to_dict("records") if not result.sector_table.empty else []
@@ -610,7 +609,7 @@ def write_daily_dashboard(out_path: str | Path, result: DailyFusionResult) -> Pa
       <article class="card">
         <div class="k">建议总仓位</div>
         <div class="v">{_pct(exposure)}</div>
-        <div class="sub">依据大盘融合概率自动映射</div>
+        <div class="sub">模板 {escape(result.strategy_template)} / T强度 {escape(result.intraday_t_level)} / 阈值 {result.effective_weight_threshold:.2f} / 持仓上限 {int(result.effective_max_positions)} / 日交易 {int(result.effective_max_trades_per_stock_per_day)} / 周交易 {int(result.effective_max_trades_per_stock_per_week)}</div>
       </article>
       <article class="card">
         <div class="k">大盘短期概率</div>

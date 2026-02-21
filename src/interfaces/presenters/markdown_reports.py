@@ -111,8 +111,8 @@ def write_daily_report(out_path: str | Path, result: DailyFusionResult) -> Path:
     report_path = Path(out_path)
     report_path.parent.mkdir(parents=True, exist_ok=True)
 
-    regime = market_regime(result.market_final_short, result.market_final_mid)
-    exposure = target_exposure(result.market_final_short, result.market_final_mid)
+    regime = result.market_state_label
+    exposure = float(result.effective_total_exposure)
 
     lines: list[str] = []
     lines.append("# A股每日融合报告 (量化 + 学习型新闻融合)")
@@ -123,6 +123,11 @@ def write_daily_report(out_path: str | Path, result: DailyFusionResult) -> Path:
     lines.append(f"- 近窗新闻条数: {result.news_items_count}")
     lines.append(f"- 市场状态: {regime}")
     lines.append(f"- 建议总仓位: {_to_percent(exposure)}")
+    lines.append(f"- 执行模板: {result.strategy_template} | 日内T强度: {result.intraday_t_level}")
+    lines.append(
+        f"- 状态参数: 权重阈值={result.effective_weight_threshold:.2f}, 持仓上限={int(result.effective_max_positions)}, "
+        f"单股日交易上限={int(result.effective_max_trades_per_stock_per_day)}, 单股周交易上限={int(result.effective_max_trades_per_stock_per_week)}"
+    )
     lines.append("")
     lines.append("## 大盘融合结果")
     lines.append("")
@@ -245,12 +250,24 @@ def write_daily_report(out_path: str | Path, result: DailyFusionResult) -> Path:
                 f"{_to_percent(t.annual_turnover)} | {_to_percent(t.total_cost)} | {_to_float(t.avg_trades_per_stock_per_week, 2)} | {_to_float(t.sharpe)} |"
             )
     lines.append("")
+    lines.append("## 验收结果 (A/B + 约束审计)")
+    lines.append("")
+    lines.append(f"- 验收开关: {'开启' if result.acceptance_enabled else '关闭'}")
+    lines.append(f"- A/B是否通过: {'是' if result.acceptance_ab_pass else '否'}")
+    lines.append(f"- 约束审计是否通过: {'是' if result.acceptance_constraints_pass else '否'}")
+    lines.append(f"- A/B超额年化差(新-旧): {_to_percent(result.acceptance_delta_excess_annual_return)}")
+    lines.append(f"- A/B最大回撤差(新-旧): {_to_percent(result.acceptance_delta_max_drawdown)}")
+    lines.append(f"- A/B年化换手差(新-旧): {_to_percent(result.acceptance_delta_annual_turnover)}")
+    lines.append(f"- 频次限制违规次数: {int(result.acceptance_limit_violations)}")
+    lines.append(f"- 超卖违规次数: {int(result.acceptance_oversell_violations)}")
+    lines.append(f"- 汇总: {result.acceptance_summary}")
+    lines.append("")
     lines.append("## 使用说明")
     lines.append("")
     lines.append("- 新闻净分范围为 [-1, +1]，正值偏利好，负值偏利空。")
     lines.append("- `learned` 模式下先学习新闻影响，再校准 quant+news；`rule` 模式下回退为新闻净分非线性修正。")
     lines.append("- 若你希望更保守，可降低 `--stock-news-strength` 与 `--market-news-strength`。")
-    lines.append("- 换手约束建议: `--max-trades-per-stock-per-week 2~3`，并设置 `--min-weight-change-to-trade` 过滤微小调仓。")
+    lines.append("- 换手约束建议: `--max-trades-per-stock-per-day 1` + `--max-trades-per-stock-per-week 2~3`，并设置 `--min-weight-change-to-trade` 过滤微小调仓。")
     lines.append("- 本结果为研究支持，不构成投资建议。")
     lines.append("")
     lines.append("## 回测表现 (交易级, 含成本)")

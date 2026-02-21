@@ -41,6 +41,96 @@ Architecture details:
 
 - `docs/ARCHITECTURE.md`
 
+## Current Module Map (for 7-14d swing + intraday T)
+
+Based on current code, the core execution chain is:
+
+1. CLI + config merge  
+   - `run_api.py`  
+   - `src/interfaces/cli/run_api_cli.py`
+2. Use-case orchestration (forecast / daily fusion / discover / backtest optimizer)  
+   - `src/application/use_cases.py`
+3. Quant forecast core (market + stock probabilities)  
+   - `src/infrastructure/forecast_engine.py`
+4. Factor/feature engineering (price-volume + market context + margin)  
+   - `src/infrastructure/features.py`  
+   - `src/infrastructure/market_context.py`  
+   - `src/infrastructure/margin_features.py`
+5. News fusion (rule + learned calibration)  
+   - `src/infrastructure/news_repository.py`  
+   - `src/infrastructure/news_fusion.py`
+6. Position sizing + policy rules  
+   - `src/domain/policies.py`
+7. Portfolio backtest + strategy parameter search  
+   - `src/infrastructure/backtesting.py`  
+   - `src/application/use_cases.py` (`_optimize_strategy_selection`)
+8. Report/dashboard rendering  
+   - `src/interfaces/presenters/markdown_reports.py`  
+   - `src/interfaces/presenters/html_dashboard.py`
+
+### What To Replace First
+
+For your target workflow ("AI-assisted discretionary", 7-14d holding, allow intraday T), the first module to upgrade is:
+
+- `signal routing / policy layer`, not raw factor set
+- Current entry points:
+  - `src/domain/policies.py` (`market_regime`, `target_exposure`, `allocate_weights`)
+  - `src/application/use_cases.py` (where exposure/weights are applied)
+
+Reason: your current regime is probability-threshold based (`Risk-On/Neutral/Risk-Off`), but not yet a dedicated state engine driving:
+
+- strategy template switching
+- T frequency limits
+- risk budget by state
+
+## Iteration Roadmap (Module-by-Module)
+
+Use this order to avoid large refactors:
+
+1. State Engine (highest priority)  
+   Goal: classify each day into `trend / range / risk-off` and output state-specific params.  
+   Minimal integration: replace direct `target_exposure(...)` calls with `state_engine -> exposure cap`.
+2. Strategy Router  
+   Goal: bind different execution templates to state (`trend push`, `range buy-low-sell-high`, `defensive`).  
+   Integration point: `generate_daily_fusion(...)` before weight allocation.
+3. Intraday-T Guardrail Module  
+   Goal: only allow T in whitelist scenarios; cap attempts/day and weekly churn.  
+   Integration point: extend turnover control fields in daily config + backtest assumptions.
+4. Portfolio Risk Budget  
+   Goal: add portfolio-level constraints (sector concentration, correlated crowding, per-position loss budget).  
+   Integration point: before/after `allocate_weights(...)`.
+5. Attribution Loop  
+   Goal: decompose PnL into selection / timing / T / risk-control contribution.  
+   Integration point: reporting + backtest post-processing.
+
+### Keep Unchanged For Now
+
+To keep momentum, do not rewrite these first:
+
+- data adapters (`market_data.py`)
+- base feature construction (`features.py`)
+- learned news fusion pipeline
+
+### Practical Working Rule
+
+For each iteration cycle, change only one module and keep all others fixed:
+
+1. define module inputs/outputs
+2. run `daily` end-to-end
+3. compare backtest + turnover + drawdown
+4. update report fields and only then proceed to next module
+
+### Intraday T Whitelist (Range State)
+
+When market state is `range`, rebalance actions are filtered by T-style whitelist:
+
+- allow reduce only when stock is relatively overextended:
+  - `ret_1 >= +2%` and `price_pos_20 >= 0.80`
+- allow add only when stock is in sharp pullback near lower range:
+  - `ret_1 <= -2%` and `price_pos_20 <= 0.35`
+
+This keeps T behavior aligned with your rule: only do one meaningful in-day adjustment instead of frequent micro-rebalancing.
+
 ## Quick Start
 
 1. Prepare watchlist (already provided in `config/watchlist.json`).
@@ -230,7 +320,9 @@ python3 run_api.py daily \
   --backtest-time-budget-minutes 3 \
   --commission-bps 1.5 \
   --slippage-bps 2.0 \
-  --backtest-weight-threshold 0.5
+  --backtest-weight-threshold 0.5 \
+  --enable-acceptance-checks true \
+  --acceptance-target-years 3
 ```
 
 Turnover/frequency guardrail (recommended for discretionary style):
@@ -238,11 +330,12 @@ Turnover/frequency guardrail (recommended for discretionary style):
 ```bash
 python3 run_api.py daily \
   --use-turnover-control true \
+  --max-trades-per-stock-per-day 1 \
   --max-trades-per-stock-per-week 3 \
   --min-weight-change-to-trade 0.03
 ```
 
-This means each stock can trade at most `3` times in a rolling week (5 trading days),
+This means each stock can trade at most `1` time per day and `3` times in a rolling week (5 trading days),
 and tiny rebalances under `3%` weight change are ignored.
 
 Strategy optimizer (maximize excess return with turnover/drawdown controls):

@@ -38,8 +38,11 @@ class DailyConfig(ForecastConfig):
     commission_bps: float
     slippage_bps: float
     use_turnover_control: bool
+    max_trades_per_stock_per_day: int
     max_trades_per_stock_per_week: int
     min_weight_change_to_trade: float
+    enable_acceptance_checks: bool
+    acceptance_target_years: int
     use_strategy_optimizer: bool
     optimizer_retrain_days: tuple[int, ...]
     optimizer_weight_thresholds: tuple[float, ...]

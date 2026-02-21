@@ -80,8 +80,11 @@ DEFAULT_TASK: dict[str, dict[str, Any]] = {
         "commission_bps": 1.5,
         "slippage_bps": 2.0,
         "use_turnover_control": True,
+        "max_trades_per_stock_per_day": 1,
         "max_trades_per_stock_per_week": 3,
         "min_weight_change_to_trade": 0.03,
+        "enable_acceptance_checks": True,
+        "acceptance_target_years": 3,
         "use_strategy_optimizer": True,
         "optimizer_retrain_days": [20, 40],
         "optimizer_weight_thresholds": [0.50, 0.60],
@@ -392,6 +395,13 @@ def build_parser() -> argparse.ArgumentParser:
         help="Enable turnover/frequency guardrail in backtest execution",
     )
     daily.add_argument(
+        "--max-trades-per-stock-per-day",
+        dest="max_trades_per_stock_per_day",
+        type=int,
+        default=None,
+        help="Maximum rebalance trades per stock per day (recommended 1 for A-share T style)",
+    )
+    daily.add_argument(
         "--max-trades-per-stock-per-week",
         dest="max_trades_per_stock_per_week",
         type=int,
@@ -404,6 +414,20 @@ def build_parser() -> argparse.ArgumentParser:
         type=float,
         default=None,
         help="Minimum absolute weight change required to execute a trade",
+    )
+    daily.add_argument(
+        "--enable-acceptance-checks",
+        dest="enable_acceptance_checks",
+        choices=["true", "false"],
+        default=None,
+        help="Run acceptance checks: state-engine A/B backtest + execution-constraint audit",
+    )
+    daily.add_argument(
+        "--acceptance-target-years",
+        dest="acceptance_target_years",
+        type=int,
+        default=None,
+        help="Target backtest window (years) used for A/B acceptance comparison",
     )
     daily.add_argument(
         "--use-strategy-optimizer",
@@ -626,8 +650,11 @@ def run_daily(settings: dict[str, Any]) -> int:
         commission_bps=float(settings["commission_bps"]),
         slippage_bps=float(settings["slippage_bps"]),
         use_turnover_control=_parse_bool(settings["use_turnover_control"]),
+        max_trades_per_stock_per_day=max(1, int(settings["max_trades_per_stock_per_day"])),
         max_trades_per_stock_per_week=max(1, int(settings["max_trades_per_stock_per_week"])),
         min_weight_change_to_trade=max(0.0, float(settings["min_weight_change_to_trade"])),
+        enable_acceptance_checks=_parse_bool(settings["enable_acceptance_checks"]),
+        acceptance_target_years=max(1, int(settings["acceptance_target_years"])),
         use_strategy_optimizer=_parse_bool(settings["use_strategy_optimizer"]),
         optimizer_retrain_days=_parse_int_list(settings["optimizer_retrain_days"], min_value=1) or (20, 40),
         optimizer_weight_thresholds=_parse_float_list(settings["optimizer_weight_thresholds"], min_value=0.0) or (0.50, 0.60),

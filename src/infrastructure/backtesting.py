@@ -9,7 +9,7 @@ import pandas as pd
 
 from src.domain.entities import BacktestMetrics, NewsItem, Security, SentimentAggregate
 from src.domain.news import aggregate_sentiment, blend_probability
-from src.domain.policies import allocate_weights, blend_horizon_score, target_exposure
+from src.domain.policies import allocate_weights, blend_horizon_score, decide_market_state, target_exposure
 from src.domain.symbols import normalize_symbol
 from src.infrastructure.features import (
     MARKET_FEATURE_COLUMNS,
@@ -35,6 +35,10 @@ NEWS_BACKTEST_FEATURE_COLUMNS = [
     "sent_signed_items",
 ]
 FUSION_BACKTEST_FEATURE_COLUMNS = ["q_logit", "n_logit", "q_minus_n"]
+RANGE_T_SELL_RET_1_MIN = 0.02
+RANGE_T_SELL_PRICE_POS_MIN = 0.80
+RANGE_T_BUY_RET_1_MAX = -0.02
+RANGE_T_BUY_PRICE_POS_MAX = 0.35
 
 
 @dataclass(frozen=True)
@@ -42,6 +46,7 @@ class BacktestResult:
     daily_frame: pd.DataFrame
     curve_frame: pd.DataFrame
     metrics: list[BacktestMetrics]
+    audit: dict[str, float | int | bool]
 
 
 @dataclass
@@ -281,18 +286,22 @@ def _apply_turnover_control(
     target_weights: np.ndarray,
     total_exposure: float,
     trade_history: list[list[int]],
+    max_trades_per_stock_per_day: int,
     max_trades_per_stock_per_week: int,
     min_weight_change_to_trade: float,
-) -> tuple[np.ndarray, float, int]:
+) -> tuple[np.ndarray, float, int, int, int]:
     prev = np.asarray(prev_weights, dtype=float)
     out = np.asarray(target_weights, dtype=float).copy()
     n = len(prev)
     if out.shape[0] != n:
         out = np.zeros(n, dtype=float)
 
-    max_trades = max(1, int(max_trades_per_stock_per_week))
+    max_trades_day = max(1, int(max_trades_per_stock_per_day))
+    max_trades_week = max(1, int(max_trades_per_stock_per_week))
+    max_trades = min(max_trades_week, max_trades_day * int(TRADING_DAYS_PER_WEEK))
     min_delta = max(0.0, float(min_weight_change_to_trade))
     fixed = np.zeros(n, dtype=bool)
+    oversell_violations = 0
 
     for i in range(n):
         delta = float(out[i] - prev[i])
@@ -300,11 +309,15 @@ def _apply_turnover_control(
             out[i] = prev[i]
             fixed[i] = True
             continue
+        if delta < -float(prev[i]) - 1e-12:
+            oversell_violations += 1
+            out[i] = max(0.0, float(prev[i]) - float(prev[i]))
         recent_trades = int(sum(trade_history[i][-int(TRADING_DAYS_PER_WEEK) :]))
         if recent_trades >= max_trades:
             out[i] = prev[i]
             fixed[i] = True
 
+    # Enforce no short/oversell: today's sell amount cannot exceed yesterday's holdings.
     out = np.clip(out, 0.0, None)
     target_total = float(np.clip(total_exposure, 0.0, 1.0))
     fixed_sum = float(np.sum(out[fixed])) if n > 0 else 0.0
@@ -336,8 +349,44 @@ def _apply_turnover_control(
         trade_history[i].append(1 if traded[i] else 0)
         if len(trade_history[i]) > int(TRADING_DAYS_PER_WEEK):
             trade_history[i].pop(0)
+    max_recent_trades_week = 0
+    for history in trade_history:
+        max_recent_trades_week = max(max_recent_trades_week, int(sum(history[-int(TRADING_DAYS_PER_WEEK) :])))
 
-    return out, turnover, trade_count
+    return out, turnover, trade_count, max_recent_trades_week, oversell_violations
+
+
+def _apply_range_t_whitelist(
+    *,
+    prev_weights: np.ndarray,
+    target_weights: np.ndarray,
+    ret_1: np.ndarray,
+    price_pos_20: np.ndarray,
+    min_weight_change_to_trade: float,
+) -> np.ndarray:
+    prev = np.asarray(prev_weights, dtype=float)
+    out = np.asarray(target_weights, dtype=float).copy()
+    n = len(prev)
+    if out.shape[0] != n:
+        return prev.copy()
+
+    min_delta = max(0.0, float(min_weight_change_to_trade))
+    ret_1 = np.asarray(ret_1, dtype=float)
+    price_pos_20 = np.asarray(price_pos_20, dtype=float)
+    if ret_1.shape[0] != n or price_pos_20.shape[0] != n:
+        return out
+
+    for i in range(n):
+        delta = float(out[i] - prev[i])
+        if abs(delta) < min_delta:
+            continue
+        sell_trigger = (ret_1[i] >= RANGE_T_SELL_RET_1_MIN) and (price_pos_20[i] >= RANGE_T_SELL_PRICE_POS_MIN)
+        buy_trigger = (ret_1[i] <= RANGE_T_BUY_RET_1_MAX) and (price_pos_20[i] <= RANGE_T_BUY_PRICE_POS_MAX)
+        if delta < 0.0 and not bool(sell_trigger):
+            out[i] = prev[i]
+        elif delta > 0.0 and not bool(buy_trigger):
+            out[i] = prev[i]
+    return out
 
 
 def _build_window_metrics(frame: pd.DataFrame, window_years: Sequence[int], prefix: str = "") -> list[BacktestMetrics]:
@@ -381,12 +430,14 @@ def run_portfolio_backtest(
     learned_fusion_l2: float = 0.6,
     max_positions: int = 5,
     use_turnover_control: bool = True,
+    max_trades_per_stock_per_day: int = 1,
     max_trades_per_stock_per_week: int = 3,
     min_weight_change_to_trade: float = 0.03,
     max_runtime_seconds: float = 0.0,
     use_margin_features: bool = True,
     margin_market_file: str = "input/margin_market.csv",
     margin_stock_file: str = "input/margin_stock.csv",
+    use_state_engine: bool = True,
 ) -> BacktestResult:
     retrain_days = max(1, int(retrain_days))
     total_cost_rate = max(0.0, float(commission_bps) + float(slippage_bps)) / 10000.0
@@ -494,6 +545,10 @@ def run_portfolio_backtest(
     trade_history_quant: list[list[int]] = [[] for _ in symbols]
     trade_history_fused: list[list[int]] = [[] for _ in symbols]
     records: list[dict[str, object]] = []
+    max_observed_week_trades_quant = 0
+    max_observed_week_trades_fused = 0
+    oversell_violations_quant = 0
+    oversell_violations_fused = 0
 
     timeout_hit = False
     processed_days = 0
@@ -620,7 +675,28 @@ def run_portfolio_backtest(
             market_row = market_valid.loc[[date]]
             market_short_quant = float(market_short_model.predict_proba(market_row, market_feature_cols)[0])
             market_mid_quant = float(market_mid_model.predict_proba(market_row, market_feature_cols)[0])
-            total_exposure_quant = target_exposure(market_short_quant, market_mid_quant)
+            if use_state_engine:
+                state_quant = decide_market_state(
+                    market_short_quant,
+                    market_mid_quant,
+                    base_weight_threshold=weight_threshold,
+                    base_max_positions=max_positions,
+                    base_max_trades_per_stock_per_day=max_trades_per_stock_per_day,
+                    base_max_trades_per_stock_per_week=max_trades_per_stock_per_week,
+                )
+                total_exposure_quant = float(state_quant.exposure_cap)
+                threshold_quant = float(state_quant.weight_threshold)
+                max_pos_quant = int(state_quant.max_positions)
+                max_day_quant = int(state_quant.max_trades_per_stock_per_day)
+                max_week_quant = int(state_quant.max_trades_per_stock_per_week)
+                state_code_quant = str(state_quant.state_code)
+            else:
+                total_exposure_quant = float(target_exposure(market_short_quant, market_mid_quant))
+                threshold_quant = float(weight_threshold)
+                max_pos_quant = int(max_positions)
+                max_day_quant = int(max_trades_per_stock_per_day)
+                max_week_quant = int(max_trades_per_stock_per_week)
+                state_code_quant = "legacy"
 
             market_short_fused = market_short_quant
             market_mid_fused = market_mid_quant
@@ -641,7 +717,28 @@ def run_portfolio_backtest(
                     horizon="mid",
                     sentiment_getter=_sentiment_getter,
                 )
-            total_exposure_fused = target_exposure(market_short_fused, market_mid_fused)
+            if use_state_engine:
+                state_fused = decide_market_state(
+                    market_short_fused,
+                    market_mid_fused,
+                    base_weight_threshold=weight_threshold,
+                    base_max_positions=max_positions,
+                    base_max_trades_per_stock_per_day=max_trades_per_stock_per_day,
+                    base_max_trades_per_stock_per_week=max_trades_per_stock_per_week,
+                )
+                total_exposure_fused = float(state_fused.exposure_cap)
+                threshold_fused = float(state_fused.weight_threshold)
+                max_pos_fused = int(state_fused.max_positions)
+                max_day_fused = int(state_fused.max_trades_per_stock_per_day)
+                max_week_fused = int(state_fused.max_trades_per_stock_per_week)
+                state_code_fused = str(state_fused.state_code)
+            else:
+                total_exposure_fused = float(target_exposure(market_short_fused, market_mid_fused))
+                threshold_fused = float(weight_threshold)
+                max_pos_fused = int(max_positions)
+                max_day_fused = int(max_trades_per_stock_per_day)
+                max_week_fused = int(max_trades_per_stock_per_week)
+                state_code_fused = "legacy"
 
             score_items: list[dict[str, float | str]] = []
             for symbol in symbols:
@@ -687,6 +784,8 @@ def run_portfolio_backtest(
                         "quant_score": float(quant_score),
                         "fused_score": float(fused_score),
                         "fwd_ret_1": float(row["fwd_ret_1"].iloc[0]),
+                        "ret_1": float(row["ret_1"].iloc[0]),
+                        "price_pos_20": float(row["price_pos_20"].iloc[0]),
                     }
                 )
 
@@ -696,37 +795,74 @@ def run_portfolio_backtest(
             quant_weights_raw = allocate_weights(
                 [float(item["quant_score"]) for item in score_items],
                 total_exposure=total_exposure_quant,
-                threshold=weight_threshold,
-                max_positions=max_positions,
+                threshold=threshold_quant,
+                max_positions=max_pos_quant,
             )
             fused_weights_raw = allocate_weights(
                 [float(item["fused_score"]) for item in score_items],
                 total_exposure=total_exposure_fused,
-                threshold=weight_threshold,
-                max_positions=max_positions,
+                threshold=threshold_fused,
+                max_positions=max_pos_fused,
             )
             quant_weight_map = {str(item["symbol"]): float(w) for item, w in zip(score_items, quant_weights_raw)}
             fused_weight_map = {str(item["symbol"]): float(w) for item, w in zip(score_items, fused_weights_raw)}
             target_weights_quant = np.array([quant_weight_map.get(symbol, 0.0) for symbol in symbols], dtype=float)
             target_weights_fused = np.array([fused_weight_map.get(symbol, 0.0) for symbol in symbols], dtype=float)
+            ret_1_arr = np.array([float(item["ret_1"]) for item in score_items], dtype=float)
+            price_pos_20_arr = np.array([float(item["price_pos_20"]) for item in score_items], dtype=float)
+
+            if state_code_quant == "range":
+                target_weights_quant = _apply_range_t_whitelist(
+                    prev_weights=prev_weights_quant,
+                    target_weights=target_weights_quant,
+                    ret_1=ret_1_arr,
+                    price_pos_20=price_pos_20_arr,
+                    min_weight_change_to_trade=min_weight_change_to_trade,
+                )
+            if state_code_fused == "range":
+                target_weights_fused = _apply_range_t_whitelist(
+                    prev_weights=prev_weights_fused,
+                    target_weights=target_weights_fused,
+                    ret_1=ret_1_arr,
+                    price_pos_20=price_pos_20_arr,
+                    min_weight_change_to_trade=min_weight_change_to_trade,
+                )
 
             if use_turnover_control:
-                curr_weights_quant, turnover_quant, trade_count_quant = _apply_turnover_control(
+                (
+                    curr_weights_quant,
+                    turnover_quant,
+                    trade_count_quant,
+                    max_week_observed_quant,
+                    oversell_viol_quant,
+                ) = _apply_turnover_control(
                     prev_weights=prev_weights_quant,
                     target_weights=target_weights_quant,
                     total_exposure=total_exposure_quant,
                     trade_history=trade_history_quant,
-                    max_trades_per_stock_per_week=max_trades_per_stock_per_week,
+                    max_trades_per_stock_per_day=min(int(max_trades_per_stock_per_day), max_day_quant),
+                    max_trades_per_stock_per_week=min(int(max_trades_per_stock_per_week), max_week_quant),
                     min_weight_change_to_trade=min_weight_change_to_trade,
                 )
-                curr_weights_fused, turnover_fused, trade_count_fused = _apply_turnover_control(
+                (
+                    curr_weights_fused,
+                    turnover_fused,
+                    trade_count_fused,
+                    max_week_observed_fused,
+                    oversell_viol_fused,
+                ) = _apply_turnover_control(
                     prev_weights=prev_weights_fused,
                     target_weights=target_weights_fused,
                     total_exposure=total_exposure_fused,
                     trade_history=trade_history_fused,
-                    max_trades_per_stock_per_week=max_trades_per_stock_per_week,
+                    max_trades_per_stock_per_day=min(int(max_trades_per_stock_per_day), max_day_fused),
+                    max_trades_per_stock_per_week=min(int(max_trades_per_stock_per_week), max_week_fused),
                     min_weight_change_to_trade=min_weight_change_to_trade,
                 )
+                max_observed_week_trades_quant = max(max_observed_week_trades_quant, int(max_week_observed_quant))
+                max_observed_week_trades_fused = max(max_observed_week_trades_fused, int(max_week_observed_fused))
+                oversell_violations_quant += int(oversell_viol_quant)
+                oversell_violations_fused += int(oversell_viol_fused)
             else:
                 curr_weights_quant = target_weights_quant
                 curr_weights_fused = target_weights_fused
@@ -788,11 +924,13 @@ def run_portfolio_backtest(
                 daily_frame=daily_frame,
                 curve_frame=empty_curve,
                 metrics=[BacktestMetrics.empty("融合策略-全样本"), BacktestMetrics.empty("量化基线-全样本")],
+                audit={"use_state_engine": bool(use_state_engine)},
             )
         return BacktestResult(
             daily_frame=daily_frame,
             curve_frame=empty_curve,
             metrics=[BacktestMetrics.empty("全样本")],
+            audit={"use_state_engine": bool(use_state_engine)},
         )
 
     quant_frame = _to_strategy_frame(
@@ -825,4 +963,15 @@ def run_portfolio_backtest(
     else:
         metrics = _build_window_metrics(quant_frame, window_years, prefix="")
 
-    return BacktestResult(daily_frame=daily_frame, curve_frame=curve, metrics=metrics)
+    audit: dict[str, float | int | bool] = {
+        "use_state_engine": bool(use_state_engine),
+        "max_trades_per_stock_per_day_limit": int(max_trades_per_stock_per_day),
+        "max_trades_per_stock_per_week_limit": int(max_trades_per_stock_per_week),
+        "max_observed_week_trades_quant": int(max_observed_week_trades_quant),
+        "max_observed_week_trades_fused": int(max_observed_week_trades_fused),
+        "limit_violations_quant": int(max(0, max_observed_week_trades_quant - int(max_trades_per_stock_per_week))),
+        "limit_violations_fused": int(max(0, max_observed_week_trades_fused - int(max_trades_per_stock_per_week))),
+        "oversell_violations_quant": int(oversell_violations_quant),
+        "oversell_violations_fused": int(oversell_violations_fused),
+    }
+    return BacktestResult(daily_frame=daily_frame, curve_frame=curve, metrics=metrics, audit=audit)

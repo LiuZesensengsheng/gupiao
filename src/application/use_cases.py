@@ -23,7 +23,7 @@ from src.domain.entities import (
     StrategyTrial,
 )
 from src.domain.symbols import normalize_symbol
-from src.domain.policies import allocate_weights, blend_horizon_score, target_exposure
+from src.domain.policies import allocate_weights, blend_horizon_score, decide_market_state, target_exposure
 from src.infrastructure.backtesting import BacktestResult, run_portfolio_backtest
 from src.infrastructure.discovery import build_candidate_universe, compute_volume_risk
 from src.infrastructure.effect_analysis import build_latest_snapshot, compute_effect_summary, compute_sector_table
@@ -51,6 +51,15 @@ class DailyFusionResult:
     market_news_mid_prob: float
     market_final_short: float
     market_final_mid: float
+    market_state_code: str
+    market_state_label: str
+    strategy_template: str
+    intraday_t_level: str
+    effective_total_exposure: float
+    effective_weight_threshold: float
+    effective_max_positions: int
+    effective_max_trades_per_stock_per_day: int
+    effective_max_trades_per_stock_per_week: int
     market_short_sent: SentimentAggregate
     market_mid_sent: SentimentAggregate
     market_fusion_mode_short: str
@@ -65,6 +74,15 @@ class DailyFusionResult:
     strategy_target_metric_label: str
     strategy_selected: StrategyTrial | None
     strategy_trials: List[StrategyTrial]
+    acceptance_enabled: bool
+    acceptance_ab_pass: bool
+    acceptance_constraints_pass: bool
+    acceptance_summary: str
+    acceptance_delta_excess_annual_return: float
+    acceptance_delta_max_drawdown: float
+    acceptance_delta_annual_turnover: float
+    acceptance_limit_violations: int
+    acceptance_oversell_violations: int
     news_items_count: int
     news_items: List[NewsItem]
 
@@ -390,6 +408,9 @@ def _run_daily_backtest(
     max_positions: int,
     market_news_strength: float,
     stock_news_strength: float,
+    max_trades_per_stock_per_day: int,
+    max_trades_per_stock_per_week: int,
+    use_state_engine: bool = True,
 ) -> BacktestResult:
     return run_portfolio_backtest(
         market_security=market_security,
@@ -417,12 +438,20 @@ def _run_daily_backtest(
         learned_fusion_l2=config.learned_fusion_l2,
         max_positions=int(max_positions),
         use_turnover_control=config.use_turnover_control,
-        max_trades_per_stock_per_week=int(config.max_trades_per_stock_per_week),
+        max_trades_per_stock_per_day=int(max_trades_per_stock_per_day),
+        max_trades_per_stock_per_week=int(max_trades_per_stock_per_week),
         min_weight_change_to_trade=float(config.min_weight_change_to_trade),
         use_margin_features=config.use_margin_features,
         margin_market_file=config.margin_market_file,
         margin_stock_file=config.margin_stock_file,
+        use_state_engine=bool(use_state_engine),
     )
+
+
+def _metric_delta(new: float, old: float) -> float:
+    if pd.isna(new) or pd.isna(old):
+        return np.nan
+    return float(new - old)
 
 
 def _pick_target_metric(metrics: List[BacktestMetrics], target_years: int) -> BacktestMetrics | None:
@@ -560,6 +589,8 @@ def _optimize_strategy_selection(
                 max_positions=int(max_pos),
                 market_news_strength=float(market_strength),
                 stock_news_strength=float(stock_strength),
+                max_trades_per_stock_per_day=int(config.max_trades_per_stock_per_day),
+                max_trades_per_stock_per_week=int(config.max_trades_per_stock_per_week),
             )
         except Exception as exc:
             print(f"[OPT] trial {trial_idx}/{total_trials} failed: {exc}")
@@ -756,12 +787,20 @@ def generate_daily_fusion(
         stock_feature_cols_map=stock_feature_cols_map,
         stock_feature_frames=stock_feature_frames,
     )
-    total = target_exposure(market_final_short, market_final_mid)
+    state = decide_market_state(
+        market_final_short,
+        market_final_mid,
+        base_weight_threshold=weight_threshold_live,
+        base_max_positions=max_positions_live,
+        base_max_trades_per_stock_per_day=int(config.max_trades_per_stock_per_day),
+        base_max_trades_per_stock_per_week=int(config.max_trades_per_stock_per_week),
+    )
+    total = float(state.exposure_cap)
     weights = allocate_weights(
         [row.final_score for row in blended_rows],
         total_exposure=total,
-        threshold=weight_threshold_live,
-        max_positions=max_positions_live,
+        threshold=float(state.weight_threshold),
+        max_positions=int(state.max_positions),
     )
     for row, weight in zip(blended_rows, weights):
         row.suggested_weight = float(weight)
@@ -790,6 +829,69 @@ def generate_daily_fusion(
             max_positions=strategy_selection.max_positions,
             market_news_strength=strategy_selection.market_news_strength,
             stock_news_strength=strategy_selection.stock_news_strength,
+            max_trades_per_stock_per_day=int(state.max_trades_per_stock_per_day),
+            max_trades_per_stock_per_week=int(state.max_trades_per_stock_per_week),
+            use_state_engine=True,
+        )
+
+    acceptance_enabled = bool(config.enable_acceptance_checks)
+    acceptance_ab_pass = False
+    acceptance_constraints_pass = False
+    acceptance_summary = "Acceptance checks disabled."
+    acceptance_delta_excess_annual_return = np.nan
+    acceptance_delta_max_drawdown = np.nan
+    acceptance_delta_annual_turnover = np.nan
+    acceptance_limit_violations = 0
+    acceptance_oversell_violations = 0
+
+    if acceptance_enabled:
+        baseline = _run_daily_backtest(
+            config=config,
+            market_security=market_security,
+            stocks=stocks,
+            news_items_train=news_items_train,
+            retrain_days=strategy_selection.retrain_days,
+            weight_threshold=strategy_selection.weight_threshold,
+            max_positions=strategy_selection.max_positions,
+            market_news_strength=strategy_selection.market_news_strength,
+            stock_news_strength=strategy_selection.stock_news_strength,
+            max_trades_per_stock_per_day=int(state.max_trades_per_stock_per_day),
+            max_trades_per_stock_per_week=int(state.max_trades_per_stock_per_week),
+            use_state_engine=False,
+        )
+        metric_new = _pick_target_metric(backtest.metrics, target_years=int(config.acceptance_target_years))
+        metric_old = _pick_target_metric(baseline.metrics, target_years=int(config.acceptance_target_years))
+        if metric_new is not None and metric_old is not None:
+            acceptance_delta_excess_annual_return = _metric_delta(
+                float(metric_new.excess_annual_return), float(metric_old.excess_annual_return)
+            )
+            acceptance_delta_max_drawdown = _metric_delta(float(metric_new.max_drawdown), float(metric_old.max_drawdown))
+            acceptance_delta_annual_turnover = _metric_delta(
+                float(metric_new.annual_turnover), float(metric_old.annual_turnover)
+            )
+            dd_not_worse = (
+                not pd.isna(acceptance_delta_max_drawdown)
+                and float(acceptance_delta_max_drawdown) >= -1e-9
+            )
+            turnover_better = (
+                not pd.isna(acceptance_delta_annual_turnover)
+                and float(acceptance_delta_annual_turnover) <= 1e-9
+            )
+            acceptance_ab_pass = bool(dd_not_worse and turnover_better)
+
+        audit = backtest.audit
+        acceptance_limit_violations = int(audit.get("limit_violations_fused", 0))
+        acceptance_oversell_violations = int(audit.get("oversell_violations_fused", 0))
+        acceptance_constraints_pass = (
+            int(acceptance_limit_violations) == 0 and int(acceptance_oversell_violations) == 0
+        )
+        acceptance_summary = (
+            f"A/B pass={acceptance_ab_pass} "
+            f"(delta_excess={acceptance_delta_excess_annual_return:.2%}, "
+            f"delta_max_dd={acceptance_delta_max_drawdown:.2%}, "
+            f"delta_turnover={acceptance_delta_annual_turnover:.2%}); "
+            f"constraints pass={acceptance_constraints_pass} "
+            f"(limit_violations={acceptance_limit_violations}, oversell_violations={acceptance_oversell_violations})"
         )
 
     return DailyFusionResult(
@@ -800,6 +902,15 @@ def generate_daily_fusion(
         market_news_mid_prob=market_mid_pred.news_prob,
         market_final_short=market_final_short,
         market_final_mid=market_final_mid,
+        market_state_code=state.state_code,
+        market_state_label=state.state_label,
+        strategy_template=state.strategy_template,
+        intraday_t_level=state.intraday_t_level,
+        effective_total_exposure=float(state.exposure_cap),
+        effective_weight_threshold=float(state.weight_threshold),
+        effective_max_positions=int(state.max_positions),
+        effective_max_trades_per_stock_per_day=int(state.max_trades_per_stock_per_day),
+        effective_max_trades_per_stock_per_week=int(state.max_trades_per_stock_per_week),
         market_short_sent=market_short_pred.sentiment,
         market_mid_sent=market_mid_pred.sentiment,
         market_fusion_mode_short=market_short_pred.mode,
@@ -814,6 +925,15 @@ def generate_daily_fusion(
         strategy_target_metric_label=strategy_selection.target_metric_label,
         strategy_selected=strategy_selection.selected_trial,
         strategy_trials=strategy_selection.trials,
+        acceptance_enabled=acceptance_enabled,
+        acceptance_ab_pass=acceptance_ab_pass,
+        acceptance_constraints_pass=acceptance_constraints_pass,
+        acceptance_summary=acceptance_summary,
+        acceptance_delta_excess_annual_return=float(acceptance_delta_excess_annual_return),
+        acceptance_delta_max_drawdown=float(acceptance_delta_max_drawdown),
+        acceptance_delta_annual_turnover=float(acceptance_delta_annual_turnover),
+        acceptance_limit_violations=int(acceptance_limit_violations),
+        acceptance_oversell_violations=int(acceptance_oversell_violations),
         news_items_count=len(news_items_live),
         news_items=news_items_live,
     )
