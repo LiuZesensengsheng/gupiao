@@ -340,10 +340,37 @@ and tiny rebalances under `3%` weight change are ignored.
 
 Range-state T whitelist thresholds are configurable:
 
-- `--range-t-sell-ret-1-min` (default `0.02`)
-- `--range-t-sell-price-pos-20-min` (default `0.80`)
-- `--range-t-buy-ret-1-max` (default `-0.02`)
-- `--range-t-buy-price-pos-20-max` (default `0.35`)
+- `--range-t-sell-ret-1-min` (default `0.015`)
+- `--range-t-sell-price-pos-20-min` (default `0.75`)
+- `--range-t-buy-ret-1-max` (default `-0.015`)
+- `--range-t-buy-price-pos-20-max` (default `0.30`)
+
+Current recommended baseline (from `reports/range_t_grid_search.md`):
+
+- `range_t_sell_ret_1_min = 0.015`
+- `range_t_sell_price_pos_20_min = 0.75`
+- `range_t_buy_ret_1_max = -0.015`
+- `range_t_buy_price_pos_20_max = 0.30`
+
+To make grid-search results reproducible with `daily`, ensure the same:
+
+- `start`
+- `backtest_years`
+- `acceptance_target_years`
+- `use_strategy_optimizer`
+
+Example (single combo, strictly aligned with `daily` defaults from config):
+
+```bash
+PYTHONPATH=. python3 scripts/range_t_grid_search.py \
+  --config config/api.json \
+  --sell-ret-grid 0.015 \
+  --sell-pos-grid 0.75 \
+  --buy-ret-grid -0.015 \
+  --buy-pos-grid 0.30 \
+  --max-combos 1 \
+  --out reports/range_t_grid_search_single.md
+```
 
 Strategy optimizer (maximize excess return with turnover/drawdown controls):
 
