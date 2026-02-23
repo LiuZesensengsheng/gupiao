@@ -4,3 +4,13 @@ __pycache__/
 *.pyo
 *.pyd
 *.py,cover
+
+# Large/local datasets
+data/
+input/news_parts/
+input/news.csv
+input/margin_market.csv
+input/margin_stock.csv
+
+# Auto-generated universe files
+config/universe_auto*.json

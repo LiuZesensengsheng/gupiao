@@ -1,0 +1,22 @@
+{
+  "default_limit_rate": 0.1,
+  "rules": [
+    {
+      "exchange": "SH",
+      "code_prefix": "688",
+      "start_date": "2019-07-22",
+      "limit_rate": 0.2
+    },
+    {
+      "exchange": "SZ",
+      "code_prefix": "300",
+      "start_date": "2020-08-24",
+      "limit_rate": 0.2
+    },
+    {
+      "exchange": "BJ",
+      "start_date": "2021-11-15",
+      "limit_rate": 0.3
+    }
+  ]
+}

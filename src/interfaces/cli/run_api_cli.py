@@ -87,6 +87,13 @@ DEFAULT_TASK: dict[str, dict[str, Any]] = {
         "range_t_sell_price_pos_20_min": 0.75,
         "range_t_buy_ret_1_max": -0.015,
         "range_t_buy_price_pos_20_max": 0.30,
+        "use_tradeability_guard": True,
+        "tradeability_limit_tolerance": 0.002,
+        "tradeability_min_volume": 0.0,
+        "limit_rule_file": "",
+        "use_index_constituent_guard": False,
+        "index_constituent_file": "",
+        "index_constituent_symbol": "000300.SH",
         "enable_acceptance_checks": True,
         "acceptance_target_years": 3,
         "use_strategy_optimizer": True,
@@ -448,6 +455,52 @@ def build_parser() -> argparse.ArgumentParser:
         help="Range-state T whitelist: maximum 20-day price position to allow add/buy action",
     )
     daily.add_argument(
+        "--use-tradeability-guard",
+        dest="use_tradeability_guard",
+        choices=["true", "false"],
+        default=None,
+        help="Enable tradability guard: suspension and one-price limit-up/limit-down trade block",
+    )
+    daily.add_argument(
+        "--tradeability-limit-tolerance",
+        dest="tradeability_limit_tolerance",
+        type=float,
+        default=None,
+        help="Tolerance around daily limit rate used by tradability guard (e.g. 0.002 means 0.2%%)",
+    )
+    daily.add_argument(
+        "--tradeability-min-volume",
+        dest="tradeability_min_volume",
+        type=float,
+        default=None,
+        help="Treat bars with volume <= this threshold as non-tradable",
+    )
+    daily.add_argument(
+        "--limit-rule-file",
+        dest="limit_rule_file",
+        default=None,
+        help="JSON file for price-limit rules by board/time",
+    )
+    daily.add_argument(
+        "--use-index-constituent-guard",
+        dest="use_index_constituent_guard",
+        choices=["true", "false"],
+        default=None,
+        help="Restrict daily eligible universe by index constituent snapshots",
+    )
+    daily.add_argument(
+        "--index-constituent-file",
+        dest="index_constituent_file",
+        default=None,
+        help="CSV file with constituent snapshots: date,symbol[,index_symbol]",
+    )
+    daily.add_argument(
+        "--index-constituent-symbol",
+        dest="index_constituent_symbol",
+        default=None,
+        help="Index symbol used to filter constituent snapshot rows (default 000300.SH)",
+    )
+    daily.add_argument(
         "--enable-acceptance-checks",
         dest="enable_acceptance_checks",
         choices=["true", "false"],
@@ -689,6 +742,13 @@ def run_daily(settings: dict[str, Any]) -> int:
         range_t_sell_price_pos_20_min=float(settings["range_t_sell_price_pos_20_min"]),
         range_t_buy_ret_1_max=float(settings["range_t_buy_ret_1_max"]),
         range_t_buy_price_pos_20_max=float(settings["range_t_buy_price_pos_20_max"]),
+        use_tradeability_guard=_parse_bool(settings["use_tradeability_guard"]),
+        tradeability_limit_tolerance=max(0.0, float(settings["tradeability_limit_tolerance"])),
+        tradeability_min_volume=max(0.0, float(settings["tradeability_min_volume"])),
+        limit_rule_file=str(settings["limit_rule_file"]).strip(),
+        use_index_constituent_guard=_parse_bool(settings["use_index_constituent_guard"]),
+        index_constituent_file=str(settings["index_constituent_file"]).strip(),
+        index_constituent_symbol=str(settings["index_constituent_symbol"]).strip() or "000300.SH",
         enable_acceptance_checks=_parse_bool(settings["enable_acceptance_checks"]),
         acceptance_target_years=max(1, int(settings["acceptance_target_years"])),
         use_strategy_optimizer=_parse_bool(settings["use_strategy_optimizer"]),

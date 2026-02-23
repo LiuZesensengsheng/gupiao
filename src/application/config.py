@@ -45,6 +45,13 @@ class DailyConfig(ForecastConfig):
     range_t_sell_price_pos_20_min: float
     range_t_buy_ret_1_max: float
     range_t_buy_price_pos_20_max: float
+    use_tradeability_guard: bool
+    tradeability_limit_tolerance: float
+    tradeability_min_volume: float
+    limit_rule_file: str
+    use_index_constituent_guard: bool
+    index_constituent_file: str
+    index_constituent_symbol: str
     enable_acceptance_checks: bool
     acceptance_target_years: int
     use_strategy_optimizer: bool

@@ -338,6 +338,30 @@ python3 run_api.py daily \
 This means each stock can trade at most `1` time per day and `3` times in a rolling week (5 trading days),
 and tiny rebalances under `3%` weight change are ignored.
 
+Tradability guardrail (suspension + one-price limit board):
+
+```bash
+python3 run_api.py daily \
+  --use-tradeability-guard true \
+  --tradeability-limit-tolerance 0.002 \
+  --tradeability-min-volume 0
+```
+
+You can override limit-board rules by file (template: `config/limit_rules_template.json`):
+
+```bash
+python3 run_api.py daily --limit-rule-file config/limit_rules_template.json
+```
+
+Point-in-time constituent guard (template: `input/index_constituents_template.csv`):
+
+```bash
+python3 run_api.py daily \
+  --use-index-constituent-guard true \
+  --index-constituent-file input/index_constituents_template.csv \
+  --index-constituent-symbol 000300.SH
+```
+
 Range-state T whitelist thresholds are configurable:
 
 - `--range-t-sell-ret-1-min` (default `0.015`)

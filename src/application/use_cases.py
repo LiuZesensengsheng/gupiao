@@ -445,6 +445,13 @@ def _run_daily_backtest(
         range_t_sell_price_pos_20_min=float(config.range_t_sell_price_pos_20_min),
         range_t_buy_ret_1_max=float(config.range_t_buy_ret_1_max),
         range_t_buy_price_pos_20_max=float(config.range_t_buy_price_pos_20_max),
+        use_tradeability_guard=bool(config.use_tradeability_guard),
+        tradeability_limit_tolerance=float(config.tradeability_limit_tolerance),
+        tradeability_min_volume=float(config.tradeability_min_volume),
+        limit_rule_file=str(config.limit_rule_file),
+        use_index_constituent_guard=bool(config.use_index_constituent_guard),
+        index_constituent_file=str(config.index_constituent_file),
+        index_constituent_symbol=str(config.index_constituent_symbol),
         use_margin_features=config.use_margin_features,
         margin_market_file=config.margin_market_file,
         margin_stock_file=config.margin_stock_file,
@@ -886,6 +893,10 @@ def generate_daily_fusion(
         audit = backtest.audit
         acceptance_limit_violations = int(audit.get("limit_violations_fused", 0))
         acceptance_oversell_violations = int(audit.get("oversell_violations_fused", 0))
+        blocked_total = int(audit.get("blocked_total_fused", 0))
+        suspended_symbol_days = int(audit.get("suspended_symbol_days", 0))
+        non_member_symbol_days = int(audit.get("non_member_symbol_days", 0))
+        no_member_snapshot_days = int(audit.get("no_member_snapshot_days", 0))
         acceptance_constraints_pass = (
             int(acceptance_oversell_violations) == 0
         )
@@ -895,7 +906,9 @@ def generate_daily_fusion(
             f"delta_max_dd={acceptance_delta_max_drawdown:.2%}, "
             f"delta_turnover={acceptance_delta_annual_turnover:.2%}); "
             f"constraints pass={acceptance_constraints_pass} "
-            f"(weekly_overflow={acceptance_limit_violations}, oversell_violations={acceptance_oversell_violations})"
+            f"(weekly_overflow={acceptance_limit_violations}, oversell_violations={acceptance_oversell_violations}, "
+            f"blocked_by_tradability={blocked_total}, suspended_symbol_days={suspended_symbol_days}, "
+            f"non_member_symbol_days={non_member_symbol_days}, no_member_snapshot_days={no_member_snapshot_days})"
         )
 
     return DailyFusionResult(

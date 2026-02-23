@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import json
+from pathlib import Path
 import time
 from typing import Callable, Dict, Sequence
 
@@ -52,6 +54,29 @@ class _BlockFuser:
     fallback_strength: float
     news_model: LogisticBinaryModel | None = None
     fusion_model: LogisticBinaryModel | None = None
+
+
+@dataclass(frozen=True)
+class _LimitRule:
+    symbol: str | None
+    exchange: str | None
+    code_prefix: str | None
+    start_date: pd.Timestamp | None
+    end_date: pd.Timestamp | None
+    limit_rate: float
+
+
+@dataclass(frozen=True)
+class _LimitRuleBook:
+    default_limit_rate: float
+    rules: list[_LimitRule]
+
+
+@dataclass(frozen=True)
+class _IndexConstituentBook:
+    index_symbol: str
+    snapshot_dates: list[pd.Timestamp]
+    snapshot_members: list[set[str]]
 
 
 def _annualized(total_return: float, n_days: int) -> float:
@@ -391,6 +416,252 @@ def _apply_range_t_whitelist(
     return out
 
 
+def _default_price_limit_rate(symbol: str) -> float:
+    text = str(symbol).strip().upper()
+    code = text.split(".", 1)[0]
+    if text.endswith(".BJ"):
+        return 0.30
+    if text.endswith(".SH") and code.startswith("688"):
+        return 0.20
+    if text.endswith(".SZ") and code.startswith("300"):
+        return 0.20
+    return 0.10
+
+
+def _to_rule_date(value: object) -> pd.Timestamp | None:
+    text = str(value).strip()
+    if not text:
+        return None
+    ts = pd.to_datetime(text, errors="coerce")
+    if pd.isna(ts):
+        return None
+    return pd.Timestamp(ts).normalize()
+
+
+def _load_limit_rule_book(path: str) -> _LimitRuleBook | None:
+    p = Path(str(path).strip())
+    if not str(path).strip() or not p.exists():
+        return None
+    payload = json.loads(p.read_text(encoding="utf-8"))
+    if not isinstance(payload, dict):
+        return None
+    default_limit = float(payload.get("default_limit_rate", 0.10))
+    raw_rules = payload.get("rules", [])
+    if not isinstance(raw_rules, list):
+        raw_rules = []
+    rules: list[_LimitRule] = []
+    for raw in raw_rules:
+        if not isinstance(raw, dict):
+            continue
+        symbol = str(raw.get("symbol", "")).strip().upper() or None
+        exchange = str(raw.get("exchange", "")).strip().upper() or None
+        code_prefix = str(raw.get("code_prefix", "")).strip() or None
+        rate = pd.to_numeric(raw.get("limit_rate", np.nan), errors="coerce")
+        if pd.isna(rate):
+            continue
+        start_date = _to_rule_date(raw.get("start_date", ""))
+        end_date = _to_rule_date(raw.get("end_date", ""))
+        rules.append(
+            _LimitRule(
+                symbol=symbol,
+                exchange=exchange,
+                code_prefix=code_prefix,
+                start_date=start_date,
+                end_date=end_date,
+                limit_rate=float(rate),
+            )
+        )
+    return _LimitRuleBook(default_limit_rate=float(default_limit), rules=rules)
+
+
+def _resolve_price_limit_rate(
+    symbol: str,
+    *,
+    date: pd.Timestamp,
+    rule_book: _LimitRuleBook | None,
+) -> float:
+    if rule_book is None:
+        return _default_price_limit_rate(symbol)
+    info = normalize_symbol(symbol)
+    day = pd.Timestamp(date).normalize()
+    matched: _LimitRule | None = None
+    for rule in rule_book.rules:
+        if rule.symbol is not None and rule.symbol != info.symbol:
+            continue
+        if rule.exchange is not None and rule.exchange != info.exchange:
+            continue
+        if rule.code_prefix is not None and not info.code.startswith(rule.code_prefix):
+            continue
+        if rule.start_date is not None and day < rule.start_date:
+            continue
+        if rule.end_date is not None and day > rule.end_date:
+            continue
+        matched = rule
+        break
+    if matched is not None:
+        return float(matched.limit_rate)
+    return float(rule_book.default_limit_rate) if rule_book.default_limit_rate > 0 else _default_price_limit_rate(symbol)
+
+
+def _load_index_constituent_book(path: str, index_symbol: str) -> _IndexConstituentBook | None:
+    p = Path(str(path).strip())
+    if not str(path).strip() or not p.exists():
+        return None
+    raw = pd.read_csv(p)
+    if raw.empty:
+        return None
+    cols = {c.lower(): c for c in raw.columns}
+    date_col = cols.get("date")
+    symbol_col = cols.get("symbol")
+    if date_col is None or symbol_col is None:
+        raise ValueError(f"index constituent file missing required columns: {p}")
+    idx_col = cols.get("index_symbol")
+    frame = raw.copy()
+    frame["date"] = pd.to_datetime(frame[date_col], errors="coerce").dt.normalize()
+    frame["symbol"] = frame[symbol_col].astype(str).str.strip().str.upper()
+    if idx_col is not None:
+        idx = frame[idx_col].astype(str).str.strip().str.upper()
+        frame = frame[idx == str(index_symbol).strip().upper()]
+    frame = frame.dropna(subset=["date"])
+    if frame.empty:
+        return None
+    frame = frame[frame["symbol"].str.len() > 0]
+    frame = frame.sort_values(["date", "symbol"])
+    snapshot_dates: list[pd.Timestamp] = []
+    snapshot_members: list[set[str]] = []
+    for d, grp in frame.groupby("date", sort=True):
+        members: set[str] = set()
+        for sym in grp["symbol"].tolist():
+            try:
+                members.add(normalize_symbol(sym).symbol)
+            except Exception:
+                continue
+        if members:
+            snapshot_dates.append(pd.Timestamp(d).normalize())
+            snapshot_members.append(members)
+    if not snapshot_dates:
+        return None
+    return _IndexConstituentBook(
+        index_symbol=str(index_symbol).strip().upper(),
+        snapshot_dates=snapshot_dates,
+        snapshot_members=snapshot_members,
+    )
+
+
+def _members_asof(book: _IndexConstituentBook, date: pd.Timestamp) -> set[str] | None:
+    day = pd.Timestamp(date).normalize()
+    dates = book.snapshot_dates
+    lo = 0
+    hi = len(dates) - 1
+    idx = -1
+    while lo <= hi:
+        mid = (lo + hi) // 2
+        if dates[mid] <= day:
+            idx = mid
+            lo = mid + 1
+        else:
+            hi = mid - 1
+    if idx < 0:
+        return None
+    return book.snapshot_members[idx]
+
+
+def _is_one_price_bar(open_: float, high: float, low: float, close: float) -> bool:
+    if not (np.isfinite(open_) and np.isfinite(high) and np.isfinite(low) and np.isfinite(close)):
+        return False
+    base = max(1.0, abs(close))
+    tol = 1e-4 * base
+    return (abs(high - low) <= tol) and (abs(open_ - close) <= tol)
+
+
+def _build_tradeability_flags(
+    *,
+    date: pd.Timestamp,
+    symbols: list[str],
+    item_map: dict[str, dict[str, float | str]],
+    min_volume: float,
+    limit_tolerance: float,
+    limit_rule_book: _LimitRuleBook | None,
+) -> tuple[np.ndarray, np.ndarray, int]:
+    can_buy = np.ones(len(symbols), dtype=bool)
+    can_sell = np.ones(len(symbols), dtype=bool)
+    suspended_count = 0
+    tol = max(0.0, float(limit_tolerance))
+    min_vol = max(0.0, float(min_volume))
+
+    for i, symbol in enumerate(symbols):
+        item = item_map.get(symbol)
+        if item is None:
+            can_buy[i] = False
+            can_sell[i] = False
+            suspended_count += 1
+            continue
+        open_ = float(item.get("open", np.nan))
+        high = float(item.get("high", np.nan))
+        low = float(item.get("low", np.nan))
+        close = float(item.get("close", np.nan))
+        volume = float(item.get("volume", np.nan))
+        ret_1 = float(item.get("ret_1", np.nan))
+
+        is_suspended = (
+            (not np.isfinite(open_))
+            or (not np.isfinite(high))
+            or (not np.isfinite(low))
+            or (not np.isfinite(close))
+            or (not np.isfinite(volume))
+            or (volume <= min_vol)
+        )
+        if is_suspended:
+            can_buy[i] = False
+            can_sell[i] = False
+            suspended_count += 1
+            continue
+
+        limit_rate = _resolve_price_limit_rate(symbol, date=date, rule_book=limit_rule_book)
+        one_price = _is_one_price_bar(open_, high, low, close)
+        hit_up = np.isfinite(ret_1) and (ret_1 >= (limit_rate - tol))
+        hit_down = np.isfinite(ret_1) and (ret_1 <= (-limit_rate + tol))
+
+        if one_price and hit_up:
+            can_buy[i] = False
+        if one_price and hit_down:
+            can_sell[i] = False
+
+    return can_buy, can_sell, suspended_count
+
+
+def _apply_tradeability_guard(
+    *,
+    prev_weights: np.ndarray,
+    target_weights: np.ndarray,
+    can_buy: np.ndarray,
+    can_sell: np.ndarray,
+    min_weight_change_to_trade: float,
+) -> tuple[np.ndarray, int, int]:
+    prev = np.asarray(prev_weights, dtype=float)
+    out = np.asarray(target_weights, dtype=float).copy()
+    n = len(prev)
+    if out.shape[0] != n:
+        out = np.zeros(n, dtype=float)
+    if can_buy.shape[0] != n or can_sell.shape[0] != n:
+        return prev.copy(), 0, 0
+
+    min_delta = max(0.0, float(min_weight_change_to_trade))
+    blocked_buy = 0
+    blocked_sell = 0
+    for i in range(n):
+        delta = float(out[i] - prev[i])
+        if abs(delta) < min_delta:
+            continue
+        if delta > 0.0 and not bool(can_buy[i]):
+            out[i] = prev[i]
+            blocked_buy += 1
+        elif delta < 0.0 and not bool(can_sell[i]):
+            out[i] = prev[i]
+            blocked_sell += 1
+    return out, blocked_buy, blocked_sell
+
+
 def _build_window_metrics(frame: pd.DataFrame, window_years: Sequence[int], prefix: str = "") -> list[BacktestMetrics]:
     def _label(base: str) -> str:
         return f"{prefix}{base}" if prefix else base
@@ -444,11 +715,20 @@ def run_portfolio_backtest(
     margin_market_file: str = "input/margin_market.csv",
     margin_stock_file: str = "input/margin_stock.csv",
     use_state_engine: bool = True,
+    use_tradeability_guard: bool = True,
+    tradeability_limit_tolerance: float = 0.002,
+    tradeability_min_volume: float = 0.0,
+    limit_rule_file: str = "",
+    use_index_constituent_guard: bool = False,
+    index_constituent_file: str = "",
+    index_constituent_symbol: str = "000300.SH",
 ) -> BacktestResult:
     retrain_days = max(1, int(retrain_days))
     total_cost_rate = max(0.0, float(commission_bps) + float(slippage_bps)) / 10000.0
     news_enabled = bool(apply_news_fusion)
     news_list = list(news_items or [])
+    limit_rule_book = _load_limit_rule_book(limit_rule_file)
+    index_book = _load_index_constituent_book(index_constituent_file, index_constituent_symbol)
     runtime_budget = max(0.0, float(max_runtime_seconds))
     start_ts = time.monotonic()
     deadline_ts = start_ts + runtime_budget if runtime_budget > 0.0 else None
@@ -555,6 +835,13 @@ def run_portfolio_backtest(
     max_observed_week_trades_fused = 0
     oversell_violations_quant = 0
     oversell_violations_fused = 0
+    blocked_buy_quant = 0
+    blocked_sell_quant = 0
+    blocked_buy_fused = 0
+    blocked_sell_fused = 0
+    suspended_symbol_days = 0
+    non_member_symbol_days = 0
+    no_member_snapshot_days = 0
 
     timeout_hit = False
     processed_days = 0
@@ -792,30 +1079,55 @@ def run_portfolio_backtest(
                         "fwd_ret_1": float(row["fwd_ret_1"].iloc[0]),
                         "ret_1": float(row["ret_1"].iloc[0]),
                         "price_pos_20": float(row["price_pos_20"].iloc[0]),
+                        "open": float(row["open"].iloc[0]),
+                        "high": float(row["high"].iloc[0]),
+                        "low": float(row["low"].iloc[0]),
+                        "close": float(row["close"].iloc[0]),
+                        "volume": float(row["volume"].iloc[0]),
                     }
                 )
 
             if not score_items:
                 continue
 
-            quant_weights_raw = allocate_weights(
-                [float(item["quant_score"]) for item in score_items],
+            member_mask = np.ones(len(symbols), dtype=bool)
+            if use_index_constituent_guard and index_book is not None:
+                members = _members_asof(index_book, date)
+                if members is None:
+                    member_mask = np.zeros(len(symbols), dtype=bool)
+                    no_member_snapshot_days += 1
+                else:
+                    member_mask = np.array([symbol in members for symbol in symbols], dtype=bool)
+                non_member_symbol_days += int(np.sum(~member_mask))
+
+            eligible_symbols = [s for s, keep in zip(symbols, member_mask) if bool(keep)]
+            quant_score_map = {str(item["symbol"]): float(item["quant_score"]) for item in score_items}
+            fused_score_map = {str(item["symbol"]): float(item["fused_score"]) for item in score_items}
+            eligible_scores_quant = [quant_score_map.get(sym, 0.0) for sym in eligible_symbols]
+            eligible_scores_fused = [fused_score_map.get(sym, 0.0) for sym in eligible_symbols]
+
+            quant_weights_eligible = allocate_weights(
+                eligible_scores_quant,
                 total_exposure=total_exposure_quant,
                 threshold=threshold_quant,
                 max_positions=max_pos_quant,
             )
-            fused_weights_raw = allocate_weights(
-                [float(item["fused_score"]) for item in score_items],
+            fused_weights_eligible = allocate_weights(
+                eligible_scores_fused,
                 total_exposure=total_exposure_fused,
                 threshold=threshold_fused,
                 max_positions=max_pos_fused,
             )
-            quant_weight_map = {str(item["symbol"]): float(w) for item, w in zip(score_items, quant_weights_raw)}
-            fused_weight_map = {str(item["symbol"]): float(w) for item, w in zip(score_items, fused_weights_raw)}
+            quant_weight_map = {str(sym): float(w) for sym, w in zip(eligible_symbols, quant_weights_eligible)}
+            fused_weight_map = {str(sym): float(w) for sym, w in zip(eligible_symbols, fused_weights_eligible)}
+            item_map = {str(item["symbol"]): item for item in score_items}
             target_weights_quant = np.array([quant_weight_map.get(symbol, 0.0) for symbol in symbols], dtype=float)
             target_weights_fused = np.array([fused_weight_map.get(symbol, 0.0) for symbol in symbols], dtype=float)
-            ret_1_arr = np.array([float(item["ret_1"]) for item in score_items], dtype=float)
-            price_pos_20_arr = np.array([float(item["price_pos_20"]) for item in score_items], dtype=float)
+            ret_1_arr = np.array([float(item_map.get(symbol, {}).get("ret_1", np.nan)) for symbol in symbols], dtype=float)
+            price_pos_20_arr = np.array(
+                [float(item_map.get(symbol, {}).get("price_pos_20", np.nan)) for symbol in symbols],
+                dtype=float,
+            )
 
             if state_code_quant == "range":
                 target_weights_quant = _apply_range_t_whitelist(
@@ -841,6 +1153,37 @@ def run_portfolio_backtest(
                     buy_ret_1_max=range_t_buy_ret_1_max,
                     buy_price_pos_20_max=range_t_buy_price_pos_20_max,
                 )
+
+            if use_tradeability_guard:
+                can_buy, can_sell, suspended_count = _build_tradeability_flags(
+                    date=date,
+                    symbols=symbols,
+                    item_map=item_map,
+                    min_volume=float(tradeability_min_volume),
+                    limit_tolerance=float(tradeability_limit_tolerance),
+                    limit_rule_book=limit_rule_book,
+                )
+                if use_index_constituent_guard and index_book is not None:
+                    can_buy = can_buy & member_mask
+                suspended_symbol_days += int(suspended_count)
+                target_weights_quant, block_buy_q, block_sell_q = _apply_tradeability_guard(
+                    prev_weights=prev_weights_quant,
+                    target_weights=target_weights_quant,
+                    can_buy=can_buy,
+                    can_sell=can_sell,
+                    min_weight_change_to_trade=min_weight_change_to_trade,
+                )
+                target_weights_fused, block_buy_f, block_sell_f = _apply_tradeability_guard(
+                    prev_weights=prev_weights_fused,
+                    target_weights=target_weights_fused,
+                    can_buy=can_buy,
+                    can_sell=can_sell,
+                    min_weight_change_to_trade=min_weight_change_to_trade,
+                )
+                blocked_buy_quant += int(block_buy_q)
+                blocked_sell_quant += int(block_sell_q)
+                blocked_buy_fused += int(block_buy_f)
+                blocked_sell_fused += int(block_sell_f)
 
             if use_turnover_control:
                 (
@@ -979,6 +1322,22 @@ def run_portfolio_backtest(
 
     audit: dict[str, float | int | bool] = {
         "use_state_engine": bool(use_state_engine),
+        "use_tradeability_guard": bool(use_tradeability_guard),
+        "tradeability_limit_tolerance": float(tradeability_limit_tolerance),
+        "tradeability_min_volume": float(tradeability_min_volume),
+        "limit_rule_file_enabled": bool(str(limit_rule_file).strip()),
+        "use_index_constituent_guard": bool(use_index_constituent_guard),
+        "index_constituent_file_enabled": bool(str(index_constituent_file).strip()),
+        "index_constituent_symbol": str(index_constituent_symbol).strip().upper(),
+        "non_member_symbol_days": int(non_member_symbol_days),
+        "no_member_snapshot_days": int(no_member_snapshot_days),
+        "blocked_buy_quant": int(blocked_buy_quant),
+        "blocked_sell_quant": int(blocked_sell_quant),
+        "blocked_buy_fused": int(blocked_buy_fused),
+        "blocked_sell_fused": int(blocked_sell_fused),
+        "blocked_total_quant": int(blocked_buy_quant + blocked_sell_quant),
+        "blocked_total_fused": int(blocked_buy_fused + blocked_sell_fused),
+        "suspended_symbol_days": int(suspended_symbol_days),
         "max_trades_per_stock_per_day_limit": int(max_trades_per_stock_per_day),
         "max_trades_per_stock_per_week_limit": int(max_trades_per_stock_per_week),
         "max_observed_week_trades_quant": int(max_observed_week_trades_quant),
