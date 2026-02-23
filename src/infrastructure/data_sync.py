@@ -16,6 +16,8 @@ from src.infrastructure.market_data import DataError, load_symbol_daily
 
 
 EASTMONEY_CLIST_URL = "https://push2.eastmoney.com/api/qt/clist/get"
+_HTTP_SESSION = requests.Session()
+_HTTP_SESSION.trust_env = False
 INDEX_SECURITIES: tuple[Security, ...] = (
     Security(symbol="000300.SH", name="沪深300", sector="指数"),
     Security(symbol="000001.SH", name="上证指数", sector="指数"),
@@ -100,7 +102,7 @@ def fetch_eastmoney_universe(limit: int, *, min_amount: float = 5e7, exclude_st:
             "fields": "f12,f13,f14,f2,f3,f6",
             "ut": "bd1d9ddb04089700cf9c27f6f7426281",
         }
-        resp = requests.get(EASTMONEY_CLIST_URL, params=params, timeout=20)
+        resp = _HTTP_SESSION.get(EASTMONEY_CLIST_URL, params=params, timeout=20)
         resp.raise_for_status()
         payload = resp.json()
         data = payload.get("data") if isinstance(payload, dict) else None
@@ -188,6 +190,8 @@ def _prepare_universe(
     universe_size: int,
     universe_file: str,
     data_dir: str,
+    universe_min_amount: float,
+    universe_exclude_st: bool,
 ) -> tuple[list[Security], str]:
     if str(universe_file).strip():
         rows = _load_universe_file(universe_file)
@@ -196,7 +200,11 @@ def _prepare_universe(
 
     last_error = ""
     try:
-        rows = fetch_eastmoney_universe(limit=max(1, int(universe_size)))
+        rows = fetch_eastmoney_universe(
+            limit=max(1, int(universe_size)),
+            min_amount=float(universe_min_amount),
+            exclude_st=bool(universe_exclude_st),
+        )
         if rows:
             return rows, "eastmoney"
     except Exception as exc:
@@ -262,12 +270,16 @@ def sync_market_data(
     sleep_ms: int = 80,
     max_failures: int = 100,
     write_universe_file: str = "",
+    universe_min_amount: float = 5e7,
+    universe_exclude_st: bool = True,
 ) -> DataSyncResult:
     Path(data_dir).mkdir(parents=True, exist_ok=True)
     rows, universe_source = _prepare_universe(
         universe_size=universe_size,
         universe_file=universe_file,
         data_dir=data_dir,
+        universe_min_amount=float(universe_min_amount),
+        universe_exclude_st=bool(universe_exclude_st),
     )
     rows = rows[: max(1, int(universe_size))]
     if include_indices:

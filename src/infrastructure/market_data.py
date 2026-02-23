@@ -12,6 +12,8 @@ from src.domain.symbols import SymbolError, normalize_symbol
 
 
 EASTMONEY_KLINE_URL = "https://push2his.eastmoney.com/api/qt/stock/kline/get"
+_HTTP_SESSION = requests.Session()
+_HTTP_SESSION.trust_env = False
 EASTMONEY_CACHE_DIR = "_eastmoney_cache"
 AUTO_SOURCE_CHAIN = ("eastmoney", "tushare", "akshare", "baostock")
 SUPPORTED_SOURCES = {"eastmoney", "tushare", "akshare", "baostock", "local", "auto"}
@@ -105,7 +107,7 @@ def fetch_eastmoney_daily(
     last_error: Exception | None = None
     for attempt in range(1, max(1, int(retries)) + 1):
         try:
-            resp = requests.get(EASTMONEY_KLINE_URL, params=params, headers=headers, timeout=timeout)
+            resp = _HTTP_SESSION.get(EASTMONEY_KLINE_URL, params=params, headers=headers, timeout=timeout)
             resp.raise_for_status()
             payload = resp.json()
             break

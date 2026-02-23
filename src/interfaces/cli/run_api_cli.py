@@ -46,6 +46,8 @@ DEFAULT_TASK: dict[str, dict[str, Any]] = {
     "sync-data": {
         "universe_size": 500,
         "universe_file": "",
+        "universe_min_amount": 50000000.0,
+        "universe_exclude_st": True,
         "include_indices": True,
         "force_refresh": False,
         "sleep_ms": 80,
@@ -639,6 +641,20 @@ def build_parser() -> argparse.ArgumentParser:
     sync.add_argument("--universe-size", dest="universe_size", type=int, default=None, help="Universe size target")
     sync.add_argument("--universe-file", dest="universe_file", default=None, help="Optional universe file (csv/json)")
     sync.add_argument(
+        "--universe-min-amount",
+        dest="universe_min_amount",
+        type=float,
+        default=None,
+        help="Minimum成交额 filter for auto universe fetch; set 0 for full A-share coverage",
+    )
+    sync.add_argument(
+        "--universe-exclude-st",
+        dest="universe_exclude_st",
+        choices=["true", "false"],
+        default=None,
+        help="Whether to exclude ST names in auto universe fetch",
+    )
+    sync.add_argument(
         "--include-indices",
         dest="include_indices",
         choices=["true", "false"],
@@ -842,6 +858,8 @@ def run_sync_data(settings: dict[str, Any]) -> int:
         sleep_ms=int(settings["sleep_ms"]),
         max_failures=int(settings["max_failures"]),
         write_universe_file=settings["write_universe_file"],
+        universe_min_amount=max(0.0, float(settings["universe_min_amount"])),
+        universe_exclude_st=_parse_bool(settings["universe_exclude_st"]),
     )
     print(f"[OK] Universe source: {result.universe_source}")
     print(f"[OK] Universe size: {result.universe_size} (requested {result.requested_universe_size})")
