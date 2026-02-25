@@ -1,0 +1,15 @@
+{
+  "market_index": {
+    "symbol": "000300.SH",
+    "name": "沪深300",
+    "sector": "指数"
+  },
+  "stocks": [
+    {"symbol": "600673.SH", "name": "东阳光", "sector": "自定义持仓"},
+    {"symbol": "605255.SH", "name": "天普股份", "sector": "自定义持仓"},
+    {"symbol": "001203.SZ", "name": "大中矿业", "sector": "自定义持仓"},
+    {"symbol": "002772.SZ", "name": "众兴菌业", "sector": "自定义持仓"},
+    {"symbol": "000630.SZ", "name": "铜陵有色", "sector": "自定义持仓"},
+    {"symbol": "601233.SH", "name": "桐昆股份", "sector": "自定义持仓"}
+  ]
+}

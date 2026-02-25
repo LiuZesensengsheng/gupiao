@@ -1,0 +1,13 @@
+{
+  "market_index": {
+    "symbol": "000300.SH",
+    "name": "沪深300",
+    "sector": "指数"
+  },
+  "stocks": [
+    {"symbol": "600673.SH", "name": "东阳光", "sector": "当前持仓"},
+    {"symbol": "603619.SH", "name": "中曼石油", "sector": "当前持仓"},
+    {"symbol": "001203.SZ", "name": "大中矿业", "sector": "当前持仓"},
+    {"symbol": "605255.SH", "name": "天普股份", "sector": "当前持仓"}
+  ]
+}

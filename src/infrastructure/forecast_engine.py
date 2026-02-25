@@ -89,6 +89,7 @@ def run_quant_pipeline(
     use_margin_features: bool = True,
     margin_market_file: str = "input/margin_market.csv",
     margin_stock_file: str = "input/margin_stock.csv",
+    enable_walk_forward_eval: bool = True,
 ) -> tuple[MarketForecast, list[ForecastRow]]:
     market_raw = load_symbol_daily(
         symbol=market_security.symbol,
@@ -125,88 +126,111 @@ def run_quant_pipeline(
         latest_date=pd.Timestamp(mkt_latest["date"]),
         short_prob=float(market_short_model.predict_proba(mkt_latest_df, market_feature_cols)[0]),
         mid_prob=float(market_mid_model.predict_proba(mkt_latest_df, market_feature_cols)[0]),
-        short_eval=_walk_forward_eval(
-            market_feat,
-            feature_cols=market_feature_cols,
-            target_col="mkt_target_1d_up",
-            l2=l2,
-            min_train_days=min_train_days,
-            step_days=step_days,
+        short_eval=(
+            _walk_forward_eval(
+                market_feat,
+                feature_cols=market_feature_cols,
+                target_col="mkt_target_1d_up",
+                l2=l2,
+                min_train_days=min_train_days,
+                step_days=step_days,
+            )
+            if enable_walk_forward_eval
+            else BinaryMetrics.empty()
         ),
-        mid_eval=_walk_forward_eval(
-            market_feat,
-            feature_cols=market_feature_cols,
-            target_col="mkt_target_20d_up",
-            l2=l2,
-            min_train_days=min_train_days,
-            step_days=step_days,
+        mid_eval=(
+            _walk_forward_eval(
+                market_feat,
+                feature_cols=market_feature_cols,
+                target_col="mkt_target_20d_up",
+                l2=l2,
+                min_train_days=min_train_days,
+                step_days=step_days,
+            )
+            if enable_walk_forward_eval
+            else BinaryMetrics.empty()
         ),
     )
 
     stock_rows: list[ForecastRow] = []
     for security in stock_securities:
-        stock_raw = load_symbol_daily(
-            symbol=security.symbol,
-            source=source,
-            data_dir=data_dir,
-            start=start,
-            end=end,
-        )
-        stock_feat = make_stock_feature_frame(stock_raw, market_feat)
-        stock_margin_cols: list[str] = []
-        if use_margin_features:
-            margin_frame, margin_cols, _ = build_stock_margin_features(
-                margin_stock_file=margin_stock_file,
+        try:
+            stock_raw = load_symbol_daily(
                 symbol=security.symbol,
+                source=source,
+                data_dir=data_dir,
                 start=start,
                 end=end,
             )
-            if margin_cols:
-                stock_feat = stock_feat.merge(margin_frame, on="date", how="left", validate="1:1")
-                stock_margin_cols = list(margin_cols)
+            stock_feat = make_stock_feature_frame(stock_raw, market_feat)
+            stock_margin_cols: list[str] = []
+            if use_margin_features:
+                margin_frame, margin_cols, _ = build_stock_margin_features(
+                    margin_stock_file=margin_stock_file,
+                    symbol=security.symbol,
+                    start=start,
+                    end=end,
+                )
+                if margin_cols:
+                    stock_feat = stock_feat.merge(margin_frame, on="date", how="left", validate="1:1")
+                    stock_margin_cols = list(margin_cols)
 
-        feature_cols = stock_feature_columns(
-            extra_market_cols=market_context.feature_columns,
-            extra_stock_cols=stock_margin_cols,
-        )
-
-        short_model = _fit_latest_model(stock_feat, feature_cols=feature_cols, target_col="target_1d_up", l2=l2)
-        mid_model = _fit_latest_model(stock_feat, feature_cols=feature_cols, target_col="target_20d_up", l2=l2)
-        latest_row = _latest_row_with_features(stock_feat, feature_cols)
-        latest_df = pd.DataFrame([latest_row])
-
-        short_prob = float(short_model.predict_proba(latest_df, feature_cols=feature_cols)[0])
-        mid_prob = float(mid_model.predict_proba(latest_df, feature_cols=feature_cols)[0])
-        score = blend_horizon_score(short_prob, mid_prob, short_weight=0.55)
-
-        stock_rows.append(
-            ForecastRow(
-                symbol=normalize_symbol(security.symbol).symbol,
-                name=security.name,
-                latest_date=pd.Timestamp(latest_row["date"]),
-                short_prob=short_prob,
-                mid_prob=mid_prob,
-                score=score,
-                short_drivers=short_model.top_drivers(latest_row, top_n=3),
-                mid_drivers=mid_model.top_drivers(latest_row, top_n=3),
-                short_eval=_walk_forward_eval(
-                    stock_feat,
-                    feature_cols=feature_cols,
-                    target_col="target_1d_up",
-                    l2=l2,
-                    min_train_days=min_train_days,
-                    step_days=step_days,
-                ),
-                mid_eval=_walk_forward_eval(
-                    stock_feat,
-                    feature_cols=feature_cols,
-                    target_col="target_20d_up",
-                    l2=l2,
-                    min_train_days=min_train_days,
-                    step_days=step_days,
-                ),
+            feature_cols = stock_feature_columns(
+                extra_market_cols=market_context.feature_columns,
+                extra_stock_cols=stock_margin_cols,
             )
-        )
+
+            short_model = _fit_latest_model(stock_feat, feature_cols=feature_cols, target_col="target_1d_up", l2=l2)
+            mid_model = _fit_latest_model(stock_feat, feature_cols=feature_cols, target_col="target_20d_up", l2=l2)
+            latest_row = _latest_row_with_features(stock_feat, feature_cols)
+            latest_df = pd.DataFrame([latest_row])
+
+            short_prob = float(short_model.predict_proba(latest_df, feature_cols=feature_cols)[0])
+            mid_prob = float(mid_model.predict_proba(latest_df, feature_cols=feature_cols)[0])
+            score = blend_horizon_score(short_prob, mid_prob, short_weight=0.55)
+
+            stock_rows.append(
+                ForecastRow(
+                    symbol=normalize_symbol(security.symbol).symbol,
+                    name=security.name,
+                    latest_date=pd.Timestamp(latest_row["date"]),
+                    short_prob=short_prob,
+                    mid_prob=mid_prob,
+                    score=score,
+                    short_drivers=short_model.top_drivers(latest_row, top_n=3),
+                    mid_drivers=mid_model.top_drivers(latest_row, top_n=3),
+                    short_eval=(
+                        _walk_forward_eval(
+                            stock_feat,
+                            feature_cols=feature_cols,
+                            target_col="target_1d_up",
+                            l2=l2,
+                            min_train_days=min_train_days,
+                            step_days=step_days,
+                        )
+                        if enable_walk_forward_eval
+                        else BinaryMetrics.empty()
+                    ),
+                    mid_eval=(
+                        _walk_forward_eval(
+                            stock_feat,
+                            feature_cols=feature_cols,
+                            target_col="target_20d_up",
+                            l2=l2,
+                            min_train_days=min_train_days,
+                            step_days=step_days,
+                        )
+                        if enable_walk_forward_eval
+                        else BinaryMetrics.empty()
+                    ),
+                )
+            )
+        except Exception:
+            # Skip symbols with broken/insufficient data so large-universe scans can continue.
+            continue
+
+    if not stock_rows:
+        raise DataError("No valid stock rows with complete features for selected universe.")
 
     total_exposure = target_exposure(market_forecast.short_prob, market_forecast.mid_prob)
     weights = allocate_weights(

@@ -250,12 +250,13 @@ def write_daily_dashboard(out_path: str | Path, result: DailyFusionResult) -> Pa
     exposure = float(result.effective_total_exposure)
 
     stock_rows = sorted(result.blended_rows, key=lambda x: x.final_score, reverse=True)
+    stock_rows_display = stock_rows[:20]
     sector_rows = result.sector_table.to_dict("records") if not result.sector_table.empty else []
 
     stock_table_rows: list[str] = []
     matrix_rows: list[str] = []
     driver_rows: list[str] = []
-    for row in stock_rows:
+    for row in stock_rows_display:
         name = escape(str(row.name))
         symbol = escape(str(row.symbol))
         short_drivers = escape(format_driver_list(row.short_drivers))
@@ -485,6 +486,19 @@ def write_daily_dashboard(out_path: str | Path, result: DailyFusionResult) -> Pa
       overflow: hidden;
       background: #fff;
     }}
+    .table-scroll {{
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      overflow: auto;
+      max-height: 560px;
+      background: #fff;
+    }}
+    .table-scroll table {{
+      border: none;
+      border-radius: 0;
+      min-width: 980px;
+      margin: 0;
+    }}
     th, td {{
       padding: 10px 8px;
       border-bottom: 1px solid var(--line);
@@ -639,15 +653,17 @@ def write_daily_dashboard(out_path: str | Path, result: DailyFusionResult) -> Pa
 
     <div class="section-grid">
       <section>
-        <h2>个股综合排序</h2>
-        <table>
-          <thead>
-            <tr><th>个股</th><th>融合短期</th><th>融合中期</th><th>综合分数</th><th>分数强度</th><th>建议权重</th><th>短期方式</th><th>中期方式</th><th>量价风险</th></tr>
-          </thead>
-          <tbody>
-            {''.join(stock_table_rows) if stock_table_rows else '<tr><td colspan="9">无数据</td></tr>'}
-          </tbody>
-        </table>
+        <h2>个股综合排序 (前{len(stock_rows_display)} / 共{len(stock_rows)})</h2>
+        <div class="table-scroll">
+          <table>
+            <thead>
+              <tr><th>个股</th><th>融合短期</th><th>融合中期</th><th>综合分数</th><th>分数强度</th><th>建议权重</th><th>短期方式</th><th>中期方式</th><th>量价风险</th></tr>
+            </thead>
+            <tbody>
+              {''.join(stock_table_rows) if stock_table_rows else '<tr><td colspan="9">无数据</td></tr>'}
+            </tbody>
+          </table>
+        </div>
       </section>
 
       <section>
@@ -676,20 +692,22 @@ def write_daily_dashboard(out_path: str | Path, result: DailyFusionResult) -> Pa
     </div>
 
     <section>
-      <h2>因子解释 (最新截面)</h2>
-      <table>
-        <thead>
-          <tr><th>个股</th><th>短期驱动</th><th>中期驱动</th><th>风险备注</th></tr>
-        </thead>
-        <tbody>
-          {''.join(driver_rows) if driver_rows else '<tr><td colspan="4">无数据</td></tr>'}
-        </tbody>
-      </table>
+      <h2>组合回测曲线 (交易级, 含成本)</h2>
+      {curve_html}
     </section>
 
     <section>
-      <h2>组合回测曲线 (交易级, 含成本)</h2>
-      {curve_html}
+      <h2>因子解释 (最新截面)</h2>
+      <div class="table-scroll">
+        <table>
+          <thead>
+            <tr><th>个股</th><th>短期驱动</th><th>中期驱动</th><th>风险备注</th></tr>
+          </thead>
+          <tbody>
+            {''.join(driver_rows) if driver_rows else '<tr><td colspan="4">无数据</td></tr>'}
+          </tbody>
+        </table>
+      </div>
     </section>
 
     <section>
@@ -723,17 +741,19 @@ def write_daily_dashboard(out_path: str | Path, result: DailyFusionResult) -> Pa
     </section>
 
     <section>
-      <h2>新闻模糊矩阵</h2>
-      <table>
-        <thead>
-          <tr><th>标的</th><th>周期</th><th>利好隶属</th><th>利空隶属</th><th>中性隶属</th><th>条数</th></tr>
-        </thead>
-        <tbody>
-          <tr><td><div class="sym">{escape(market.name)}</div><div class="code">{escape(market.symbol)}</div></td><td>短期</td><td><span class="pill bull">{result.market_short_sent.bullish:.3f}</span></td><td><span class="pill bear">{result.market_short_sent.bearish:.3f}</span></td><td>{result.market_short_sent.neutral:.3f}</td><td>{result.market_short_sent.items}</td></tr>
-          <tr><td><div class="sym">{escape(market.name)}</div><div class="code">{escape(market.symbol)}</div></td><td>中期</td><td><span class="pill bull">{result.market_mid_sent.bullish:.3f}</span></td><td><span class="pill bear">{result.market_mid_sent.bearish:.3f}</span></td><td>{result.market_mid_sent.neutral:.3f}</td><td>{result.market_mid_sent.items}</td></tr>
-          {''.join(matrix_rows) if matrix_rows else '<tr><td colspan="6">无数据</td></tr>'}
-        </tbody>
-      </table>
+      <h2>新闻模糊矩阵 (个股前{len(stock_rows_display)})</h2>
+      <div class="table-scroll">
+        <table>
+          <thead>
+            <tr><th>标的</th><th>周期</th><th>利好隶属</th><th>利空隶属</th><th>中性隶属</th><th>条数</th></tr>
+          </thead>
+          <tbody>
+            <tr><td><div class="sym">{escape(market.name)}</div><div class="code">{escape(market.symbol)}</div></td><td>短期</td><td><span class="pill bull">{result.market_short_sent.bullish:.3f}</span></td><td><span class="pill bear">{result.market_short_sent.bearish:.3f}</span></td><td>{result.market_short_sent.neutral:.3f}</td><td>{result.market_short_sent.items}</td></tr>
+            <tr><td><div class="sym">{escape(market.name)}</div><div class="code">{escape(market.symbol)}</div></td><td>中期</td><td><span class="pill bull">{result.market_mid_sent.bullish:.3f}</span></td><td><span class="pill bear">{result.market_mid_sent.bearish:.3f}</span></td><td>{result.market_mid_sent.neutral:.3f}</td><td>{result.market_mid_sent.items}</td></tr>
+            {''.join(matrix_rows) if matrix_rows else '<tr><td colspan="6">无数据</td></tr>'}
+          </tbody>
+        </table>
+      </div>
     </section>
 
     <section>

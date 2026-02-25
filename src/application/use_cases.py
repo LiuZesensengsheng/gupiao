@@ -116,6 +116,8 @@ def generate_forecast(
     config: ForecastConfig,
     market_security: Security,
     stocks: List[Security],
+    *,
+    enable_walk_forward_eval: bool = True,
 ) -> ForecastResult:
     market_forecast, stock_rows = run_quant_pipeline(
         market_security=market_security,
@@ -131,6 +133,7 @@ def generate_forecast(
         use_margin_features=config.use_margin_features,
         margin_market_file=config.margin_market_file,
         margin_stock_file=config.margin_stock_file,
+        enable_walk_forward_eval=bool(enable_walk_forward_eval),
     )
     return ForecastResult(market_forecast=market_forecast, stock_rows=stock_rows)
 
@@ -170,6 +173,7 @@ def generate_discovery(
         ),
         market_security=market_security,
         stocks=universe.rows,
+        enable_walk_forward_eval=False,
     )
     as_of_date = pd.Timestamp(forecast.market_forecast.latest_date).normalize()
     market_raw = load_symbol_daily(

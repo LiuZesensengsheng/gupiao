@@ -1,0 +1,384 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>A股每日融合仪表盘</title>
+  <style>
+    :root {
+      --bg: #f4f7fb;
+      --card: #ffffff;
+      --ink: #14213d;
+      --muted: #6b7280;
+      --line: #e8edf5;
+      --bull: #cf3131;
+      --bear: #1f63d8;
+      --grad: linear-gradient(145deg, #163877 0%, #2158b6 42%, #4b86e8 100%);
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: "Avenir Next", "PingFang SC", "Hiragino Sans GB", "Noto Sans CJK SC", sans-serif;
+      color: var(--ink);
+      background:
+        radial-gradient(circle at 10% 0%, #e7f0ff 0%, transparent 42%),
+        radial-gradient(circle at 95% 10%, #ffecec 0%, transparent 35%),
+        var(--bg);
+    }
+    .wrap { max-width: 1160px; margin: 0 auto; padding: 20px 14px 36px; }
+    .hero {
+      background: var(--grad);
+      color: #fff;
+      border-radius: 18px;
+      padding: 20px;
+      box-shadow: 0 12px 40px rgba(21, 62, 130, 0.22);
+      position: relative;
+      overflow: hidden;
+    }
+    .hero::after {
+      content: "";
+      position: absolute;
+      right: -120px;
+      top: -80px;
+      width: 280px;
+      height: 280px;
+      border-radius: 50%;
+      background: rgba(255, 255, 255, 0.12);
+    }
+    h1 { margin: 0; font-size: 26px; font-weight: 700; letter-spacing: 0.02em; }
+    .meta {
+      margin-top: 10px;
+      color: rgba(255,255,255,0.92);
+      font-size: 14px;
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px 14px;
+    }
+    .meta span {
+      padding: 4px 10px;
+      border: 1px solid rgba(255,255,255,0.25);
+      border-radius: 999px;
+    }
+    .grid {
+      margin-top: 14px;
+      display: grid;
+      gap: 12px;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+    }
+    .card {
+      background: var(--card);
+      border: 1px solid var(--line);
+      border-radius: 14px;
+      padding: 14px;
+      box-shadow: 0 8px 22px rgba(15, 32, 64, 0.06);
+    }
+    .k { font-size: 12px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.04em; }
+    .v { margin-top: 6px; font-size: 26px; font-weight: 700; }
+    .sub { margin-top: 4px; font-size: 13px; color: var(--muted); }
+    h2 { margin: 18px 0 10px; font-size: 18px; letter-spacing: 0.02em; }
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      overflow: hidden;
+      background: #fff;
+    }
+    .table-scroll {
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      overflow: auto;
+      max-height: 560px;
+      background: #fff;
+    }
+    .table-scroll table {
+      border: none;
+      border-radius: 0;
+      min-width: 980px;
+      margin: 0;
+    }
+    th, td {
+      padding: 10px 8px;
+      border-bottom: 1px solid var(--line);
+      text-align: left;
+      font-size: 13px;
+    }
+    th { background: #f6f9ff; color: #31456f; font-weight: 700; }
+    tr:last-child td { border-bottom: none; }
+    .sym { font-weight: 700; }
+    .code { font-size: 11px; color: var(--muted); margin-top: 2px; }
+    .score { font-weight: 700; }
+    .bar { width: 100%; height: 9px; border-radius: 999px; background: #e8edf5; overflow: hidden; }
+    .bar span { display: block; height: 100%; border-radius: 999px; }
+    .pill {
+      display: inline-block;
+      padding: 2px 9px;
+      border-radius: 999px;
+      font-weight: 700;
+      font-size: 12px;
+      min-width: 56px;
+      text-align: center;
+    }
+    .bull { background: rgba(207,49,49,0.1); color: var(--bull); }
+    .bear { background: rgba(31,99,216,0.1); color: var(--bear); }
+    .section-grid {
+      display: grid;
+      gap: 12px;
+      grid-template-columns: 2fr 1fr;
+      margin-top: 14px;
+    }
+    .curve-wrap {
+      background: #fff;
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      padding: 10px 10px 8px;
+      box-shadow: 0 8px 22px rgba(15, 32, 64, 0.05);
+    }
+    .curve-toggle {
+      display: inline-flex;
+      gap: 8px;
+      margin: 4px 0 8px;
+    }
+    .curve-toggle button {
+      border: 1px solid #c7d4ea;
+      background: #f7faff;
+      color: #2d4675;
+      border-radius: 999px;
+      font-size: 12px;
+      padding: 4px 12px;
+      cursor: pointer;
+    }
+    .curve-toggle button.active {
+      border-color: #1f63d8;
+      background: #1f63d8;
+      color: #fff;
+    }
+    .curve-wrap svg {
+      width: 100%;
+      height: auto;
+      display: block;
+    }
+    .subcurve-wrap {
+      margin-top: 10px;
+      border-top: 1px dashed var(--line);
+      padding-top: 10px;
+    }
+    .subcurve-title {
+      font-size: 12px;
+      color: var(--muted);
+      margin-bottom: 4px;
+    }
+    .subcurve-note {
+      margin: 0 0 6px;
+      color: #64748b;
+      font-size: 12px;
+      line-height: 1.5;
+    }
+    .legend {
+      margin-top: 6px;
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px 14px;
+      color: var(--muted);
+      font-size: 12px;
+    }
+    .legend span {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+    }
+    .legend i {
+      width: 10px;
+      height: 10px;
+      border-radius: 999px;
+      display: inline-block;
+    }
+    .empty {
+      border: 1px dashed var(--line);
+      border-radius: 12px;
+      color: var(--muted);
+      padding: 18px;
+      text-align: center;
+      background: #fbfcff;
+    }
+    .note { margin-top: 14px; color: var(--muted); font-size: 12px; }
+    @media (max-width: 960px) {
+      .grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      .section-grid { grid-template-columns: 1fr; }
+    }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <section class="hero">
+      <h1>A股每日融合仪表盘</h1>
+      <div class="meta">
+        <span>报告日期 2026-02-13</span>
+        <span>数据源 local</span>
+        <span>沪深300 (000300.SH)</span>
+        <span>市场状态 趋势延续 (Trend)</span>
+        <span>新闻 75 条</span>
+      </div>
+    </section>
+
+    <section class="grid">
+      <article class="card">
+        <div class="k">建议总仓位</div>
+        <div class="v">100.0%</div>
+        <div class="sub">模板 trend_push / T强度 medium / 阈值 0.56 / 持仓上限 5 / 日交易 1 / 周交易 1</div>
+      </article>
+      <article class="card">
+        <div class="k">大盘短期概率</div>
+        <div class="v">71.4%</div>
+        <div class="sub">模型 58.9% / 新闻模型 84.9% / rule</div>
+      </article>
+      <article class="card">
+        <div class="k">大盘中期概率</div>
+        <div class="v">77.5%</div>
+        <div class="sub">模型 78.0% / 新闻模型 48.2% / rule</div>
+      </article>
+      <article class="card">
+        <div class="k">风险温度</div>
+        <div class="v">低</div>
+        <div class="sub">亏钱效应与回撤共同决定</div>
+      </article>
+      <article class="card">
+        <div class="k">验收状态</div>
+        <div class="v">未通过</div>
+        <div class="sub">A/B 未通过 | 约束 未通过</div>
+      </article>
+    </section>
+
+    <div class="section-grid">
+      <section>
+        <h2>个股综合排序 (前20 / 共20)</h2>
+        <div class="table-scroll">
+          <table>
+            <thead>
+              <tr><th>个股</th><th>融合短期</th><th>融合中期</th><th>综合分数</th><th>分数强度</th><th>建议权重</th><th>短期方式</th><th>中期方式</th><th>量价风险</th></tr>
+            </thead>
+            <tbody>
+              <tr><td><div class='sym'>豫能控股</div><div class='code'>001896.SZ</div></td><td>92.5%</td><td>86.5%</td><td class='score' style='color:#d83737'>0.898</td><td><div class="bar"><span style="width:89.8%; background:#ce4b4a;"></span></div></td><td>23.1%</td><td>rule</td><td>rule</td><td>正常</td></tr><tr><td><div class='sym'>百达精工</div><div class='code'>603331.SH</div></td><td>80.1%</td><td>100.0%</td><td class='score' style='color:#d93838'>0.890</td><td><div class="bar"><span style="width:89.0%; background:#cc4c4c;"></span></div></td><td>22.6%</td><td>rule</td><td>rule</td><td>正常</td></tr><tr><td><div class='sym'>汉缆股份</div><div class='code'>002498.SZ</div></td><td>83.3%</td><td>95.9%</td><td class='score' style='color:#d93838'>0.890</td><td><div class="bar"><span style="width:89.0%; background:#cc4c4c;"></span></div></td><td>22.6%</td><td>rule</td><td>rule</td><td>正常</td></tr><tr><td><div class='sym'>航发动力</div><div class='code'>600893.SH</div></td><td>67.8%</td><td>100.0%</td><td class='score' style='color:#dc3d3d'>0.823</td><td><div class="bar"><span style="width:82.3%; background:#c24f59;"></span></div></td><td>18.0%</td><td>rule</td><td>rule</td><td>正常</td></tr><tr><td><div class='sym'>圣晖集成</div><div class='code'>603163.SH</div></td><td>56.5%</td><td>100.0%</td><td class='score' style='color:#df4242'>0.761</td><td><div class="bar"><span style="width:76.1%; background:#b85266;"></span></div></td><td>13.7%</td><td>rule</td><td>rule</td><td>正常</td></tr><tr><td><div class='sym'>美邦股份</div><div class='code'>605033.SH</div></td><td>87.0%</td><td>61.0%</td><td class='score' style='color:#df4242'>0.753</td><td><div class="bar"><span style="width:75.3%; background:#b75267;"></span></div></td><td>0.0%</td><td>rule</td><td>rule</td><td>正常</td></tr><tr><td><div class='sym'>深科技</div><div class='code'>000021.SZ</div></td><td>57.0%</td><td>94.0%</td><td class='score' style='color:#e04444'>0.737</td><td><div class="bar"><span style="width:73.7%; background:#b4536a;"></span></div></td><td>0.0%</td><td>rule</td><td>rule</td><td>正常</td></tr><tr><td><div class='sym'>浙江世宝</div><div class='code'>002703.SZ</div></td><td>74.1%</td><td>58.1%</td><td class='score' style='color:#e34949'>0.669</td><td><div class="bar"><span style="width:66.9%; background:#aa5678;"></span></div></td><td>0.0%</td><td>rule</td><td>rule</td><td>正常</td></tr><tr><td><div class='sym'>法尔胜</div><div class='code'>000890.SZ</div></td><td>71.4%</td><td>59.1%</td><td class='score' style='color:#e44949'>0.659</td><td><div class="bar"><span style="width:65.9%; background:#a8567a;"></span></div></td><td>0.0%</td><td>rule</td><td>rule</td><td>正常</td></tr><tr><td><div class='sym'>兴民智通</div><div class='code'>002355.SZ</div></td><td>48.3%</td><td>73.1%</td><td class='score' style='color:#e74e4e'>0.595</td><td><div class="bar"><span style="width:59.5%; background:#9e5987;"></span></div></td><td>0.0%</td><td>rule</td><td>rule</td><td>正常</td></tr><tr><td><div class='sym'>亚星锚链</div><div class='code'>601890.SH</div></td><td>65.0%</td><td>46.3%</td><td class='score' style='color:#e85151'>0.566</td><td><div class="bar"><span style="width:56.6%; background:#9a5a8d;"></span></div></td><td>0.0%</td><td>rule</td><td>rule</td><td>正常</td></tr><tr><td><div class='sym'>罗曼股份</div><div class='code'>605289.SH</div></td><td>74.3%</td><td>34.1%</td><td class='score' style='color:#e95151'>0.562</td><td><div class="bar"><span style="width:56.2%; background:#995b8e;"></span></div></td><td>0.0%</td><td>rule</td><td>rule</td><td>正常</td></tr><tr><td><div class='sym'>华胜天成</div><div class='code'>600410.SH</div></td><td>73.3%</td><td>31.8%</td><td class='score' style='color:#e95252'>0.546</td><td><div class="bar"><span style="width:54.6%; background:#975b91;"></span></div></td><td>0.0%</td><td>rule</td><td>rule</td><td>正常</td></tr><tr><td><div class='sym'>国风新材</div><div class='code'>000859.SZ</div></td><td>60.8%</td><td>44.4%</td><td class='score' style='color:#ea5353'>0.534</td><td><div class="bar"><span style="width:53.4%; background:#955c93;"></span></div></td><td>0.0%</td><td>rule</td><td>rule</td><td>正常</td></tr><tr><td><div class='sym'>掌阅科技</div><div class='code'>603533.SH</div></td><td>81.3%</td><td>12.8%</td><td class='score' style='color:#eb5555'>0.504</td><td><div class="bar"><span style="width:50.4%; background:#905d99;"></span></div></td><td>0.0%</td><td>rule</td><td>rule</td><td>正常</td></tr><tr><td><div class='sym'>泰嘉股份</div><div class='code'>002843.SZ</div></td><td>50.8%</td><td>48.9%</td><td class='score' style='color:#387dfe'>0.499</td><td><div class="bar"><span style="width:49.9%; background:#8f5e9a;"></span></div></td><td>0.0%</td><td>rule</td><td>rule</td><td>正常</td></tr><tr><td><div class='sym'>国安股份</div><div class='code'>000839.SZ</div></td><td>81.9%</td><td>9.8%</td><td class='score' style='color:#387dfe'>0.495</td><td><div class="bar"><span style="width:49.5%; background:#8f5e9b;"></span></div></td><td>0.0%</td><td>rule</td><td>rule</td><td>正常</td></tr><tr><td><div class='sym'>华建集团</div><div class='code'>600629.SH</div></td><td>66.3%</td><td>25.6%</td><td class='score' style='color:#377cfd'>0.480</td><td><div class="bar"><span style="width:48.0%; background:#8c5e9e;"></span></div></td><td>0.0%</td><td>rule</td><td>rule</td><td>正常</td></tr><tr><td><div class='sym'>千里科技</div><div class='code'>601777.SH</div></td><td>64.5%</td><td>18.4%</td><td class='score' style='color:#3479fa'>0.438</td><td><div class="bar"><span style="width:43.8%; background:#8660a7;"></span></div></td><td>0.0%</td><td>rule</td><td>rule</td><td>正常</td></tr><tr><td><div class='sym'>建设机械</div><div class='code'>600984.SH</div></td><td>60.3%</td><td>18.5%</td><td class='score' style='color:#3378f8'>0.415</td><td><div class="bar"><span style="width:41.5%; background:#8261ab;"></span></div></td><td>0.0%</td><td>rule</td><td>rule</td><td>正常</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <section>
+        <h2>效应面板</h2>
+        <article class="card">
+          <div class="k">赚钱效应</div>
+          <div class="v">偏强</div>
+          <div class="sub">1日胜率 100.0% / 5日胜率 100.0%</div>
+        </article>
+        <article class="card" style="margin-top:10px;">
+          <div class="k">亏钱效应</div>
+          <div class="v">低</div>
+          <div class="sub">深亏率 0.0% / 中位回撤 0.0%</div>
+        </article>
+        <article class="card" style="margin-top:10px;">
+          <div class="k">资金状态</div>
+          <div class="v">偏强</div>
+          <div class="sub">量能比 1.73 / 资金分数 +0.736</div>
+        </article>
+        <article class="card" style="margin-top:10px;">
+          <div class="k">筹码结构</div>
+          <div class="v">偏强</div>
+          <div class="sub">20日位置 0.92 / 筹码分数 +0.496</div>
+        </article>
+      </section>
+    </div>
+
+    <section>
+      <h2>组合回测曲线 (交易级, 含成本)</h2>
+      <div class='curve-wrap'><div class='curve-toggle'><button type='button' id='toggle-fused' class='active'>看融合策略</button><button type='button' id='toggle-quant'>看量化基线</button></div><svg viewBox='0 0 980 310' role='img' aria-label='策略与基准收益曲线'><line x1='52.0' y1='20.0' x2='964.0' y2='20.0' stroke='#e6edf7' stroke-width='1'/><text x='46.0' y='24.0' text-anchor='end' fill='#6b7280' font-size='11'>1.23</text><line x1='52.0' y1='82.5' x2='964.0' y2='82.5' stroke='#e6edf7' stroke-width='1'/><text x='46.0' y='86.5' text-anchor='end' fill='#6b7280' font-size='11'>1.16</text><line x1='52.0' y1='145.0' x2='964.0' y2='145.0' stroke='#e6edf7' stroke-width='1'/><text x='46.0' y='149.0' text-anchor='end' fill='#6b7280' font-size='11'>1.09</text><line x1='52.0' y1='207.5' x2='964.0' y2='207.5' stroke='#e6edf7' stroke-width='1'/><text x='46.0' y='211.5' text-anchor='end' fill='#6b7280' font-size='11'>1.02</text><line x1='52.0' y1='270.0' x2='964.0' y2='270.0' stroke='#e6edf7' stroke-width='1'/><text x='46.0' y='274.0' text-anchor='end' fill='#6b7280' font-size='11'>0.94</text><polyline id='line-fused' fill='none' stroke='#d43030' stroke-width='2.4' points='52.0,220.9 112.8,220.9 173.6,220.9 234.4,220.9 295.2,234.2 356.0,235.9 416.8,227.7 477.6,219.6 538.4,224.5 599.2,193.6 660.0,193.6 720.8,104.1 781.6,43.9 842.4,37.2 903.2,94.6 964.0,109.5'/><polyline id='line-quant' style='display:none;' fill='none' stroke='#c27a00' stroke-width='2.4' stroke-dasharray='6 4' points='52.0,220.9 112.8,220.9 173.6,220.9 234.4,220.9 295.2,234.2 356.0,235.9 416.8,227.7 477.6,219.6 538.4,224.5 599.2,193.6 660.0,193.6 720.8,104.1 781.6,43.9 842.4,65.1 903.2,60.2 964.0,50.4'/><polyline fill='none' stroke='#1f63d8' stroke-width='2.4' points='52.0,218.4 112.8,216.9 173.6,214.1 234.4,217.4 295.2,215.2 356.0,219.2 416.8,202.8 477.6,189.3 538.4,191.9 599.2,199.1 660.0,195.2 720.8,189.4 781.6,194.8 842.4,198.3 903.2,196.6 964.0,200.2'/><polyline fill='none' stroke='#0f8a64' stroke-width='2.4' points='52.0,223.4 112.8,225.0 173.6,227.7 234.4,224.4 295.2,239.9 356.0,237.6 416.8,245.5 477.6,250.5 538.4,252.8 599.2,216.1 660.0,220.0 720.8,138.8 781.6,75.1 842.4,64.5 903.2,122.5 964.0,132.9'/><line x1='52.0' y1='270.0' x2='964.0' y2='270.0' stroke='#9eb0cd' stroke-width='1.1'/><text x='52.0' y='288.0' fill='#6b7280' font-size='11'>2025-12-24</text><text x='964.0' y='288.0' text-anchor='end' fill='#6b7280' font-size='11'>2026-01-16</text></svg><div class='legend'><span><i style='background:#d43030;'></i><span id='legend-mode-text'>融合策略净值</span></span><span id='legend-quant' style='display:none;'><i style='background:#c27a00;'></i>量化基线净值</span><span><i style='background:#1f63d8;'></i>沪深300基准</span><span><i style='background:#0f8a64;'></i>超额净值</span></div><div class='subcurve-wrap'><div class='subcurve-title'>融合/基线 相对净值 (1.00 为持平)</div><svg viewBox='0 0 980 310' role='img' aria-label='融合与基线差值曲线'><line x1='52.0' y1='20.0' x2='964.0' y2='20.0' stroke='#eef3fa' stroke-width='1'/><text x='46.0' y='24.0' text-anchor='end' fill='#6b7280' font-size='11'>1.040</text><line x1='52.0' y1='82.5' x2='964.0' y2='82.5' stroke='#eef3fa' stroke-width='1'/><text x='46.0' y='86.5' text-anchor='end' fill='#6b7280' font-size='11'>1.013</text><line x1='52.0' y1='145.0' x2='964.0' y2='145.0' stroke='#eef3fa' stroke-width='1'/><text x='46.0' y='149.0' text-anchor='end' fill='#6b7280' font-size='11'>0.985</text><line x1='52.0' y1='207.5' x2='964.0' y2='207.5' stroke='#eef3fa' stroke-width='1'/><text x='46.0' y='211.5' text-anchor='end' fill='#6b7280' font-size='11'>0.958</text><line x1='52.0' y1='270.0' x2='964.0' y2='270.0' stroke='#eef3fa' stroke-width='1'/><text x='46.0' y='274.0' text-anchor='end' fill='#6b7280' font-size='11'>0.930</text><polyline fill='none' stroke='#7a55d1' stroke-width='2.4' points='52.0,111.1 112.8,111.1 173.6,111.1 234.4,111.1 295.2,111.1 356.0,111.1 416.8,111.1 477.6,111.1 538.4,111.1 599.2,111.1 660.0,111.1 720.8,111.1 781.6,111.1 842.4,48.8 903.2,187.7 964.0,241.2'/><line x1='52.0' y1='111.1' x2='964.0' y2='111.1' stroke='#9aa8be' stroke-dasharray='5 4' stroke-width='1.1'/><line x1='52.0' y1='270.0' x2='964.0' y2='270.0' stroke='#9eb0cd' stroke-width='1.1'/><text x='52.0' y='288.0' fill='#6b7280' font-size='11'>2025-12-24</text><text x='964.0' y='288.0' text-anchor='end' fill='#6b7280' font-size='11'>2026-01-16</text></svg></div></div><script>(function(){const fusedBtn=document.getElementById('toggle-fused');const quantBtn=document.getElementById('toggle-quant');const fusedLine=document.getElementById('line-fused');const quantLine=document.getElementById('line-quant');const modeText=document.getElementById('legend-mode-text');const quantLegend=document.getElementById('legend-quant');if(!fusedBtn||!quantBtn||!fusedLine||!quantLine||!modeText||!quantLegend){return;}function showFused(){fusedBtn.classList.add('active');quantBtn.classList.remove('active');fusedLine.style.display='';quantLine.style.display='none';modeText.textContent='融合策略净值';quantLegend.style.display='none';}function showQuant(){quantBtn.classList.add('active');fusedBtn.classList.remove('active');fusedLine.style.display='none';quantLine.style.display='';modeText.textContent='量化基线净值';quantLegend.style.display='';}fusedBtn.addEventListener('click',showFused);quantBtn.addEventListener('click',showQuant);showFused();})();</script>
+    </section>
+
+    <section>
+      <h2>因子解释 (最新截面)</h2>
+      <div class="table-scroll">
+        <table>
+          <thead>
+            <tr><th>个股</th><th>短期驱动</th><th>中期驱动</th><th>风险备注</th></tr>
+          </thead>
+          <tbody>
+            <tr><td><div class='sym'>豫能控股</div><div class='code'>001896.SZ</div></td><td>5日涨跌幅:推涨(弱, 贡献+0.40)；60日波动率:推涨(弱, 贡献+0.33)；隔夜跳空:推涨(弱, 贡献+0.21)</td><td>流动性冲击(Amihud):推涨(强, 贡献+1.67)；中长期趋势(20/60):压制(中, 贡献-0.89)；20日涨跌幅:推涨(弱, 贡献+0.43)</td><td>NA</td></tr><tr><td><div class='sym'>百达精工</div><div class='code'>603331.SH</div></td><td>60日波动率:推涨(弱, 贡献+0.08)；1日涨跌幅:推涨(弱, 贡献+0.08)；14日真实波幅:推涨(弱, 贡献+0.08)</td><td>大盘近5日高位巨量阴线:推涨(弱, 贡献+0.00)；20日价格位置:推涨(弱, 贡献+0.00)；隔夜跳空:推涨(弱, 贡献+0.00)</td><td>NA</td></tr><tr><td><div class='sym'>汉缆股份</div><div class='code'>002498.SZ</div></td><td>大盘隔夜跳空:推涨(弱, 贡献+0.16)；1日涨跌幅:推涨(弱, 贡献+0.16)；大盘1日涨跌幅:推涨(弱, 贡献+0.13)</td><td>中长期趋势(20/60):推涨(强, 贡献+1.32)；20日波动率:压制(弱, 贡献-0.39)；60日波动率:压制(弱, 贡献-0.25)</td><td>NA</td></tr><tr><td><div class='sym'>航发动力</div><div class='code'>600893.SH</div></td><td>5日涨跌幅:压制(弱, 贡献-0.15)；20日波动率:推涨(弱, 贡献+0.06)；大盘20日价格位置:压制(弱, 贡献-0.06)</td><td>大盘近5日高位巨量阴线:推涨(弱, 贡献+0.00)；20日价格位置:推涨(弱, 贡献+0.00)；隔夜跳空:推涨(弱, 贡献-0.00)</td><td>NA</td></tr><tr><td><div class='sym'>圣晖集成</div><div class='code'>603163.SH</div></td><td>5日涨跌幅:压制(弱, 贡献-0.18)；量能集中度(5/20):推涨(弱, 贡献+0.15)；当日阴线实体:压制(弱, 贡献-0.10)</td><td>大盘近5日高位巨量阴线:推涨(弱, 贡献+0.00)；20日价格位置:推涨(弱, 贡献+0.00)；隔夜跳空:推涨(弱, 贡献-0.00)</td><td>NA</td></tr><tr><td><div class='sym'>美邦股份</div><div class='code'>605033.SH</div></td><td>5日涨跌幅:推涨(弱, 贡献+0.30)；隔夜跳空:推涨(弱, 贡献+0.29)；短中期趋势(5/20):压制(弱, 贡献-0.21)</td><td>20日涨跌幅:推涨(中, 贡献+0.96)；中长期趋势(20/60):压制(中, 贡献-0.85)；60日波动率:推涨(中, 贡献+0.67)</td><td>NA</td></tr><tr><td><div class='sym'>深科技</div><div class='code'>000021.SZ</div></td><td>当日阴线实体:压制(弱, 贡献-0.19)；20日波动率:压制(弱, 贡献-0.11)；大盘量能集中度(5/20):压制(弱, 贡献-0.10)</td><td>20日波动率:压制(弱, 贡献-0.35)；5日涨跌幅:压制(弱, 贡献-0.16)；当日阴线实体:压制(弱, 贡献-0.15)</td><td>NA</td></tr><tr><td><div class='sym'>浙江世宝</div><div class='code'>002703.SZ</div></td><td>1日涨跌幅:推涨(弱, 贡献+0.11)；流动性冲击(Amihud):压制(弱, 贡献-0.08)；大盘20日量比:推涨(弱, 贡献+0.08)</td><td>大盘流动性冲击(Amihud):压制(弱, 贡献-0.45)；60日波动率:压制(弱, 贡献-0.35)；大盘60日波动率:压制(弱, 贡献-0.24)</td><td>NA</td></tr><tr><td><div class='sym'>法尔胜</div><div class='code'>000890.SZ</div></td><td>当日阴线实体:压制(弱, 贡献-0.15)；20日量比:压制(弱, 贡献-0.09)；14日真实波幅:推涨(弱, 贡献+0.07)</td><td>20日价格位置:压制(弱, 贡献-0.20)；大盘14日真实波幅:推涨(弱, 贡献+0.17)；大盘60日波动率:压制(弱, 贡献-0.15)</td><td>NA</td></tr><tr><td><div class='sym'>兴民智通</div><div class='code'>002355.SZ</div></td><td>短中期趋势(5/20):压制(弱, 贡献-0.09)；大盘隔夜跳空:推涨(弱, 贡献+0.09)；大盘当日阴线实体:压制(弱, 贡献-0.07)</td><td>当日阴线实体:压制(弱, 贡献-0.40)；1日涨跌幅:压制(弱, 贡献-0.38)；大盘流动性冲击(Amihud):压制(弱, 贡献-0.25)</td><td>NA</td></tr><tr><td><div class='sym'>亚星锚链</div><div class='code'>601890.SH</div></td><td>流动性冲击(Amihud):推涨(弱, 贡献+0.39)；20日涨跌幅:压制(弱, 贡献-0.28)；当日阴线实体:压制(弱, 贡献-0.13)</td><td>流动性冲击(Amihud):压制(弱, 贡献-0.56)；大盘60日波动率:推涨(弱, 贡献+0.29)；20日量比:压制(弱, 贡献-0.22)</td><td>NA</td></tr><tr><td><div class='sym'>罗曼股份</div><div class='code'>605289.SH</div></td><td>OBV强弱:压制(弱, 贡献-0.19)；大盘量能集中度(5/20):推涨(弱, 贡献+0.16)；20日波动率:推涨(弱, 贡献+0.14)</td><td>20日涨跌幅:压制(中, 贡献-0.71)；大盘流动性冲击(Amihud):推涨(弱, 贡献+0.37)；OBV强弱:压制(弱, 贡献-0.34)</td><td>NA</td></tr><tr><td><div class='sym'>华胜天成</div><div class='code'>600410.SH</div></td><td>大盘1日涨跌幅:推涨(弱, 贡献+0.20)；当日阴线实体:压制(弱, 贡献-0.14)；1日涨跌幅:压制(弱, 贡献-0.12)</td><td>中长期趋势(20/60):压制(弱, 贡献-0.41)；大盘14日真实波幅:压制(弱, 贡献-0.35)；大盘中长期趋势(20/60):压制(弱, 贡献-0.25)</td><td>NA</td></tr><tr><td><div class='sym'>国风新材</div><div class='code'>000859.SZ</div></td><td>大盘隔夜跳空:压制(弱, 贡献-0.15)；大盘1日涨跌幅:压制(弱, 贡献-0.06)；大盘量能集中度(5/20):压制(弱, 贡献-0.05)</td><td>大盘流动性冲击(Amihud):压制(中, 贡献-0.62)；60日波动率:压制(弱, 贡献-0.31)；大盘60日波动率:压制(弱, 贡献-0.30)</td><td>NA</td></tr><tr><td><div class='sym'>掌阅科技</div><div class='code'>603533.SH</div></td><td>流动性冲击(Amihud):推涨(弱, 贡献+0.34)；5日涨跌幅:推涨(弱, 贡献+0.33)；20日波动率:压制(弱, 贡献-0.19)</td><td>流动性冲击(Amihud):压制(中, 贡献-0.73)；5日涨跌幅:压制(中, 贡献-0.63)；20日波动率:压制(弱, 贡献-0.29)</td><td>NA</td></tr><tr><td><div class='sym'>泰嘉股份</div><div class='code'>002843.SZ</div></td><td>1日涨跌幅:压制(弱, 贡献-0.18)；隔夜跳空:压制(弱, 贡献-0.18)；大盘隔夜跳空:压制(弱, 贡献-0.11)</td><td>大盘流动性冲击(Amihud):压制(弱, 贡献-0.45)；60日波动率:压制(弱, 贡献-0.32)；20日波动率:压制(弱, 贡献-0.30)</td><td>NA</td></tr><tr><td><div class='sym'>国安股份</div><div class='code'>000839.SZ</div></td><td>隔夜跳空:推涨(强, 贡献+1.47)；1日涨跌幅:压制(弱, 贡献-0.30)；中长期趋势(20/60):压制(弱, 贡献-0.15)</td><td>20日波动率:压制(中, 贡献-1.19)；60日波动率:压制(中, 贡献-0.61)；20日涨跌幅:压制(弱, 贡献-0.56)</td><td>NA</td></tr><tr><td><div class='sym'>华建集团</div><div class='code'>600629.SH</div></td><td>流动性冲击(Amihud):推涨(弱, 贡献+0.19)；当日阴线实体:压制(弱, 贡献-0.14)；大盘隔夜跳空:压制(弱, 贡献-0.13)</td><td>大盘中长期趋势(20/60):压制(弱, 贡献-0.38)；大盘流动性冲击(Amihud):压制(弱, 贡献-0.36)；中长期趋势(20/60):压制(弱, 贡献-0.27)</td><td>NA</td></tr><tr><td><div class='sym'>千里科技</div><div class='code'>601777.SH</div></td><td>5日涨跌幅:压制(弱, 贡献-0.17)；1日涨跌幅:推涨(弱, 贡献+0.16)；大盘1日涨跌幅:推涨(弱, 贡献+0.16)</td><td>20日波动率:压制(弱, 贡献-0.49)；大盘流动性冲击(Amihud):压制(弱, 贡献-0.47)；中长期趋势(20/60):压制(弱, 贡献-0.36)</td><td>NA</td></tr><tr><td><div class='sym'>建设机械</div><div class='code'>600984.SH</div></td><td>当日阴线实体:压制(弱, 贡献-0.19)；1日涨跌幅:压制(弱, 贡献-0.15)；隔夜跳空:推涨(弱, 贡献+0.12)</td><td>中长期趋势(20/60):推涨(弱, 贡献+0.47)；大盘流动性冲击(Amihud):推涨(弱, 贡献+0.38)；大盘量能集中度(5/20):压制(弱, 贡献-0.38)</td><td>NA</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <section>
+      <h2>回测指标 (全样本 + 近3/5年)</h2>
+      <table>
+        <thead>
+          <tr><th>窗口</th><th>开始</th><th>结束</th><th>交易日</th><th>策略总收益</th><th>年化收益</th><th>年化超额</th><th>最大回撤</th><th>Sharpe</th><th>Sortino</th><th>Calmar</th><th>信息比率</th><th>日胜率</th><th>年化换手</th><th>成本损耗</th><th>单票周交易</th></tr>
+        </thead>
+        <tbody>
+          <tr><td>融合策略-全样本</td><td>2025-12-24</td><td>2026-01-16</td><td>16</td><td>12.9%</td><td>580.5%</td><td>363.2%</td><td>-6.9%</td><td>10.93</td><td>26.79</td><td>83.96</td><td>3.10</td><td>37.5%</td><td>4725.0%</td><td>0.1%</td><td>0.05</td></tr><tr><td>融合策略-近1年</td><td>2025-12-24</td><td>2026-01-16</td><td>16</td><td>12.9%</td><td>580.5%</td><td>363.2%</td><td>-6.9%</td><td>10.93</td><td>26.79</td><td>83.96</td><td>3.10</td><td>37.5%</td><td>4725.0%</td><td>0.1%</td><td>0.05</td></tr><tr><td>量化基线-全样本</td><td>2025-12-24</td><td>2026-01-16</td><td>16</td><td>19.8%</td><td>1622.1%</td><td>1074.4%</td><td>-2.0%</td><td>34.54</td><td>170.83</td><td>796.06</td><td>5.38</td><td>43.8%</td><td>1575.0%</td><td>0.0%</td><td>0.02</td></tr><tr><td>量化基线-近1年</td><td>2025-12-24</td><td>2026-01-16</td><td>16</td><td>19.8%</td><td>1622.1%</td><td>1074.4%</td><td>-2.0%</td><td>34.54</td><td>170.83</td><td>796.06</td><td>5.38</td><td>43.8%</td><td>1575.0%</td><td>0.0%</td><td>0.02</td></tr>
+        </tbody>
+      </table>
+    </section>
+
+    <section>
+      <h2>策略优化 (收益目标 + 换手约束)</h2>
+      <article class="card">
+        <div class="k">目标函数</div>
+        <div class="sub"><code>score = excess_annual_return - 0.0015*annual_turnover - 0.200*abs(max_drawdown)</code></div>
+        <div class="sub" style="margin-top:6px;">评估窗口: 融合策略-近3年</div>
+        <div class="sub" style="margin-top:6px;">默认参数（优化器关闭或无有效试验）</div>
+      </article>
+      <table style="margin-top:10px;">
+        <thead>
+          <tr><th>排名</th><th>指标窗口</th><th>retrain(日)</th><th>阈值</th><th>持仓上限</th><th>市场新闻强度</th><th>个股新闻强度</th><th>目标得分</th><th>年化收益</th><th>年化超额</th><th>最大回撤</th><th>年化换手</th><th>成本损耗</th><th>单票周交易</th><th>Sharpe</th></tr>
+        </thead>
+        <tbody>
+          <tr><td colspan="15">无可用优化试验数据</td></tr>
+        </tbody>
+      </table>
+    </section>
+
+    <section>
+      <h2>新闻模糊矩阵 (个股前20)</h2>
+      <div class="table-scroll">
+        <table>
+          <thead>
+            <tr><th>标的</th><th>周期</th><th>利好隶属</th><th>利空隶属</th><th>中性隶属</th><th>条数</th></tr>
+          </thead>
+          <tbody>
+            <tr><td><div class="sym">沪深300</div><div class="code">000300.SH</div></td><td>短期</td><td><span class="pill bull">0.849</span></td><td><span class="pill bear">0.151</span></td><td>0.000</td><td>4</td></tr>
+            <tr><td><div class="sym">沪深300</div><div class="code">000300.SH</div></td><td>中期</td><td><span class="pill bull">0.482</span></td><td><span class="pill bear">0.518</span></td><td>0.000</td><td>4</td></tr>
+            <tr><td><div class='sym'>豫能控股</div><div class='code'>001896.SZ</div></td><td>短期</td><td><span class='pill bull'>0.849</span></td><td><span class='pill bear'>0.151</span></td><td>0.000</td><td>4</td></tr><tr><td><div class='sym'>豫能控股</div><div class='code'>001896.SZ</div></td><td>中期</td><td><span class='pill bull'>0.482</span></td><td><span class='pill bear'>0.518</span></td><td>0.000</td><td>4</td></tr><tr><td><div class='sym'>百达精工</div><div class='code'>603331.SH</div></td><td>短期</td><td><span class='pill bull'>0.849</span></td><td><span class='pill bear'>0.151</span></td><td>0.000</td><td>4</td></tr><tr><td><div class='sym'>百达精工</div><div class='code'>603331.SH</div></td><td>中期</td><td><span class='pill bull'>0.482</span></td><td><span class='pill bear'>0.518</span></td><td>0.000</td><td>4</td></tr><tr><td><div class='sym'>汉缆股份</div><div class='code'>002498.SZ</div></td><td>短期</td><td><span class='pill bull'>0.849</span></td><td><span class='pill bear'>0.151</span></td><td>0.000</td><td>4</td></tr><tr><td><div class='sym'>汉缆股份</div><div class='code'>002498.SZ</div></td><td>中期</td><td><span class='pill bull'>0.482</span></td><td><span class='pill bear'>0.518</span></td><td>0.000</td><td>4</td></tr><tr><td><div class='sym'>航发动力</div><div class='code'>600893.SH</div></td><td>短期</td><td><span class='pill bull'>0.849</span></td><td><span class='pill bear'>0.151</span></td><td>0.000</td><td>4</td></tr><tr><td><div class='sym'>航发动力</div><div class='code'>600893.SH</div></td><td>中期</td><td><span class='pill bull'>0.482</span></td><td><span class='pill bear'>0.518</span></td><td>0.000</td><td>4</td></tr><tr><td><div class='sym'>圣晖集成</div><div class='code'>603163.SH</div></td><td>短期</td><td><span class='pill bull'>0.849</span></td><td><span class='pill bear'>0.151</span></td><td>0.000</td><td>4</td></tr><tr><td><div class='sym'>圣晖集成</div><div class='code'>603163.SH</div></td><td>中期</td><td><span class='pill bull'>0.482</span></td><td><span class='pill bear'>0.518</span></td><td>0.000</td><td>4</td></tr><tr><td><div class='sym'>美邦股份</div><div class='code'>605033.SH</div></td><td>短期</td><td><span class='pill bull'>0.849</span></td><td><span class='pill bear'>0.151</span></td><td>0.000</td><td>4</td></tr><tr><td><div class='sym'>美邦股份</div><div class='code'>605033.SH</div></td><td>中期</td><td><span class='pill bull'>0.482</span></td><td><span class='pill bear'>0.518</span></td><td>0.000</td><td>4</td></tr><tr><td><div class='sym'>深科技</div><div class='code'>000021.SZ</div></td><td>短期</td><td><span class='pill bull'>0.849</span></td><td><span class='pill bear'>0.151</span></td><td>0.000</td><td>4</td></tr><tr><td><div class='sym'>深科技</div><div class='code'>000021.SZ</div></td><td>中期</td><td><span class='pill bull'>0.482</span></td><td><span class='pill bear'>0.518</span></td><td>0.000</td><td>4</td></tr><tr><td><div class='sym'>浙江世宝</div><div class='code'>002703.SZ</div></td><td>短期</td><td><span class='pill bull'>0.849</span></td><td><span class='pill bear'>0.151</span></td><td>0.000</td><td>4</td></tr><tr><td><div class='sym'>浙江世宝</div><div class='code'>002703.SZ</div></td><td>中期</td><td><span class='pill bull'>0.482</span></td><td><span class='pill bear'>0.518</span></td><td>0.000</td><td>4</td></tr><tr><td><div class='sym'>法尔胜</div><div class='code'>000890.SZ</div></td><td>短期</td><td><span class='pill bull'>0.849</span></td><td><span class='pill bear'>0.151</span></td><td>0.000</td><td>4</td></tr><tr><td><div class='sym'>法尔胜</div><div class='code'>000890.SZ</div></td><td>中期</td><td><span class='pill bull'>0.482</span></td><td><span class='pill bear'>0.518</span></td><td>0.000</td><td>4</td></tr><tr><td><div class='sym'>兴民智通</div><div class='code'>002355.SZ</div></td><td>短期</td><td><span class='pill bull'>0.849</span></td><td><span class='pill bear'>0.151</span></td><td>0.000</td><td>4</td></tr><tr><td><div class='sym'>兴民智通</div><div class='code'>002355.SZ</div></td><td>中期</td><td><span class='pill bull'>0.482</span></td><td><span class='pill bear'>0.518</span></td><td>0.000</td><td>4</td></tr><tr><td><div class='sym'>亚星锚链</div><div class='code'>601890.SH</div></td><td>短期</td><td><span class='pill bull'>0.849</span></td><td><span class='pill bear'>0.151</span></td><td>0.000</td><td>4</td></tr><tr><td><div class='sym'>亚星锚链</div><div class='code'>601890.SH</div></td><td>中期</td><td><span class='pill bull'>0.482</span></td><td><span class='pill bear'>0.518</span></td><td>0.000</td><td>4</td></tr><tr><td><div class='sym'>罗曼股份</div><div class='code'>605289.SH</div></td><td>短期</td><td><span class='pill bull'>0.849</span></td><td><span class='pill bear'>0.151</span></td><td>0.000</td><td>4</td></tr><tr><td><div class='sym'>罗曼股份</div><div class='code'>605289.SH</div></td><td>中期</td><td><span class='pill bull'>0.482</span></td><td><span class='pill bear'>0.518</span></td><td>0.000</td><td>4</td></tr><tr><td><div class='sym'>华胜天成</div><div class='code'>600410.SH</div></td><td>短期</td><td><span class='pill bull'>0.849</span></td><td><span class='pill bear'>0.151</span></td><td>0.000</td><td>4</td></tr><tr><td><div class='sym'>华胜天成</div><div class='code'>600410.SH</div></td><td>中期</td><td><span class='pill bull'>0.482</span></td><td><span class='pill bear'>0.518</span></td><td>0.000</td><td>4</td></tr><tr><td><div class='sym'>国风新材</div><div class='code'>000859.SZ</div></td><td>短期</td><td><span class='pill bull'>0.849</span></td><td><span class='pill bear'>0.151</span></td><td>0.000</td><td>4</td></tr><tr><td><div class='sym'>国风新材</div><div class='code'>000859.SZ</div></td><td>中期</td><td><span class='pill bull'>0.482</span></td><td><span class='pill bear'>0.518</span></td><td>0.000</td><td>4</td></tr><tr><td><div class='sym'>掌阅科技</div><div class='code'>603533.SH</div></td><td>短期</td><td><span class='pill bull'>0.849</span></td><td><span class='pill bear'>0.151</span></td><td>0.000</td><td>4</td></tr><tr><td><div class='sym'>掌阅科技</div><div class='code'>603533.SH</div></td><td>中期</td><td><span class='pill bull'>0.482</span></td><td><span class='pill bear'>0.518</span></td><td>0.000</td><td>4</td></tr><tr><td><div class='sym'>泰嘉股份</div><div class='code'>002843.SZ</div></td><td>短期</td><td><span class='pill bull'>0.849</span></td><td><span class='pill bear'>0.151</span></td><td>0.000</td><td>4</td></tr><tr><td><div class='sym'>泰嘉股份</div><div class='code'>002843.SZ</div></td><td>中期</td><td><span class='pill bull'>0.482</span></td><td><span class='pill bear'>0.518</span></td><td>0.000</td><td>4</td></tr><tr><td><div class='sym'>国安股份</div><div class='code'>000839.SZ</div></td><td>短期</td><td><span class='pill bull'>0.849</span></td><td><span class='pill bear'>0.151</span></td><td>0.000</td><td>4</td></tr><tr><td><div class='sym'>国安股份</div><div class='code'>000839.SZ</div></td><td>中期</td><td><span class='pill bull'>0.482</span></td><td><span class='pill bear'>0.518</span></td><td>0.000</td><td>4</td></tr><tr><td><div class='sym'>华建集团</div><div class='code'>600629.SH</div></td><td>短期</td><td><span class='pill bull'>0.849</span></td><td><span class='pill bear'>0.151</span></td><td>0.000</td><td>4</td></tr><tr><td><div class='sym'>华建集团</div><div class='code'>600629.SH</div></td><td>中期</td><td><span class='pill bull'>0.482</span></td><td><span class='pill bear'>0.518</span></td><td>0.000</td><td>4</td></tr><tr><td><div class='sym'>千里科技</div><div class='code'>601777.SH</div></td><td>短期</td><td><span class='pill bull'>0.849</span></td><td><span class='pill bear'>0.151</span></td><td>0.000</td><td>4</td></tr><tr><td><div class='sym'>千里科技</div><div class='code'>601777.SH</div></td><td>中期</td><td><span class='pill bull'>0.482</span></td><td><span class='pill bear'>0.518</span></td><td>0.000</td><td>4</td></tr><tr><td><div class='sym'>建设机械</div><div class='code'>600984.SH</div></td><td>短期</td><td><span class='pill bull'>0.849</span></td><td><span class='pill bear'>0.151</span></td><td>0.000</td><td>4</td></tr><tr><td><div class='sym'>建设机械</div><div class='code'>600984.SH</div></td><td>中期</td><td><span class='pill bull'>0.482</span></td><td><span class='pill bear'>0.518</span></td><td>0.000</td><td>4</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <section>
+      <h2>学习型融合诊断</h2>
+      <table>
+        <thead>
+          <tr><th>标的</th><th>周期</th><th>模式</th><th>原因</th><th>样本</th><th>验证样本</th><th>验证准确率</th><th>验证AUC</th><th>验证Brier</th><th>新闻系数</th><th>融合系数(quant)</th><th>融合系数(news)</th></tr>
+        </thead>
+        <tbody>
+          <tr><td>MARKET</td><td>short</td><td>rule</td><td>learning_disabled</td><td>0</td><td>0</td><td>NA</td><td>NA</td><td>NA</td><td>NA</td><td>NA</td><td>NA</td></tr><tr><td>MARKET</td><td>mid</td><td>rule</td><td>learning_disabled</td><td>0</td><td>0</td><td>NA</td><td>NA</td><td>NA</td><td>NA</td><td>NA</td><td>NA</td></tr><tr><td>001896.SZ</td><td>short</td><td>rule</td><td>learning_disabled</td><td>0</td><td>0</td><td>NA</td><td>NA</td><td>NA</td><td>NA</td><td>NA</td><td>NA</td></tr><tr><td>001896.SZ</td><td>mid</td><td>rule</td><td>learning_disabled</td><td>0</td><td>0</td><td>NA</td><td>NA</td><td>NA</td><td>NA</td><td>NA</td><td>NA</td></tr><tr><td>002498.SZ</td><td>short</td><td>rule</td><td>learning_disabled</td><td>0</td><td>0</td><td>NA</td><td>NA</td><td>NA</td><td>NA</td><td>NA</td><td>NA</td></tr><tr><td>002498.SZ</td><td>mid</td><td>rule</td><td>learning_disabled</td><td>0</td><td>0</td><td>NA</td><td>NA</td><td>NA</td><td>NA</td><td>NA</td><td>NA</td></tr><tr><td>603331.SH</td><td>short</td><td>rule</td><td>learning_disabled</td><td>0</td><td>0</td><td>NA</td><td>NA</td><td>NA</td><td>NA</td><td>NA</td><td>NA</td></tr><tr><td>603331.SH</td><td>mid</td><td>rule</td><td>learning_disabled</td><td>0</td><td>0</td><td>NA</td><td>NA</td><td>NA</td><td>NA</td><td>NA</td><td>NA</td></tr><tr><td>600893.SH</td><td>short</td><td>rule</td><td>learning_disabled</td><td>0</td><td>0</td><td>NA</td><td>NA</td><td>NA</td><td>NA</td><td>NA</td><td>NA</td></tr><tr><td>600893.SH</td><td>mid</td><td>rule</td><td>learning_disabled</td><td>0</td><td>0</td><td>NA</td><td>NA</td><td>NA</td><td>NA</td><td>NA</td><td>NA</td></tr><tr><td>605033.SH</td><td>short</td><td>rule</td><td>learning_disabled</td><td>0</td><td>0</td><td>NA</td><td>NA</td><td>NA</td><td>NA</td><td>NA</td><td>NA</td></tr><tr><td>605033.SH</td><td>mid</td><td>rule</td><td>learning_disabled</td><td>0</td><td>0</td><td>NA</td><td>NA</td><td>NA</td><td>NA</td><td>NA</td><td>NA</td></tr><tr><td>603163.SH</td><td>short</td><td>rule</td><td>learning_disabled</td><td>0</td><td>0</td><td>NA</td><td>NA</td><td>NA</td><td>NA</td><td>NA</td><td>NA</td></tr><tr><td>603163.SH</td><td>mid</td><td>rule</td><td>learning_disabled</td><td>0</td><td>0</td><td>NA</td><td>NA</td><td>NA</td><td>NA</td><td>NA</td><td>NA</td></tr><tr><td>000021.SZ</td><td>short</td><td>rule</td><td>learning_disabled</td><td>0</td><td>0</td><td>NA</td><td>NA</td><td>NA</td><td>NA</td><td>NA</td><td>NA</td></tr><tr><td>000021.SZ</td><td>mid</td><td>rule</td><td>learning_disabled</td><td>0</td><td>0</td><td>NA</td><td>NA</td><td>NA</td><td>NA</td><td>NA</td><td>NA</td></tr><tr><td>002703.SZ</td><td>short</td><td>rule</td><td>learning_disabled</td><td>0</td><td>0</td><td>NA</td><td>NA</td><td>NA</td><td>NA</td><td>NA</td><td>NA</td></tr><tr><td>002703.SZ</td><td>mid</td><td>rule</td><td>learning_disabled</td><td>0</td><td>0</td><td>NA</td><td>NA</td><td>NA</td><td>NA</td><td>NA</td><td>NA</td></tr><tr><td>000890.SZ</td><td>short</td><td>rule</td><td>learning_disabled</td><td>0</td><td>0</td><td>NA</td><td>NA</td><td>NA</td><td>NA</td><td>NA</td><td>NA</td></tr><tr><td>000890.SZ</td><td>mid</td><td>rule</td><td>learning_disabled</td><td>0</td><td>0</td><td>NA</td><td>NA</td><td>NA</td><td>NA</td><td>NA</td><td>NA</td></tr><tr><td>002355.SZ</td><td>short</td><td>rule</td><td>learning_disabled</td><td>0</td><td>0</td><td>NA</td><td>NA</td><td>NA</td><td>NA</td><td>NA</td><td>NA</td></tr><tr><td>002355.SZ</td><td>mid</td><td>rule</td><td>learning_disabled</td><td>0</td><td>0</td><td>NA</td><td>NA</td><td>NA</td><td>NA</td><td>NA</td><td>NA</td></tr><tr><td>605289.SH</td><td>short</td><td>rule</td><td>learning_disabled</td><td>0</td><td>0</td><td>NA</td><td>NA</td><td>NA</td><td>NA</td><td>NA</td><td>NA</td></tr><tr><td>605289.SH</td><td>mid</td><td>rule</td><td>learning_disabled</td><td>0</td><td>0</td><td>NA</td><td>NA</td><td>NA</td><td>NA</td><td>NA</td><td>NA</td></tr><tr><td>601890.SH</td><td>short</td><td>rule</td><td>learning_disabled</td><td>0</td><td>0</td><td>NA</td><td>NA</td><td>NA</td><td>NA</td><td>NA</td><td>NA</td></tr><tr><td>601890.SH</td><td>mid</td><td>rule</td><td>learning_disabled</td><td>0</td><td>0</td><td>NA</td><td>NA</td><td>NA</td><td>NA</td><td>NA</td><td>NA</td></tr><tr><td>600410.SH</td><td>short</td><td>rule</td><td>learning_disabled</td><td>0</td><td>0</td><td>NA</td><td>NA</td><td>NA</td><td>NA</td><td>NA</td><td>NA</td></tr><tr><td>600410.SH</td><td>mid</td><td>rule</td><td>learning_disabled</td><td>0</td><td>0</td><td>NA</td><td>NA</td><td>NA</td><td>NA</td><td>NA</td><td>NA</td></tr><tr><td>000859.SZ</td><td>short</td><td>rule</td><td>learning_disabled</td><td>0</td><td>0</td><td>NA</td><td>NA</td><td>NA</td><td>NA</td><td>NA</td><td>NA</td></tr><tr><td>000859.SZ</td><td>mid</td><td>rule</td><td>learning_disabled</td><td>0</td><td>0</td><td>NA</td><td>NA</td><td>NA</td><td>NA</td><td>NA</td><td>NA</td></tr><tr><td>603533.SH</td><td>short</td><td>rule</td><td>learning_disabled</td><td>0</td><td>0</td><td>NA</td><td>NA</td><td>NA</td><td>NA</td><td>NA</td><td>NA</td></tr><tr><td>603533.SH</td><td>mid</td><td>rule</td><td>learning_disabled</td><td>0</td><td>0</td><td>NA</td><td>NA</td><td>NA</td><td>NA</td><td>NA</td><td>NA</td></tr><tr><td>000839.SZ</td><td>short</td><td>rule</td><td>learning_disabled</td><td>0</td><td>0</td><td>NA</td><td>NA</td><td>NA</td><td>NA</td><td>NA</td><td>NA</td></tr><tr><td>000839.SZ</td><td>mid</td><td>rule</td><td>learning_disabled</td><td>0</td><td>0</td><td>NA</td><td>NA</td><td>NA</td><td>NA</td><td>NA</td><td>NA</td></tr><tr><td>002843.SZ</td><td>short</td><td>rule</td><td>learning_disabled</td><td>0</td><td>0</td><td>NA</td><td>NA</td><td>NA</td><td>NA</td><td>NA</td><td>NA</td></tr><tr><td>002843.SZ</td><td>mid</td><td>rule</td><td>learning_disabled</td><td>0</td><td>0</td><td>NA</td><td>NA</td><td>NA</td><td>NA</td><td>NA</td><td>NA</td></tr><tr><td>600629.SH</td><td>short</td><td>rule</td><td>learning_disabled</td><td>0</td><td>0</td><td>NA</td><td>NA</td><td>NA</td><td>NA</td><td>NA</td><td>NA</td></tr><tr><td>600629.SH</td><td>mid</td><td>rule</td><td>learning_disabled</td><td>0</td><td>0</td><td>NA</td><td>NA</td><td>NA</td><td>NA</td><td>NA</td><td>NA</td></tr><tr><td>601777.SH</td><td>short</td><td>rule</td><td>learning_disabled</td><td>0</td><td>0</td><td>NA</td><td>NA</td><td>NA</td><td>NA</td><td>NA</td><td>NA</td></tr><tr><td>601777.SH</td><td>mid</td><td>rule</td><td>learning_disabled</td><td>0</td><td>0</td><td>NA</td><td>NA</td><td>NA</td><td>NA</td><td>NA</td><td>NA</td></tr><tr><td>600984.SH</td><td>short</td><td>rule</td><td>learning_disabled</td><td>0</td><td>0</td><td>NA</td><td>NA</td><td>NA</td><td>NA</td><td>NA</td><td>NA</td></tr><tr><td>600984.SH</td><td>mid</td><td>rule</td><td>learning_disabled</td><td>0</td><td>0</td><td>NA</td><td>NA</td><td>NA</td><td>NA</td><td>NA</td><td>NA</td></tr>
+        </tbody>
+      </table>
+    </section>
+
+    <section>
+      <h2>板块热度</h2>
+      <table>
+        <thead>
+          <tr><th>板块</th><th>热度</th><th>1日胜率</th><th>5日中位收益</th><th>资金</th><th>筹码</th><th>样本</th><th>热度条</th></tr>
+        </thead>
+        <tbody>
+          <tr><td>其他</td><td class='score' style='color:#e24747'>+0.379</td><td>100.0%</td><td>1565bp</td><td>+0.738</td><td>+0.591</td><td>20</td><td><div class="bar"><span style="width:37.9%; background:#e24747;"></span></div></td></tr>
+        </tbody>
+      </table>
+    </section>
+
+    <p class="note">说明：本仪表盘为统计研究结果，不构成投资建议。请结合交易规则、流动性与风险约束使用。</p>
+  </div>
+</body>
+</html>

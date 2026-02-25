@@ -1,0 +1,128 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1"/>
+<title>Forecast Report</title>
+<style>
+body{font-family:-apple-system,BlinkMacSystemFont,Segoe UI,Roboto,PingFang SC,Hiragino Sans GB,Microsoft YaHei,sans-serif;max-width:1200px;margin:24px auto;padding:0 16px;line-height:1.6;color:#1f2937;}
+h1,h2,h3{line-height:1.3;color:#111827;}
+table{border-collapse:collapse;width:100%;font-size:14px;display:block;overflow-x:auto;white-space:nowrap;}
+th,td{border:1px solid #d1d5db;padding:6px 8px;text-align:left;vertical-align:top;}
+th{background:#f3f4f6;}
+code{background:#f3f4f6;padding:1px 4px;border-radius:4px;}
+ul{padding-left:20px;}
+</style>
+</head><body>
+<h1>A股多周期预测报告 (V1)</h1>
+<ul>
+<li>数据截至: 2026-02-24</li>
+<li>市场基准: 沪深300 (000300.SH)</li>
+<li>市场状态: 中性 (Neutral)</li>
+<li>建议总仓位: 100.0%</li>
+</ul>
+<h2>大盘预测</h2>
+<table>
+<thead>
+<tr>
+  <th>维度</th>
+  <th style="text-align:right">上涨概率</th>
+  <th>说明</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+  <td>短期(1日)</td>
+  <td style="text-align:right">50.9%</td>
+  <td>次日方向概率</td>
+</tr>
+<tr>
+  <td>中期(20日)</td>
+  <td style="text-align:right">49.1%</td>
+  <td>未来20日方向概率</td>
+</tr>
+</tbody>
+</table>
+<ul>
+<li>短期样本外: n=425, acc=48.7%, auc=0.475, brier=0.259</li>
+<li>中期样本外: n=406, acc=50.0%, auc=0.572, brier=0.282</li>
+</ul>
+<h2>个股预测</h2>
+<table>
+<thead>
+<tr>
+  <th>个股</th>
+  <th style="text-align:right">短期概率</th>
+  <th style="text-align:right">中期概率</th>
+  <th style="text-align:right">综合分数</th>
+  <th style="text-align:right">建议权重</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+  <td>天普股份 (605255.SH)</td>
+  <td style="text-align:right">53.2%</td>
+  <td style="text-align:right">60.0%</td>
+  <td style="text-align:right">0.562</td>
+  <td style="text-align:right">45.5%</td>
+</tr>
+<tr>
+  <td>大中矿业 (001203.SZ)</td>
+  <td style="text-align:right">51.1%</td>
+  <td style="text-align:right">58.1%</td>
+  <td style="text-align:right">0.543</td>
+  <td style="text-align:right">31.3%</td>
+</tr>
+<tr>
+  <td>东阳光 (600673.SH)</td>
+  <td style="text-align:right">48.3%</td>
+  <td style="text-align:right">59.1%</td>
+  <td style="text-align:right">0.532</td>
+  <td style="text-align:right">23.2%</td>
+</tr>
+<tr>
+  <td>中曼石油 (603619.SH)</td>
+  <td style="text-align:right">40.9%</td>
+  <td style="text-align:right">19.8%</td>
+  <td style="text-align:right">0.314</td>
+  <td style="text-align:right">0.0%</td>
+</tr>
+</tbody>
+</table>
+<h2>因子解释 (最新截面)</h2>
+<h3>天普股份 (605255.SH)</h3>
+<ul>
+<li>短期驱动: 隔夜跳空:压制(弱, 贡献-0.07)；大盘量能集中度(5/20):推涨(弱, 贡献+0.06)；样本覆盖数:压制(弱, 贡献-0.06)</li>
+<li>中期驱动: 60日波动率:压制(弱, 贡献-0.15)；市场两融融资余额强弱:推涨(弱, 贡献+0.09)；大盘流动性冲击(Amihud):推涨(弱, 贡献+0.07)</li>
+<li>短期样本外: n=392, acc=53.3%, auc=0.534, brier=0.248</li>
+<li>中期样本外: n=373, acc=47.2%, auc=0.436, brier=0.288</li>
+</ul>
+<h3>大中矿业 (001203.SZ)</h3>
+<ul>
+<li>短期驱动: 大盘量能集中度(5/20):推涨(弱, 贡献+0.06)；流动性冲击(Amihud):推涨(弱, 贡献+0.05)；大盘流动性冲击(Amihud):推涨(弱, 贡献+0.04)</li>
+<li>中期驱动: 60日波动率:推涨(弱, 贡献+0.13)；大盘流动性冲击(Amihud):推涨(弱, 贡献+0.08)；流动性冲击(Amihud):推涨(弱, 贡献+0.06)</li>
+<li>短期样本外: n=425, acc=51.3%, auc=0.515, brier=0.255</li>
+<li>中期样本外: n=406, acc=46.8%, auc=0.491, brier=0.281</li>
+</ul>
+<h3>东阳光 (600673.SH)</h3>
+<ul>
+<li>短期驱动: 60日波动率:推涨(弱, 贡献+0.07)；20日波动率:推涨(弱, 贡献+0.06)；大盘流动性冲击(Amihud):推涨(弱, 贡献+0.05)</li>
+<li>中期驱动: 市场成交额强弱:压制(弱, 贡献-0.12)；短中期趋势(5/20):推涨(弱, 贡献+0.11)；样本覆盖数:推涨(弱, 贡献+0.09)</li>
+<li>短期样本外: n=424, acc=53.1%, auc=0.540, brier=0.252</li>
+<li>中期样本外: n=405, acc=46.9%, auc=0.483, brier=0.267</li>
+</ul>
+<h3>中曼石油 (603619.SH)</h3>
+<ul>
+<li>短期驱动: 5日涨跌幅:压制(弱, 贡献-0.06)；60日波动率:压制(弱, 贡献-0.05)；隔夜跳空:压制(弱, 贡献-0.05)</li>
+<li>中期驱动: 60日波动率:压制(弱, 贡献-0.50)；20日波动率:压制(弱, 贡献-0.24)；14日真实波幅:压制(弱, 贡献-0.22)</li>
+<li>短期样本外: n=425, acc=49.9%, auc=0.497, brier=0.257</li>
+<li>中期样本外: n=406, acc=59.6%, auc=0.697, brier=0.240</li>
+</ul>
+<h2>风险提示</h2>
+<ul>
+<li>本报告为统计预测结果，不构成投资建议。</li>
+<li>若市场处于 Risk-Off，建议优先执行仓位约束。</li>
+<li>建议叠加基本面与事件风控，不建议仅凭单模型交易。</li>
+</ul>
+
+</body></html>

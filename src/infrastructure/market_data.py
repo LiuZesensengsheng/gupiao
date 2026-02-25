@@ -79,8 +79,8 @@ def fetch_eastmoney_daily(
     symbol: str,
     start: str = "2010-01-01",
     end: str = "2099-12-31",
-    timeout: int = 20,
-    retries: int = 3,
+    timeout: int = 8,
+    retries: int = 2,
 ) -> pd.DataFrame:
     try:
         info = normalize_symbol(symbol)
@@ -392,6 +392,12 @@ def _load_single_source(
             except DataError:
                 if cached_disk is None or cached_disk.empty:
                     raise
+                cached_max = pd.Timestamp(cached_disk["date"].max()).normalize()
+                if cached_max < target_end - pd.Timedelta(days=3):
+                    raise DataError(
+                        f"{symbol}: eastmoney refresh failed and local cache is stale "
+                        f"(latest={cached_max.date()}, target_end={target_end.date()})"
+                    )
                 df = cached_disk
         else:
             df = cached_disk

@@ -1,0 +1,406 @@
+{
+  "generated_at": "2026-02-24",
+  "source": "subset_for_ml",
+  "stocks": [
+    {
+      "symbol": "002498.SZ",
+      "name": "汉缆股份",
+      "sector": "其他"
+    },
+    {
+      "symbol": "600984.SH",
+      "name": "建设机械",
+      "sector": "其他"
+    },
+    {
+      "symbol": "000839.SZ",
+      "name": "国安股份",
+      "sector": "其他"
+    },
+    {
+      "symbol": "601777.SH",
+      "name": "千里科技",
+      "sector": "其他"
+    },
+    {
+      "symbol": "000890.SZ",
+      "name": "法尔胜",
+      "sector": "其他"
+    },
+    {
+      "symbol": "601890.SH",
+      "name": "亚星锚链",
+      "sector": "其他"
+    },
+    {
+      "symbol": "002843.SZ",
+      "name": "泰嘉股份",
+      "sector": "其他"
+    },
+    {
+      "symbol": "002703.SZ",
+      "name": "浙江世宝",
+      "sector": "其他"
+    },
+    {
+      "symbol": "600629.SH",
+      "name": "华建集团",
+      "sector": "其他"
+    },
+    {
+      "symbol": "000859.SZ",
+      "name": "国风新材",
+      "sector": "其他"
+    },
+    {
+      "symbol": "000021.SZ",
+      "name": "深科技",
+      "sector": "其他"
+    },
+    {
+      "symbol": "605033.SH",
+      "name": "美邦股份",
+      "sector": "其他"
+    },
+    {
+      "symbol": "002355.SZ",
+      "name": "兴民智通",
+      "sector": "其他"
+    },
+    {
+      "symbol": "600410.SH",
+      "name": "华胜天成",
+      "sector": "其他"
+    },
+    {
+      "symbol": "001896.SZ",
+      "name": "豫能控股",
+      "sector": "其他"
+    },
+    {
+      "symbol": "600893.SH",
+      "name": "航发动力",
+      "sector": "其他"
+    },
+    {
+      "symbol": "603163.SH",
+      "name": "圣晖集成",
+      "sector": "其他"
+    },
+    {
+      "symbol": "605289.SH",
+      "name": "罗曼股份",
+      "sector": "其他"
+    },
+    {
+      "symbol": "603533.SH",
+      "name": "掌阅科技",
+      "sector": "其他"
+    },
+    {
+      "symbol": "603331.SH",
+      "name": "百达精工",
+      "sector": "其他"
+    },
+    {
+      "symbol": "002009.SZ",
+      "name": "天奇股份",
+      "sector": "其他"
+    },
+    {
+      "symbol": "603960.SH",
+      "name": "克来机电",
+      "sector": "其他"
+    },
+    {
+      "symbol": "002951.SZ",
+      "name": "金时科技",
+      "sector": "其他"
+    },
+    {
+      "symbol": "002169.SZ",
+      "name": "智光电气",
+      "sector": "其他"
+    },
+    {
+      "symbol": "603466.SH",
+      "name": "风语筑",
+      "sector": "其他"
+    },
+    {
+      "symbol": "000798.SZ",
+      "name": "中水渔业",
+      "sector": "其他"
+    },
+    {
+      "symbol": "605007.SH",
+      "name": "五洲特纸",
+      "sector": "其他"
+    },
+    {
+      "symbol": "002510.SZ",
+      "name": "天汽模",
+      "sector": "其他"
+    },
+    {
+      "symbol": "600791.SH",
+      "name": "京能置业",
+      "sector": "其他"
+    },
+    {
+      "symbol": "600397.SH",
+      "name": "江钨装备",
+      "sector": "其他"
+    },
+    {
+      "symbol": "603090.SH",
+      "name": "宏盛股份",
+      "sector": "其他"
+    },
+    {
+      "symbol": "001210.SZ",
+      "name": "金房能源",
+      "sector": "其他"
+    },
+    {
+      "symbol": "002988.SZ",
+      "name": "豪美新材",
+      "sector": "其他"
+    },
+    {
+      "symbol": "000738.SZ",
+      "name": "航发控制",
+      "sector": "其他"
+    },
+    {
+      "symbol": "605255.SH",
+      "name": "天普股份",
+      "sector": "其他"
+    },
+    {
+      "symbol": "000833.SZ",
+      "name": "粤桂股份",
+      "sector": "其他"
+    },
+    {
+      "symbol": "603103.SH",
+      "name": "横店影视",
+      "sector": "其他"
+    },
+    {
+      "symbol": "603297.SH",
+      "name": "永新光学",
+      "sector": "其他"
+    },
+    {
+      "symbol": "002655.SZ",
+      "name": "共达电声",
+      "sector": "其他"
+    },
+    {
+      "symbol": "001330.SZ",
+      "name": "博纳影业",
+      "sector": "其他"
+    },
+    {
+      "symbol": "600641.SH",
+      "name": "先导基电",
+      "sector": "其他"
+    },
+    {
+      "symbol": "600977.SH",
+      "name": "中国电影",
+      "sector": "其他"
+    },
+    {
+      "symbol": "002467.SZ",
+      "name": "二六三",
+      "sector": "其他"
+    },
+    {
+      "symbol": "000973.SZ",
+      "name": "佛塑科技",
+      "sector": "其他"
+    },
+    {
+      "symbol": "605136.SH",
+      "name": "丽人丽妆",
+      "sector": "其他"
+    },
+    {
+      "symbol": "603045.SH",
+      "name": "福达合金",
+      "sector": "其他"
+    },
+    {
+      "symbol": "000016.SZ",
+      "name": "深康佳Ａ",
+      "sector": "其他"
+    },
+    {
+      "symbol": "603667.SH",
+      "name": "五洲新春",
+      "sector": "其他"
+    },
+    {
+      "symbol": "002374.SZ",
+      "name": "中锐股份",
+      "sector": "其他"
+    },
+    {
+      "symbol": "002812.SZ",
+      "name": "恩捷股份",
+      "sector": "其他"
+    },
+    {
+      "symbol": "600538.SH",
+      "name": "国发股份",
+      "sector": "其他"
+    },
+    {
+      "symbol": "002931.SZ",
+      "name": "锋龙股份",
+      "sector": "其他"
+    },
+    {
+      "symbol": "002196.SZ",
+      "name": "方正电机",
+      "sector": "其他"
+    },
+    {
+      "symbol": "002357.SZ",
+      "name": "富临运业",
+      "sector": "其他"
+    },
+    {
+      "symbol": "002297.SZ",
+      "name": "博云新材",
+      "sector": "其他"
+    },
+    {
+      "symbol": "002896.SZ",
+      "name": "中大力德",
+      "sector": "其他"
+    },
+    {
+      "symbol": "002519.SZ",
+      "name": "银河电子",
+      "sector": "其他"
+    },
+    {
+      "symbol": "605183.SH",
+      "name": "确成股份",
+      "sector": "其他"
+    },
+    {
+      "symbol": "603929.SH",
+      "name": "亚翔集成",
+      "sector": "其他"
+    },
+    {
+      "symbol": "002933.SZ",
+      "name": "新兴装备",
+      "sector": "其他"
+    },
+    {
+      "symbol": "603000.SH",
+      "name": "人民网",
+      "sector": "其他"
+    },
+    {
+      "symbol": "603197.SH",
+      "name": "保隆科技",
+      "sector": "其他"
+    },
+    {
+      "symbol": "001203.SZ",
+      "name": "大中矿业",
+      "sector": "其他"
+    },
+    {
+      "symbol": "001309.SZ",
+      "name": "德明利",
+      "sector": "其他"
+    },
+    {
+      "symbol": "603306.SH",
+      "name": "华懋科技",
+      "sector": "其他"
+    },
+    {
+      "symbol": "000779.SZ",
+      "name": "甘咨询",
+      "sector": "其他"
+    },
+    {
+      "symbol": "002163.SZ",
+      "name": "海南发展",
+      "sector": "其他"
+    },
+    {
+      "symbol": "302132.SZ",
+      "name": "中航成飞",
+      "sector": "其他"
+    },
+    {
+      "symbol": "001331.SZ",
+      "name": "胜通能源",
+      "sector": "其他"
+    },
+    {
+      "symbol": "002638.SZ",
+      "name": "勤上股份",
+      "sector": "其他"
+    },
+    {
+      "symbol": "000559.SZ",
+      "name": "万向钱潮",
+      "sector": "其他"
+    },
+    {
+      "symbol": "002134.SZ",
+      "name": "天津普林",
+      "sector": "其他"
+    },
+    {
+      "symbol": "603738.SH",
+      "name": "泰晶科技",
+      "sector": "其他"
+    },
+    {
+      "symbol": "600730.SH",
+      "name": "中国高科",
+      "sector": "其他"
+    },
+    {
+      "symbol": "601595.SH",
+      "name": "上海电影",
+      "sector": "其他"
+    },
+    {
+      "symbol": "603922.SH",
+      "name": "金鸿顺",
+      "sector": "其他"
+    },
+    {
+      "symbol": "600391.SH",
+      "name": "航发科技",
+      "sector": "其他"
+    },
+    {
+      "symbol": "002768.SZ",
+      "name": "国恩股份",
+      "sector": "其他"
+    },
+    {
+      "symbol": "002283.SZ",
+      "name": "天润工业",
+      "sector": "其他"
+    },
+    {
+      "symbol": "002837.SZ",
+      "name": "英维克",
+      "sector": "其他"
+    }
+  ]
+}

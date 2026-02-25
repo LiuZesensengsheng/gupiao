@@ -1,0 +1,1506 @@
+{
+  "generated_at": "2026-02-24",
+  "source": "discover_top300_local_ex_index_named",
+  "stocks": [
+    {
+      "symbol": "605599.SH",
+      "name": "菜百股份",
+      "sector": "候选Top300"
+    },
+    {
+      "symbol": "000610.SZ",
+      "name": "西安旅游",
+      "sector": "候选Top300"
+    },
+    {
+      "symbol": "603099.SH",
+      "name": "长白山",
+      "sector": "候选Top300"
+    },
+    {
+      "symbol": "001202.SZ",
+      "name": "炬申股份",
+      "sector": "候选Top300"
+    },
+    {
+      "symbol": "603709.SH",
+      "name": "中源家居",
+      "sector": "候选Top300"
+    },
+    {
+      "symbol": "002632.SZ",
+      "name": "道明光学",
+      "sector": "候选Top300"
+    },
+    {
+      "symbol": "000905.SZ",
+      "name": "厦门港务",
+      "sector": "候选Top300"
+    },
+    {
+      "symbol": "600391.SH",
+      "name": "航发科技",
+      "sector": "候选Top300"
+    },
+    {
+      "symbol": "605100.SH",
+      "name": "华丰股份",
+      "sector": "候选Top300"
+    },
+    {
+      "symbol": "603967.SH",
+      "name": "中创物流",
+      "sector": "候选Top300"
+    },
+    {
+      "symbol": "002394.SZ",
+      "name": "联发股份",
+      "sector": "候选Top300"
+    },
+    {
+      "symbol": "001331.SZ",
+      "name": "胜通能源",
+      "sector": "候选Top300"
+    },
+    {
+      "symbol": "605289.SH",
+      "name": "罗曼股份",
+      "sector": "候选Top300"
+    },
+    {
+      "symbol": "600593.SH",
+      "name": "大连圣亚",
+      "sector": "候选Top300"
+    },
+    {
+      "symbol": "605378.SH",
+      "name": "野马电池",
+      "sector": "候选Top300"
+    },
+    {
+      "symbol": "605099.SH",
+      "name": "共创草坪",
+      "sector": "候选Top300"
+    },
+    {
+      "symbol": "002768.SZ",
+      "name": "国恩股份",
+      "sector": "候选Top300"
+    },
+    {
+      "symbol": "001309.SZ",
+      "name": "德明利",
+      "sector": "候选Top300"
+    },
+    {
+      "symbol": "605155.SH",
+      "name": "西大门",
+      "sector": "候选Top300"
+    },
+    {
+      "symbol": "603360.SH",
+      "name": "百傲化学",
+      "sector": "候选Top300"
+    },
+    {
+      "symbol": "002463.SZ",
+      "name": "沪电股份",
+      "sector": "候选Top300"
+    },
+    {
+      "symbol": "002475.SZ",
+      "name": "立讯精密",
+      "sector": "候选Top300"
+    },
+    {
+      "symbol": "002476.SZ",
+      "name": "宝莫股份",
+      "sector": "候选Top300"
+    },
+    {
+      "symbol": "002571.SZ",
+      "name": "德力股份",
+      "sector": "候选Top300"
+    },
+    {
+      "symbol": "605255.SH",
+      "name": "天普股份",
+      "sector": "候选Top300"
+    },
+    {
+      "symbol": "603890.SH",
+      "name": "春秋电子",
+      "sector": "候选Top300"
+    },
+    {
+      "symbol": "002083.SZ",
+      "name": "孚日股份",
+      "sector": "候选Top300"
+    },
+    {
+      "symbol": "605368.SH",
+      "name": "蓝天燃气",
+      "sector": "候选Top300"
+    },
+    {
+      "symbol": "000766.SZ",
+      "name": "通化金马",
+      "sector": "候选Top300"
+    },
+    {
+      "symbol": "603156.SH",
+      "name": "养元饮品",
+      "sector": "候选Top300"
+    },
+    {
+      "symbol": "003009.SZ",
+      "name": "中天火箭",
+      "sector": "候选Top300"
+    },
+    {
+      "symbol": "002767.SZ",
+      "name": "先锋电子",
+      "sector": "候选Top300"
+    },
+    {
+      "symbol": "002584.SZ",
+      "name": "西陇科学",
+      "sector": "候选Top300"
+    },
+    {
+      "symbol": "600660.SH",
+      "name": "福耀玻璃",
+      "sector": "候选Top300"
+    },
+    {
+      "symbol": "002677.SZ",
+      "name": "浙江美大",
+      "sector": "候选Top300"
+    },
+    {
+      "symbol": "603006.SH",
+      "name": "联明股份",
+      "sector": "候选Top300"
+    },
+    {
+      "symbol": "001318.SZ",
+      "name": "阳光乳业",
+      "sector": "候选Top300"
+    },
+    {
+      "symbol": "002931.SZ",
+      "name": "锋龙股份",
+      "sector": "候选Top300"
+    },
+    {
+      "symbol": "003023.SZ",
+      "name": "彩虹集团",
+      "sector": "候选Top300"
+    },
+    {
+      "symbol": "603725.SH",
+      "name": "天安新材",
+      "sector": "候选Top300"
+    },
+    {
+      "symbol": "002066.SZ",
+      "name": "瑞泰科技",
+      "sector": "候选Top300"
+    },
+    {
+      "symbol": "001218.SZ",
+      "name": "丽臣实业",
+      "sector": "候选Top300"
+    },
+    {
+      "symbol": "002033.SZ",
+      "name": "丽江股份",
+      "sector": "候选Top300"
+    },
+    {
+      "symbol": "603307.SH",
+      "name": "扬州金泉",
+      "sector": "候选Top300"
+    },
+    {
+      "symbol": "001288.SZ",
+      "name": "运机集团",
+      "sector": "候选Top300"
+    },
+    {
+      "symbol": "002823.SZ",
+      "name": "凯中精密",
+      "sector": "候选Top300"
+    },
+    {
+      "symbol": "603416.SH",
+      "name": "信捷电气",
+      "sector": "候选Top300"
+    },
+    {
+      "symbol": "605286.SH",
+      "name": "同力天启",
+      "sector": "候选Top300"
+    },
+    {
+      "symbol": "001229.SZ",
+      "name": "魅视科技",
+      "sector": "候选Top300"
+    },
+    {
+      "symbol": "605338.SH",
+      "name": "巴比食品",
+      "sector": "候选Top300"
+    },
+    {
+      "symbol": "000419.SZ",
+      "name": "通程控股",
+      "sector": "候选Top300"
+    },
+    {
+      "symbol": "001203.SZ",
+      "name": "大中矿业",
+      "sector": "候选Top300"
+    },
+    {
+      "symbol": "600592.SH",
+      "name": "龙溪股份",
+      "sector": "候选Top300"
+    },
+    {
+      "symbol": "603201.SH",
+      "name": "常润股份",
+      "sector": "候选Top300"
+    },
+    {
+      "symbol": "603280.SH",
+      "name": "南方路机",
+      "sector": "候选Top300"
+    },
+    {
+      "symbol": "600250.SH",
+      "name": "南京商旅",
+      "sector": "候选Top300"
+    },
+    {
+      "symbol": "603798.SH",
+      "name": "康普顿",
+      "sector": "候选Top300"
+    },
+    {
+      "symbol": "600673.SH",
+      "name": "东阳光",
+      "sector": "候选Top300"
+    },
+    {
+      "symbol": "001211.SZ",
+      "name": "双枪科技",
+      "sector": "候选Top300"
+    },
+    {
+      "symbol": "000978.SZ",
+      "name": "桂林旅游",
+      "sector": "候选Top300"
+    },
+    {
+      "symbol": "605058.SH",
+      "name": "澳弘电子",
+      "sector": "候选Top300"
+    },
+    {
+      "symbol": "603986.SH",
+      "name": "兆易创新",
+      "sector": "候选Top300"
+    },
+    {
+      "symbol": "603313.SH",
+      "name": "梦百合",
+      "sector": "候选Top300"
+    },
+    {
+      "symbol": "603040.SH",
+      "name": "新坐标",
+      "sector": "候选Top300"
+    },
+    {
+      "symbol": "002811.SZ",
+      "name": "郑中设计",
+      "sector": "候选Top300"
+    },
+    {
+      "symbol": "600697.SH",
+      "name": "欧亚集团",
+      "sector": "候选Top300"
+    },
+    {
+      "symbol": "605178.SH",
+      "name": "时空科技",
+      "sector": "候选Top300"
+    },
+    {
+      "symbol": "601212.SH",
+      "name": "白银有色",
+      "sector": "候选Top300"
+    },
+    {
+      "symbol": "600113.SH",
+      "name": "浙江东日",
+      "sector": "候选Top300"
+    },
+    {
+      "symbol": "603588.SH",
+      "name": "高能环境",
+      "sector": "候选Top300"
+    },
+    {
+      "symbol": "600257.SH",
+      "name": "大湖股份",
+      "sector": "候选Top300"
+    },
+    {
+      "symbol": "603586.SH",
+      "name": "金麒麟",
+      "sector": "候选Top300"
+    },
+    {
+      "symbol": "002748.SZ",
+      "name": "世龙实业",
+      "sector": "候选Top300"
+    },
+    {
+      "symbol": "002696.SZ",
+      "name": "百洋股份",
+      "sector": "候选Top300"
+    },
+    {
+      "symbol": "600397.SH",
+      "name": "江钨装备",
+      "sector": "候选Top300"
+    },
+    {
+      "symbol": "000524.SZ",
+      "name": "岭南控股",
+      "sector": "候选Top300"
+    },
+    {
+      "symbol": "600012.SH",
+      "name": "皖通高速",
+      "sector": "候选Top300"
+    },
+    {
+      "symbol": "603163.SH",
+      "name": "圣晖集成",
+      "sector": "候选Top300"
+    },
+    {
+      "symbol": "603190.SH",
+      "name": "亚通精工",
+      "sector": "候选Top300"
+    },
+    {
+      "symbol": "002837.SZ",
+      "name": "英维克",
+      "sector": "候选Top300"
+    },
+    {
+      "symbol": "000977.SZ",
+      "name": "浪潮信息",
+      "sector": "候选Top300"
+    },
+    {
+      "symbol": "601007.SH",
+      "name": "金陵饭店",
+      "sector": "候选Top300"
+    },
+    {
+      "symbol": "002371.SZ",
+      "name": "北方华创",
+      "sector": "候选Top300"
+    },
+    {
+      "symbol": "002587.SZ",
+      "name": "奥拓电子",
+      "sector": "候选Top300"
+    },
+    {
+      "symbol": "600006.SH",
+      "name": "东风股份",
+      "sector": "候选Top300"
+    },
+    {
+      "symbol": "603788.SH",
+      "name": "宁波高发",
+      "sector": "候选Top300"
+    },
+    {
+      "symbol": "002023.SZ",
+      "name": "海特高新",
+      "sector": "候选Top300"
+    },
+    {
+      "symbol": "000888.SZ",
+      "name": "峨眉山Ａ",
+      "sector": "候选Top300"
+    },
+    {
+      "symbol": "603182.SH",
+      "name": "嘉华股份",
+      "sector": "候选Top300"
+    },
+    {
+      "symbol": "000592.SZ",
+      "name": "平潭发展",
+      "sector": "候选Top300"
+    },
+    {
+      "symbol": "600749.SH",
+      "name": "西藏旅游",
+      "sector": "候选Top300"
+    },
+    {
+      "symbol": "603500.SH",
+      "name": "祥和实业",
+      "sector": "候选Top300"
+    },
+    {
+      "symbol": "603667.SH",
+      "name": "五洲新春",
+      "sector": "候选Top300"
+    },
+    {
+      "symbol": "600097.SH",
+      "name": "开创国际",
+      "sector": "候选Top300"
+    },
+    {
+      "symbol": "600869.SH",
+      "name": "远东股份",
+      "sector": "候选Top300"
+    },
+    {
+      "symbol": "601038.SH",
+      "name": "一拖股份",
+      "sector": "候选Top300"
+    },
+    {
+      "symbol": "002204.SZ",
+      "name": "大连重工",
+      "sector": "候选Top300"
+    },
+    {
+      "symbol": "603161.SH",
+      "name": "科华控股",
+      "sector": "候选Top300"
+    },
+    {
+      "symbol": "603928.SH",
+      "name": "兴业股份",
+      "sector": "候选Top300"
+    },
+    {
+      "symbol": "605303.SH",
+      "name": "园林股份",
+      "sector": "候选Top300"
+    },
+    {
+      "symbol": "603528.SH",
+      "name": "多伦科技",
+      "sector": "候选Top300"
+    },
+    {
+      "symbol": "600889.SH",
+      "name": "南京化纤",
+      "sector": "候选Top300"
+    },
+    {
+      "symbol": "002284.SZ",
+      "name": "亚太股份",
+      "sector": "候选Top300"
+    },
+    {
+      "symbol": "605005.SH",
+      "name": "合兴股份",
+      "sector": "候选Top300"
+    },
+    {
+      "symbol": "002708.SZ",
+      "name": "光洋股份",
+      "sector": "候选Top300"
+    },
+    {
+      "symbol": "001234.SZ",
+      "name": "泰慕士",
+      "sector": "候选Top300"
+    },
+    {
+      "symbol": "600128.SH",
+      "name": "苏豪弘业",
+      "sector": "候选Top300"
+    },
+    {
+      "symbol": "600509.SH",
+      "name": "天富能源",
+      "sector": "候选Top300"
+    },
+    {
+      "symbol": "603090.SH",
+      "name": "宏盛股份",
+      "sector": "候选Top300"
+    },
+    {
+      "symbol": "603289.SH",
+      "name": "泰瑞机器",
+      "sector": "候选Top300"
+    },
+    {
+      "symbol": "001336.SZ",
+      "name": "楚环科技",
+      "sector": "候选Top300"
+    },
+    {
+      "symbol": "603316.SH",
+      "name": "诚邦股份",
+      "sector": "候选Top300"
+    },
+    {
+      "symbol": "603121.SH",
+      "name": "华培动力",
+      "sector": "候选Top300"
+    },
+    {
+      "symbol": "002627.SZ",
+      "name": "三峡旅游",
+      "sector": "候选Top300"
+    },
+    {
+      "symbol": "605001.SH",
+      "name": "威奥股份",
+      "sector": "候选Top300"
+    },
+    {
+      "symbol": "603326.SH",
+      "name": "我乐家居",
+      "sector": "候选Top300"
+    },
+    {
+      "symbol": "603655.SH",
+      "name": "朗博科技",
+      "sector": "候选Top300"
+    },
+    {
+      "symbol": "601136.SH",
+      "name": "首创证券",
+      "sector": "候选Top300"
+    },
+    {
+      "symbol": "600689.SH",
+      "name": "上海三毛",
+      "sector": "候选Top300"
+    },
+    {
+      "symbol": "600626.SH",
+      "name": "申达股份",
+      "sector": "候选Top300"
+    },
+    {
+      "symbol": "605118.SH",
+      "name": "力鼎光电",
+      "sector": "候选Top300"
+    },
+    {
+      "symbol": "002976.SZ",
+      "name": "瑞玛精密",
+      "sector": "候选Top300"
+    },
+    {
+      "symbol": "603848.SH",
+      "name": "好太太",
+      "sector": "候选Top300"
+    },
+    {
+      "symbol": "001216.SZ",
+      "name": "华瓷股份",
+      "sector": "候选Top300"
+    },
+    {
+      "symbol": "600706.SH",
+      "name": "曲江文旅",
+      "sector": "候选Top300"
+    },
+    {
+      "symbol": "600119.SH",
+      "name": "长江投资",
+      "sector": "候选Top300"
+    },
+    {
+      "symbol": "603903.SH",
+      "name": "中持股份",
+      "sector": "候选Top300"
+    },
+    {
+      "symbol": "605258.SH",
+      "name": "协和电子",
+      "sector": "候选Top300"
+    },
+    {
+      "symbol": "001238.SZ",
+      "name": "浙江正特",
+      "sector": "候选Top300"
+    },
+    {
+      "symbol": "003027.SZ",
+      "name": "同兴科技",
+      "sector": "候选Top300"
+    },
+    {
+      "symbol": "600768.SH",
+      "name": "宁波富邦",
+      "sector": "候选Top300"
+    },
+    {
+      "symbol": "002472.SZ",
+      "name": "双环传动",
+      "sector": "候选Top300"
+    },
+    {
+      "symbol": "603656.SH",
+      "name": "泰禾智能",
+      "sector": "候选Top300"
+    },
+    {
+      "symbol": "003025.SZ",
+      "name": "思进智能",
+      "sector": "候选Top300"
+    },
+    {
+      "symbol": "002877.SZ",
+      "name": "智能自控",
+      "sector": "候选Top300"
+    },
+    {
+      "symbol": "603800.SH",
+      "name": "洪田股份",
+      "sector": "候选Top300"
+    },
+    {
+      "symbol": "603585.SH",
+      "name": "苏利股份",
+      "sector": "候选Top300"
+    },
+    {
+      "symbol": "603690.SH",
+      "name": "至纯科技",
+      "sector": "候选Top300"
+    },
+    {
+      "symbol": "002050.SZ",
+      "name": "三花智控",
+      "sector": "候选Top300"
+    },
+    {
+      "symbol": "002384.SZ",
+      "name": "东山精密",
+      "sector": "候选Top300"
+    },
+    {
+      "symbol": "002635.SZ",
+      "name": "安洁科技",
+      "sector": "候选Top300"
+    },
+    {
+      "symbol": "000889.SZ",
+      "name": "中嘉博创",
+      "sector": "候选Top300"
+    },
+    {
+      "symbol": "603038.SH",
+      "name": "华立股份",
+      "sector": "候选Top300"
+    },
+    {
+      "symbol": "603997.SH",
+      "name": "继峰股份",
+      "sector": "候选Top300"
+    },
+    {
+      "symbol": "002800.SZ",
+      "name": "天顺股份",
+      "sector": "候选Top300"
+    },
+    {
+      "symbol": "000863.SZ",
+      "name": "三湘印象",
+      "sector": "候选Top300"
+    },
+    {
+      "symbol": "600284.SH",
+      "name": "浦东建设",
+      "sector": "候选Top300"
+    },
+    {
+      "symbol": "002443.SZ",
+      "name": "金洲管道",
+      "sector": "候选Top300"
+    },
+    {
+      "symbol": "600288.SH",
+      "name": "大恒科技",
+      "sector": "候选Top300"
+    },
+    {
+      "symbol": "600725.SH",
+      "name": "云维股份",
+      "sector": "候选Top300"
+    },
+    {
+      "symbol": "600258.SH",
+      "name": "首旅酒店",
+      "sector": "候选Top300"
+    },
+    {
+      "symbol": "002975.SZ",
+      "name": "博杰股份",
+      "sector": "候选Top300"
+    },
+    {
+      "symbol": "603321.SH",
+      "name": "梅轮电梯",
+      "sector": "候选Top300"
+    },
+    {
+      "symbol": "603165.SH",
+      "name": "荣晟环保",
+      "sector": "候选Top300"
+    },
+    {
+      "symbol": "603022.SH",
+      "name": "新通联",
+      "sector": "候选Top300"
+    },
+    {
+      "symbol": "603111.SH",
+      "name": "康尼机电",
+      "sector": "候选Top300"
+    },
+    {
+      "symbol": "603079.SH",
+      "name": "圣达生物",
+      "sector": "候选Top300"
+    },
+    {
+      "symbol": "002395.SZ",
+      "name": "双象股份",
+      "sector": "候选Top300"
+    },
+    {
+      "symbol": "000688.SZ",
+      "name": "国城矿业",
+      "sector": "候选Top300"
+    },
+    {
+      "symbol": "603217.SH",
+      "name": "元利科技",
+      "sector": "候选Top300"
+    },
+    {
+      "symbol": "605588.SH",
+      "name": "冠石科技",
+      "sector": "候选Top300"
+    },
+    {
+      "symbol": "603949.SH",
+      "name": "雪龙集团",
+      "sector": "候选Top300"
+    },
+    {
+      "symbol": "002277.SZ",
+      "name": "友阿股份",
+      "sector": "候选Top300"
+    },
+    {
+      "symbol": "002968.SZ",
+      "name": "新大正",
+      "sector": "候选Top300"
+    },
+    {
+      "symbol": "002654.SZ",
+      "name": "万润科技",
+      "sector": "候选Top300"
+    },
+    {
+      "symbol": "002498.SZ",
+      "name": "汉缆股份",
+      "sector": "候选Top300"
+    },
+    {
+      "symbol": "002899.SZ",
+      "name": "英派斯",
+      "sector": "候选Top300"
+    },
+    {
+      "symbol": "002347.SZ",
+      "name": "泰尔股份",
+      "sector": "候选Top300"
+    },
+    {
+      "symbol": "600506.SH",
+      "name": "统一股份",
+      "sector": "候选Top300"
+    },
+    {
+      "symbol": "600778.SH",
+      "name": "友好集团",
+      "sector": "候选Top300"
+    },
+    {
+      "symbol": "600505.SH",
+      "name": "西昌电力",
+      "sector": "候选Top300"
+    },
+    {
+      "symbol": "002883.SZ",
+      "name": "中设股份",
+      "sector": "候选Top300"
+    },
+    {
+      "symbol": "600671.SH",
+      "name": "天目药业",
+      "sector": "候选Top300"
+    },
+    {
+      "symbol": "002600.SZ",
+      "name": "领益智造",
+      "sector": "候选Top300"
+    },
+    {
+      "symbol": "600635.SH",
+      "name": "大众公用",
+      "sector": "候选Top300"
+    },
+    {
+      "symbol": "002106.SZ",
+      "name": "莱宝高科",
+      "sector": "候选Top300"
+    },
+    {
+      "symbol": "002963.SZ",
+      "name": "豪尔赛",
+      "sector": "候选Top300"
+    },
+    {
+      "symbol": "605016.SH",
+      "name": "百龙创园",
+      "sector": "候选Top300"
+    },
+    {
+      "symbol": "002163.SZ",
+      "name": "海南发展",
+      "sector": "候选Top300"
+    },
+    {
+      "symbol": "002909.SZ",
+      "name": "集泰股份",
+      "sector": "候选Top300"
+    },
+    {
+      "symbol": "001267.SZ",
+      "name": "汇绿生态",
+      "sector": "候选Top300"
+    },
+    {
+      "symbol": "600977.SH",
+      "name": "中国电影",
+      "sector": "候选Top300"
+    },
+    {
+      "symbol": "000423.SZ",
+      "name": "东阿阿胶",
+      "sector": "候选Top300"
+    },
+    {
+      "symbol": "002228.SZ",
+      "name": "合兴包装",
+      "sector": "候选Top300"
+    },
+    {
+      "symbol": "002337.SZ",
+      "name": "赛象科技",
+      "sector": "候选Top300"
+    },
+    {
+      "symbol": "000796.SZ",
+      "name": "凯撒旅业",
+      "sector": "候选Top300"
+    },
+    {
+      "symbol": "002134.SZ",
+      "name": "天津普林",
+      "sector": "候选Top300"
+    },
+    {
+      "symbol": "002404.SZ",
+      "name": "嘉欣丝绸",
+      "sector": "候选Top300"
+    },
+    {
+      "symbol": "002059.SZ",
+      "name": "云南旅游",
+      "sector": "候选Top300"
+    },
+    {
+      "symbol": "600150.SH",
+      "name": "中国船舶",
+      "sector": "候选Top300"
+    },
+    {
+      "symbol": "000721.SZ",
+      "name": "西安饮食",
+      "sector": "候选Top300"
+    },
+    {
+      "symbol": "002363.SZ",
+      "name": "隆基机械",
+      "sector": "候选Top300"
+    },
+    {
+      "symbol": "600540.SH",
+      "name": "新赛股份",
+      "sector": "候选Top300"
+    },
+    {
+      "symbol": "001210.SZ",
+      "name": "金房能源",
+      "sector": "候选Top300"
+    },
+    {
+      "symbol": "001368.SZ",
+      "name": "通达创智",
+      "sector": "候选Top300"
+    },
+    {
+      "symbol": "603665.SH",
+      "name": "康隆达",
+      "sector": "候选Top300"
+    },
+    {
+      "symbol": "002989.SZ",
+      "name": "中天精装",
+      "sector": "候选Top300"
+    },
+    {
+      "symbol": "603390.SH",
+      "name": "通达电气",
+      "sector": "候选Top300"
+    },
+    {
+      "symbol": "000738.SZ",
+      "name": "航发控制",
+      "sector": "候选Top300"
+    },
+    {
+      "symbol": "603836.SH",
+      "name": "海程邦达",
+      "sector": "候选Top300"
+    },
+    {
+      "symbol": "600382.SH",
+      "name": "广东明珠",
+      "sector": "候选Top300"
+    },
+    {
+      "symbol": "600476.SH",
+      "name": "湘邮科技",
+      "sector": "候选Top300"
+    },
+    {
+      "symbol": "002707.SZ",
+      "name": "众信旅游",
+      "sector": "候选Top300"
+    },
+    {
+      "symbol": "002553.SZ",
+      "name": "南方精工",
+      "sector": "候选Top300"
+    },
+    {
+      "symbol": "002559.SZ",
+      "name": "亚威股份",
+      "sector": "候选Top300"
+    },
+    {
+      "symbol": "600354.SH",
+      "name": "敦煌种业",
+      "sector": "候选Top300"
+    },
+    {
+      "symbol": "000973.SZ",
+      "name": "佛塑科技",
+      "sector": "候选Top300"
+    },
+    {
+      "symbol": "000548.SZ",
+      "name": "湖南投资",
+      "sector": "候选Top300"
+    },
+    {
+      "symbol": "603015.SH",
+      "name": "弘讯科技",
+      "sector": "候选Top300"
+    },
+    {
+      "symbol": "603306.SH",
+      "name": "华懋科技",
+      "sector": "候选Top300"
+    },
+    {
+      "symbol": "002643.SZ",
+      "name": "万润股份",
+      "sector": "候选Top300"
+    },
+    {
+      "symbol": "001260.SZ",
+      "name": "坤泰股份",
+      "sector": "候选Top300"
+    },
+    {
+      "symbol": "001298.SZ",
+      "name": "好上好",
+      "sector": "候选Top300"
+    },
+    {
+      "symbol": "002682.SZ",
+      "name": "龙洲股份",
+      "sector": "候选Top300"
+    },
+    {
+      "symbol": "603081.SH",
+      "name": "大丰实业",
+      "sector": "候选Top300"
+    },
+    {
+      "symbol": "600748.SH",
+      "name": "上实发展",
+      "sector": "候选Top300"
+    },
+    {
+      "symbol": "002169.SZ",
+      "name": "智光电气",
+      "sector": "候选Top300"
+    },
+    {
+      "symbol": "600737.SH",
+      "name": "中粮糖业",
+      "sector": "候选Top300"
+    },
+    {
+      "symbol": "002999.SZ",
+      "name": "天禾股份",
+      "sector": "候选Top300"
+    },
+    {
+      "symbol": "600538.SH",
+      "name": "国发股份",
+      "sector": "候选Top300"
+    },
+    {
+      "symbol": "002420.SZ",
+      "name": "毅昌科技",
+      "sector": "候选Top300"
+    },
+    {
+      "symbol": "605555.SH",
+      "name": "德昌股份",
+      "sector": "候选Top300"
+    },
+    {
+      "symbol": "603700.SH",
+      "name": "宁水集团",
+      "sector": "候选Top300"
+    },
+    {
+      "symbol": "000599.SZ",
+      "name": "青岛双星",
+      "sector": "候选Top300"
+    },
+    {
+      "symbol": "605177.SH",
+      "name": "东亚药业",
+      "sector": "候选Top300"
+    },
+    {
+      "symbol": "603909.SH",
+      "name": "建发合诚",
+      "sector": "候选Top300"
+    },
+    {
+      "symbol": "603159.SH",
+      "name": "上海亚虹",
+      "sector": "候选Top300"
+    },
+    {
+      "symbol": "603048.SH",
+      "name": "浙江黎明",
+      "sector": "候选Top300"
+    },
+    {
+      "symbol": "002196.SZ",
+      "name": "方正电机",
+      "sector": "候选Top300"
+    },
+    {
+      "symbol": "600699.SH",
+      "name": "均胜电子",
+      "sector": "候选Top300"
+    },
+    {
+      "symbol": "000532.SZ",
+      "name": "华金资本",
+      "sector": "候选Top300"
+    },
+    {
+      "symbol": "001300.SZ",
+      "name": "三柏硕",
+      "sector": "候选Top300"
+    },
+    {
+      "symbol": "001268.SZ",
+      "name": "联合精密",
+      "sector": "候选Top300"
+    },
+    {
+      "symbol": "603701.SH",
+      "name": "德宏股份",
+      "sector": "候选Top300"
+    },
+    {
+      "symbol": "603607.SH",
+      "name": "京华激光",
+      "sector": "候选Top300"
+    },
+    {
+      "symbol": "603708.SH",
+      "name": "家家悦",
+      "sector": "候选Top300"
+    },
+    {
+      "symbol": "002714.SZ",
+      "name": "牧原股份",
+      "sector": "候选Top300"
+    },
+    {
+      "symbol": "600846.SH",
+      "name": "同济科技",
+      "sector": "候选Top300"
+    },
+    {
+      "symbol": "002590.SZ",
+      "name": "万安科技",
+      "sector": "候选Top300"
+    },
+    {
+      "symbol": "603239.SH",
+      "name": "浙江仙通",
+      "sector": "候选Top300"
+    },
+    {
+      "symbol": "002213.SZ",
+      "name": "大为股份",
+      "sector": "候选Top300"
+    },
+    {
+      "symbol": "003019.SZ",
+      "name": "宸展光电",
+      "sector": "候选Top300"
+    },
+    {
+      "symbol": "605179.SH",
+      "name": "一鸣食品",
+      "sector": "候选Top300"
+    },
+    {
+      "symbol": "603499.SH",
+      "name": "翔港科技",
+      "sector": "候选Top300"
+    },
+    {
+      "symbol": "600543.SH",
+      "name": "莫高股份",
+      "sector": "候选Top300"
+    },
+    {
+      "symbol": "603173.SH",
+      "name": "福斯达",
+      "sector": "候选Top300"
+    },
+    {
+      "symbol": "002962.SZ",
+      "name": "五方光电",
+      "sector": "候选Top300"
+    },
+    {
+      "symbol": "000007.SZ",
+      "name": "全新好",
+      "sector": "候选Top300"
+    },
+    {
+      "symbol": "002981.SZ",
+      "name": "朝阳科技",
+      "sector": "候选Top300"
+    },
+    {
+      "symbol": "603901.SH",
+      "name": "永创智能",
+      "sector": "候选Top300"
+    },
+    {
+      "symbol": "600287.SH",
+      "name": "苏豪时尚",
+      "sector": "候选Top300"
+    },
+    {
+      "symbol": "001207.SZ",
+      "name": "联科科技",
+      "sector": "候选Top300"
+    },
+    {
+      "symbol": "002888.SZ",
+      "name": "惠威科技",
+      "sector": "候选Top300"
+    },
+    {
+      "symbol": "000559.SZ",
+      "name": "万向钱潮",
+      "sector": "候选Top300"
+    },
+    {
+      "symbol": "000558.SZ",
+      "name": "天府文旅",
+      "sector": "候选Top300"
+    },
+    {
+      "symbol": "603037.SH",
+      "name": "凯众股份",
+      "sector": "候选Top300"
+    },
+    {
+      "symbol": "002875.SZ",
+      "name": "安奈儿",
+      "sector": "候选Top300"
+    },
+    {
+      "symbol": "002892.SZ",
+      "name": "科力尔",
+      "sector": "候选Top300"
+    },
+    {
+      "symbol": "002840.SZ",
+      "name": "华统股份",
+      "sector": "候选Top300"
+    },
+    {
+      "symbol": "002769.SZ",
+      "name": "普路通",
+      "sector": "候选Top300"
+    },
+    {
+      "symbol": "605180.SH",
+      "name": "华生科技",
+      "sector": "候选Top300"
+    },
+    {
+      "symbol": "000776.SZ",
+      "name": "广发证券",
+      "sector": "候选Top300"
+    },
+    {
+      "symbol": "603023.SH",
+      "name": "威帝股份",
+      "sector": "候选Top300"
+    },
+    {
+      "symbol": "600235.SH",
+      "name": "民丰特纸",
+      "sector": "候选Top300"
+    },
+    {
+      "symbol": "002766.SZ",
+      "name": "索菱股份",
+      "sector": "候选Top300"
+    },
+    {
+      "symbol": "605055.SH",
+      "name": "迎丰股份",
+      "sector": "候选Top300"
+    },
+    {
+      "symbol": "002316.SZ",
+      "name": "亚联发展",
+      "sector": "候选Top300"
+    },
+    {
+      "symbol": "600712.SH",
+      "name": "南宁百货",
+      "sector": "候选Top300"
+    },
+    {
+      "symbol": "002548.SZ",
+      "name": "金新农",
+      "sector": "候选Top300"
+    },
+    {
+      "symbol": "605299.SH",
+      "name": "舒华体育",
+      "sector": "候选Top300"
+    },
+    {
+      "symbol": "605056.SH",
+      "name": "咸亨国际",
+      "sector": "候选Top300"
+    },
+    {
+      "symbol": "601777.SH",
+      "name": "千里科技",
+      "sector": "候选Top300"
+    },
+    {
+      "symbol": "600962.SH",
+      "name": "国投中鲁",
+      "sector": "候选Top300"
+    },
+    {
+      "symbol": "000573.SZ",
+      "name": "粤宏远Ａ",
+      "sector": "候选Top300"
+    },
+    {
+      "symbol": "600789.SH",
+      "name": "鲁抗医药",
+      "sector": "候选Top300"
+    },
+    {
+      "symbol": "603611.SH",
+      "name": "诺力股份",
+      "sector": "候选Top300"
+    },
+    {
+      "symbol": "603703.SH",
+      "name": "盛洋科技",
+      "sector": "候选Top300"
+    },
+    {
+      "symbol": "000757.SZ",
+      "name": "浩物股份",
+      "sector": "候选Top300"
+    },
+    {
+      "symbol": "002172.SZ",
+      "name": "澳洋健康",
+      "sector": "候选Top300"
+    },
+    {
+      "symbol": "600785.SH",
+      "name": "新华百货",
+      "sector": "候选Top300"
+    },
+    {
+      "symbol": "603683.SH",
+      "name": "晶华新材",
+      "sector": "候选Top300"
+    },
+    {
+      "symbol": "605580.SH",
+      "name": "恒盛能源",
+      "sector": "候选Top300"
+    },
+    {
+      "symbol": "000017.SZ",
+      "name": "深中华A",
+      "sector": "候选Top300"
+    },
+    {
+      "symbol": "002322.SZ",
+      "name": "理工能科",
+      "sector": "候选Top300"
+    },
+    {
+      "symbol": "600960.SH",
+      "name": "渤海汽车",
+      "sector": "候选Top300"
+    },
+    {
+      "symbol": "600802.SH",
+      "name": "福建水泥",
+      "sector": "候选Top300"
+    },
+    {
+      "symbol": "601127.SH",
+      "name": "赛力斯",
+      "sector": "候选Top300"
+    },
+    {
+      "symbol": "003003.SZ",
+      "name": "天元股份",
+      "sector": "候选Top300"
+    },
+    {
+      "symbol": "000428.SZ",
+      "name": "华天酒店",
+      "sector": "候选Top300"
+    },
+    {
+      "symbol": "002389.SZ",
+      "name": "航天彩虹",
+      "sector": "候选Top300"
+    },
+    {
+      "symbol": "601086.SH",
+      "name": "国芳集团",
+      "sector": "候选Top300"
+    },
+    {
+      "symbol": "002164.SZ",
+      "name": "宁波东力",
+      "sector": "候选Top300"
+    },
+    {
+      "symbol": "600011.SH",
+      "name": "华能国际",
+      "sector": "候选Top300"
+    },
+    {
+      "symbol": "603017.SH",
+      "name": "中衡设计",
+      "sector": "候选Top300"
+    },
+    {
+      "symbol": "002972.SZ",
+      "name": "科安达",
+      "sector": "候选Top300"
+    },
+    {
+      "symbol": "002870.SZ",
+      "name": "香山股份",
+      "sector": "候选Top300"
+    },
+    {
+      "symbol": "002687.SZ",
+      "name": "乔治白",
+      "sector": "候选Top300"
+    },
+    {
+      "symbol": "603717.SH",
+      "name": "天域生物",
+      "sector": "候选Top300"
+    },
+    {
+      "symbol": "000833.SZ",
+      "name": "粤桂股份",
+      "sector": "候选Top300"
+    },
+    {
+      "symbol": "603355.SH",
+      "name": "莱克电气",
+      "sector": "候选Top300"
+    }
+  ]
+}

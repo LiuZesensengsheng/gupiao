@@ -1,0 +1,21 @@
+{
+  "generated_at": "2026-02-25T21:33:46.795265",
+  "source": "file:config/universe_calc3.json",
+  "stocks": [
+    {
+      "symbol": "300476.SZ",
+      "name": "胜宏科技",
+      "sector": "计算"
+    },
+    {
+      "symbol": "300502.SZ",
+      "name": "新易盛",
+      "sector": "计算"
+    },
+    {
+      "symbol": "301358.SZ",
+      "name": "湖南裕能",
+      "sector": "计算"
+    }
+  ]
+}

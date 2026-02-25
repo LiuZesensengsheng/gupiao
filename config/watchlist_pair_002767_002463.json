@@ -1,0 +1,18 @@
+{
+  "market_index": {
+    "symbol": "000300.SH",
+    "name": "沪深300"
+  },
+  "stocks": [
+    {
+      "symbol": "002767.SZ",
+      "name": "先锋电子",
+      "sector": "计算"
+    },
+    {
+      "symbol": "002463.SZ",
+      "name": "沪电股份",
+      "sector": "计算"
+    }
+  ]
+}

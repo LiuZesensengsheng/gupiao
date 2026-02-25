@@ -1,0 +1,20 @@
+{
+  "source": "manual_pick3",
+  "stocks": [
+    {
+      "symbol": "000630.SZ",
+      "name": "铜陵有色",
+      "sector": "加仓候选"
+    },
+    {
+      "symbol": "603049.SH",
+      "name": "中策橡胶",
+      "sector": "加仓候选"
+    },
+    {
+      "symbol": "000833.SZ",
+      "name": "粤桂股份",
+      "sector": "加仓候选"
+    }
+  ]
+}

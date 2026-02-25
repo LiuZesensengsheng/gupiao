@@ -1,0 +1,20 @@
+{
+  "source": "manual_calc3",
+  "stocks": [
+    {
+      "symbol": "300476.SZ",
+      "name": "胜宏科技",
+      "sector": "计算"
+    },
+    {
+      "symbol": "300502.SZ",
+      "name": "新易盛",
+      "sector": "计算"
+    },
+    {
+      "symbol": "301358.SZ",
+      "name": "湖南裕能",
+      "sector": "计算"
+    }
+  ]
+}
