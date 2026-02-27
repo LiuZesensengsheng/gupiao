@@ -199,6 +199,7 @@ The daily report includes:
 - Fuzzy news matrix (bullish/bearish/neutral memberships)
 - Learned news probabilities + calibrated final probabilities
 - Suggested total exposure and stock weights
+- Rebalance action details (BUY/SELL/HOLD, weight delta, estimated amount/shares)
 - Market-effect modules: profit effect, loss effect, chip structure, capital state, sector heat
 - Learning diagnostics (samples, holdout metrics, learned coefficients)
 - Backtest metrics: fused strategy vs quant baseline (annual return/excess, max drawdown, Sharpe, Sortino, Calmar, Information Ratio, turnover, cost drag)
@@ -310,6 +311,24 @@ Dashboard highlights:
 
 - Main curve supports one-click switch between `融合策略净值` and `量化基线净值`
 - Extra spread curve shows `融合/基线 相对净值` (1.00 means tie)
+- New `调仓执行建议` table shows action + current/target weight + estimated trade amount/shares
+
+Execution sizing options (for actionable BUY/SELL quantities):
+
+```bash
+python3 run_api.py daily \
+  --positions-file /tmp/positions_demo.csv \
+  --portfolio-nav 800000 \
+  --trade-lot-size 100
+```
+
+`--positions-file` supports CSV/JSON:
+
+- CSV example columns: `symbol,name,shares,current_weight,market_value`
+- JSON example: `{ "cash": 100000, "positions": [ { "symbol": "603619.SH", "shares": 1200 } ] }`
+- Template file: `input/positions_template.csv`
+
+If no positions file is provided, the engine falls back to `watchlist` equal-weight current positions.
 
 Backtest parameters can be overridden from CLI:
 

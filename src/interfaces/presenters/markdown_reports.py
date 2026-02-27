@@ -29,6 +29,18 @@ def _to_float(v: float, digits: int = 2) -> str:
     return f"{v:.{digits}f}"
 
 
+def _to_money(v: float) -> str:
+    if pd.isna(v):
+        return "NA"
+    return f"{v:,.0f}"
+
+
+def _to_int(v: float) -> str:
+    if pd.isna(v):
+        return "NA"
+    return str(int(round(float(v))))
+
+
 def _metrics_line(metrics: BinaryMetrics) -> str:
     auc_text = f"{metrics.auc:.3f}" if not pd.isna(metrics.auc) else "NA"
     brier_text = f"{metrics.brier:.3f}" if not pd.isna(metrics.brier) else "NA"
@@ -149,6 +161,22 @@ def write_daily_report(out_path: str | Path, result: DailyFusionResult) -> Path:
         lines.append(
             f"| {row.name} ({row.symbol}) | {_to_percent(row.base_short)} | {_to_percent(row.base_mid)} | {row.short_sent.score:+.3f} | {row.mid_sent.score:+.3f} | {_to_percent(row.news_short_prob)} | {_to_percent(row.news_mid_prob)} | {_to_percent(row.final_short)} | {_to_percent(row.final_mid)} | {row.final_score:.3f} | {_to_percent(row.suggested_weight)} | {row.fusion_mode_short} | {row.fusion_mode_mid} | {risk_text} |"
         )
+    lines.append("")
+    lines.append("## 调仓执行建议")
+    lines.append("")
+    nav_text = _to_money(result.trade_plan_nav)
+    lines.append(
+        f"- 计算口径: `{result.trade_plan_basis}` | 组合净值: {nav_text if nav_text != 'NA' else 'NA(仅输出权重差)'} | 每手股数: {int(result.trade_plan_lot_size)}"
+    )
+    lines.append("| 个股 | 动作 | 当前权重 | 目标权重 | 权重变化 | 参考价格 | 估算金额 | 估算股数 | 估算手数 | 备注 |")
+    lines.append("|---|---|---:|---:|---:|---:|---:|---:|---:|---|")
+    if not result.trade_actions:
+        lines.append("| 无数据 | NA | NA | NA | NA | NA | NA | NA | NA | NA |")
+    else:
+        for action in result.trade_actions:
+            lines.append(
+                f"| {action.name} ({action.symbol}) | {action.action} | {_to_percent(action.current_weight)} | {_to_percent(action.target_weight)} | {_to_percent(action.delta_weight)} | {_to_float(action.est_price, 3)} | {_to_money(action.est_delta_value)} | {_to_int(action.est_delta_shares)} | {_to_float(action.est_delta_lots, 2)} | {action.note or 'NA'} |"
+            )
     lines.append("")
     lines.append("## 因子解释 (最新截面)")
     lines.append("")

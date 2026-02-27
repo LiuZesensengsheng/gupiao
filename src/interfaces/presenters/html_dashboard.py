@@ -34,6 +34,18 @@ def _num(v: float, digits: int = 2) -> str:
     return f"{v:.{digits}f}"
 
 
+def _money(v: float) -> str:
+    if pd.isna(v):
+        return "NA"
+    return f"{v:,.0f}"
+
+
+def _int(v: float) -> str:
+    if pd.isna(v):
+        return "NA"
+    return str(int(round(float(v))))
+
+
 def _mix_hex(a: tuple[int, int, int], b: tuple[int, int, int], t: float) -> str:
     t = float(np.clip(t, 0.0, 1.0))
     r = int(a[0] + (b[0] - a[0]) * t)
@@ -320,6 +332,40 @@ def write_daily_dashboard(out_path: str | Path, result: DailyFusionResult) -> Pa
             "</tr>"
         )
 
+    trade_rows_html: list[str] = []
+    buy_value = 0.0
+    sell_value = 0.0
+    buy_count = 0
+    sell_count = 0
+    hold_count = 0
+    for action in result.trade_actions:
+        delta_value = float(action.est_delta_value)
+        if action.action == "BUY":
+            buy_count += 1
+            if not pd.isna(delta_value) and delta_value > 0:
+                buy_value += delta_value
+        elif action.action == "SELL":
+            sell_count += 1
+            if not pd.isna(delta_value) and delta_value < 0:
+                sell_value += abs(delta_value)
+        else:
+            hold_count += 1
+        action_color = "#cf3131" if action.action == "BUY" else ("#1f63d8" if action.action == "SELL" else "#6b7280")
+        trade_rows_html.append(
+            "<tr>"
+            f"<td><div class='sym'>{escape(action.name)}</div><div class='code'>{escape(action.symbol)}</div></td>"
+            f"<td style='font-weight:700;color:{action_color};'>{escape(action.action)}</td>"
+            f"<td>{_pct(action.current_weight)}</td>"
+            f"<td>{_pct(action.target_weight)}</td>"
+            f"<td class='score' style='color:{_score_color(action.delta_weight)}'>{_pct(action.delta_weight)}</td>"
+            f"<td>{_num(action.est_price, 3)}</td>"
+            f"<td>{_money(action.est_delta_value)}</td>"
+            f"<td>{_int(action.est_delta_shares)}</td>"
+            f"<td>{_num(action.est_delta_lots, 2)}</td>"
+            f"<td>{escape(action.note or 'NA')}</td>"
+            "</tr>"
+        )
+
     backtest_rows: list[str] = []
     for metrics in result.backtest_metrics:
         start_text = escape(str(metrics.start_date.date())) if not pd.isna(metrics.start_date) else "NA"
@@ -399,6 +445,8 @@ def write_daily_dashboard(out_path: str | Path, result: DailyFusionResult) -> Pa
     acceptance_sub = (
         f"A/B {'通过' if result.acceptance_ab_pass else '未通过'} | 约束 {'通过' if result.acceptance_constraints_pass else '未通过'}"
     )
+    nav_text = _money(result.trade_plan_nav)
+    trade_basis_text = escape(result.trade_plan_basis)
 
     html = f"""<!doctype html>
 <html lang="zh-CN">
@@ -649,6 +697,16 @@ def write_daily_dashboard(out_path: str | Path, result: DailyFusionResult) -> Pa
         <div class="v">{acceptance_text}</div>
         <div class="sub">{escape(acceptance_sub)}</div>
       </article>
+      <article class="card">
+        <div class="k">买入预算(估算)</div>
+        <div class="v">{_money(buy_value)}</div>
+        <div class="sub">BUY {buy_count} / HOLD {hold_count} / 口径 {trade_basis_text}</div>
+      </article>
+      <article class="card">
+        <div class="k">卖出规模(估算)</div>
+        <div class="v">{_money(sell_value)}</div>
+        <div class="sub">SELL {sell_count} / 组合净值 {nav_text if nav_text != 'NA' else 'NA'} / 每手 {int(result.trade_plan_lot_size)} 股</div>
+      </article>
     </section>
 
     <div class="section-grid">
@@ -690,6 +748,24 @@ def write_daily_dashboard(out_path: str | Path, result: DailyFusionResult) -> Pa
         </article>
       </section>
     </div>
+
+    <section>
+      <h2>调仓执行建议</h2>
+      <article class="card">
+        <div class="k">计算口径</div>
+        <div class="sub">基础 {trade_basis_text} / 组合净值 {nav_text if nav_text != 'NA' else 'NA(仅输出权重差)'} / 每手 {int(result.trade_plan_lot_size)} 股 / BUY {buy_count} / SELL {sell_count} / HOLD {hold_count}</div>
+      </article>
+      <div class="table-scroll" style="margin-top:10px;">
+        <table>
+          <thead>
+            <tr><th>个股</th><th>动作</th><th>当前权重</th><th>目标权重</th><th>权重变化</th><th>参考价格</th><th>估算金额</th><th>估算股数</th><th>估算手数</th><th>备注</th></tr>
+          </thead>
+          <tbody>
+            {''.join(trade_rows_html) if trade_rows_html else '<tr><td colspan="10">无可用调仓数据</td></tr>'}
+          </tbody>
+        </table>
+      </div>
+    </section>
 
     <section>
       <h2>组合回测曲线 (交易级, 含成本)</h2>

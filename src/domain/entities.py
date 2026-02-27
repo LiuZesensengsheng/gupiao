@@ -98,6 +98,22 @@ class BlendedRow:
 
 
 @dataclass
+class TradeAction:
+    symbol: str
+    name: str
+    action: str
+    current_weight: float
+    target_weight: float
+    delta_weight: float
+    est_price: float = np.nan
+    est_delta_value: float = np.nan
+    est_delta_shares: float = np.nan
+    est_delta_lots: float = np.nan
+    current_shares: float = np.nan
+    note: str = ""
+
+
+@dataclass
 class FusionDiagnostics:
     target: str
     horizon: str

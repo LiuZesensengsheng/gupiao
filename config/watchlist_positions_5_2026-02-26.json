@@ -1,0 +1,33 @@
+{
+  "market_index": {
+    "symbol": "000300.SH",
+    "name": "沪深300"
+  },
+  "stocks": [
+    {
+      "symbol": "603619.SH",
+      "name": "中曼石油",
+      "sector": "当前持仓"
+    },
+    {
+      "symbol": "001203.SZ",
+      "name": "大中矿业",
+      "sector": "当前持仓"
+    },
+    {
+      "symbol": "000688.SZ",
+      "name": "国城矿业",
+      "sector": "当前持仓"
+    },
+    {
+      "symbol": "000630.SZ",
+      "name": "铜陵有色",
+      "sector": "当前持仓"
+    },
+    {
+      "symbol": "603049.SH",
+      "name": "中策橡胶",
+      "sector": "当前持仓"
+    }
+  ]
+}

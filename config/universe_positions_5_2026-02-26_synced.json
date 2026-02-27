@@ -1,0 +1,31 @@
+{
+  "generated_at": "2026-02-26T12:50:01.124722",
+  "source": "file:config/universe_positions_5_2026-02-26.json",
+  "stocks": [
+    {
+      "symbol": "603619.SH",
+      "name": "中曼石油",
+      "sector": "当前持仓"
+    },
+    {
+      "symbol": "001203.SZ",
+      "name": "大中矿业",
+      "sector": "当前持仓"
+    },
+    {
+      "symbol": "000688.SZ",
+      "name": "国城矿业",
+      "sector": "当前持仓"
+    },
+    {
+      "symbol": "000630.SZ",
+      "name": "铜陵有色",
+      "sector": "当前持仓"
+    },
+    {
+      "symbol": "603049.SH",
+      "name": "中策橡胶",
+      "sector": "当前持仓"
+    }
+  ]
+}

@@ -61,6 +61,9 @@ DEFAULT_TASK: dict[str, dict[str, Any]] = {
     "daily": {
         "universe_file": "config/universe_auto_longtrain.json",
         "universe_limit": 500,
+        "positions_file": "",
+        "portfolio_nav": 0.0,
+        "trade_lot_size": 100,
         "news_file": "input/news_parts",
         "news_lookback_days": 45,
         "learned_news_lookback_days": 720,
@@ -326,6 +329,26 @@ def build_parser() -> argparse.ArgumentParser:
         type=int,
         default=None,
         help="Maximum symbols loaded from universe file for daily run",
+    )
+    daily.add_argument(
+        "--positions-file",
+        dest="positions_file",
+        default=None,
+        help="Optional current positions file (csv/json) for trade action details",
+    )
+    daily.add_argument(
+        "--portfolio-nav",
+        dest="portfolio_nav",
+        type=float,
+        default=None,
+        help="Optional portfolio net asset value used for amount/share estimation",
+    )
+    daily.add_argument(
+        "--trade-lot-size",
+        dest="trade_lot_size",
+        type=int,
+        default=None,
+        help="Lot size for share estimation (A-share default 100)",
     )
     daily.add_argument(
         "--news-file",
@@ -699,6 +722,7 @@ def build_parser() -> argparse.ArgumentParser:
 def run_daily(settings: dict[str, Any]) -> int:
     set_tushare_token(settings.get("tushare_token", ""))
     market_security, stocks, sector_map = load_watchlist(settings["watchlist"])
+    current_holdings = list(stocks)
     universe_file = str(settings.get("universe_file", "")).strip()
     if not universe_file:
         raise ValueError(
@@ -733,6 +757,9 @@ def run_daily(settings: dict[str, Any]) -> int:
         use_margin_features=_parse_bool(settings["use_margin_features"]),
         margin_market_file=settings["margin_market_file"],
         margin_stock_file=settings["margin_stock_file"],
+        positions_file=str(settings["positions_file"]).strip(),
+        portfolio_nav=max(0.0, float(settings["portfolio_nav"])),
+        trade_lot_size=max(1, int(settings["trade_lot_size"])),
         news_file=settings["news_file"],
         news_lookback_days=settings["news_lookback_days"],
         learned_news_lookback_days=int(settings["learned_news_lookback_days"]),
@@ -786,6 +813,7 @@ def run_daily(settings: dict[str, Any]) -> int:
         market_security=market_security,
         stocks=stocks,
         sector_map=sector_map,
+        current_holdings=current_holdings,
     )
     report_path = write_daily_report(settings["report"], result)
     print(f"[OK] Daily report generated: {report_path.resolve()}")

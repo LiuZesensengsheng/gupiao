@@ -20,6 +20,9 @@ class ForecastConfig:
 
 @dataclass(frozen=True)
 class DailyConfig(ForecastConfig):
+    positions_file: str
+    portfolio_nav: float
+    trade_lot_size: int
     news_file: str
     news_lookback_days: int
     learned_news_lookback_days: int
