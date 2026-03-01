@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Sequence
 
 import numpy as np
@@ -35,6 +35,44 @@ class StockPanelDataset:
     frame: pd.DataFrame
     feature_columns: list[str]
     notes: list[str]
+    symbol_status: dict[str, str] = field(default_factory=dict)
+
+
+STATUS_NORMAL = "normal"
+STATUS_HALTED = "halted"
+STATUS_DELISTED = "delisted"
+STATUS_DATA_INSUFFICIENT = "data_insufficient"
+
+MIN_HISTORY_ROWS = 80
+HALT_GAP_DAYS = 3
+DELIST_GAP_DAYS = 20
+
+
+def _infer_symbol_status(
+    *,
+    stock_raw: pd.DataFrame,
+    market_frame: pd.DataFrame,
+) -> str:
+    if stock_raw.empty:
+        return STATUS_DATA_INSUFFICIENT
+
+    clean = stock_raw.copy()
+    clean["date"] = pd.to_datetime(clean["date"], errors="coerce")
+    clean = clean.dropna(subset=["date"]).sort_values("date")
+    if clean.empty or len(clean) < MIN_HISTORY_ROWS:
+        return STATUS_DATA_INSUFFICIENT
+
+    market_dates = pd.to_datetime(market_frame["date"], errors="coerce").dropna().sort_values()
+    if market_dates.empty:
+        return STATUS_NORMAL
+
+    last_trade_date = pd.Timestamp(clean["date"].iloc[-1])
+    missing_market_days = int((market_dates > last_trade_date).sum())
+    if missing_market_days >= DELIST_GAP_DAYS:
+        return STATUS_DELISTED
+    if missing_market_days >= HALT_GAP_DAYS:
+        return STATUS_HALTED
+    return STATUS_NORMAL
 
 
 def _rank_pct(frame: pd.DataFrame, group_cols: list[str], value_col: str) -> pd.Series:
@@ -168,6 +206,7 @@ def build_stock_panel_dataset(
     notes: list[str] = []
     parts: list[pd.DataFrame] = []
     stock_margin_cols_union: list[str] = []
+    symbol_status: dict[str, str] = {}
 
     for security in stock_securities:
         try:
@@ -180,8 +219,13 @@ def build_stock_panel_dataset(
             )
         except DataError as exc:
             notes.append(f"skip {security.symbol}: {exc}")
+            symbol_status[security.symbol] = STATUS_DATA_INSUFFICIENT
             continue
 
+        symbol_status[security.symbol] = _infer_symbol_status(
+            stock_raw=stock_raw,
+            market_frame=market_frame,
+        )
         frame = make_stock_feature_frame(stock_raw, market_frame)
         stock_margin_cols: list[str] = []
         if use_margin_features:
@@ -202,10 +246,11 @@ def build_stock_panel_dataset(
         frame["symbol"] = security.symbol
         frame["name"] = security.name
         frame["sector"] = security.sector or "其他"
+        frame["tradability_status"] = symbol_status.get(security.symbol, STATUS_NORMAL)
         parts.append(frame)
 
     if not parts:
-        return StockPanelDataset(frame=pd.DataFrame(), feature_columns=[], notes=notes)
+        return StockPanelDataset(frame=pd.DataFrame(), feature_columns=[], notes=notes, symbol_status=symbol_status)
 
     panel = pd.concat(parts, ignore_index=True)
     panel["date"] = pd.to_datetime(panel["date"], errors="coerce")
@@ -227,10 +272,17 @@ def build_stock_panel_dataset(
         "excess_ret_5_vs_mkt",
         "excess_ret_20_vs_sector",
     ]
+    pre_filter_symbols = set(panel["symbol"].astype(str).unique())
     panel = panel.dropna(subset=[col for col in required_cols if col in panel.columns]).copy()
     panel = panel.sort_values(["date", "symbol"]).reset_index(drop=True)
+    post_filter_symbols = set(panel["symbol"].astype(str).unique())
+    for symbol in sorted(pre_filter_symbols - post_filter_symbols):
+        if symbol_status.get(symbol) == STATUS_NORMAL:
+            symbol_status[symbol] = STATUS_DATA_INSUFFICIENT
+        notes.append(f"filter {symbol}: insufficient complete rows after panel assembly")
     return StockPanelDataset(
         frame=panel,
         feature_columns=feature_cols,
         notes=notes,
+        symbol_status=symbol_status,
     )

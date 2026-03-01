@@ -5,6 +5,7 @@ import pandas as pd
 from src.application.v2_contracts import DailyRunResult, StrategySnapshot
 from src.application.v2_contracts import PolicyInput
 from src.application.v2_services import (
+    _stock_policy_score,
     apply_policy,
     build_strategy_snapshot,
     build_trade_actions,
@@ -265,3 +266,159 @@ def test_v2_policy_allocates_within_sector_budgets_only() -> None:
         if symbol.startswith("B")
     )
     assert weak_total <= decision.sector_budgets.get("弱", 0.0) + 1e-9
+
+
+def test_stock_policy_score_uses_explicit_five_day_head() -> None:
+    slow_burn = StockForecastState(
+        "AAA",
+        "强",
+        0.50,
+        0.46,
+        0.70,
+        0.55,
+        0.02,
+        0.86,
+    )
+    fast_follow = StockForecastState(
+        "BBB",
+        "强",
+        0.56,
+        0.72,
+        0.62,
+        0.55,
+        0.02,
+        0.86,
+    )
+
+    assert _stock_policy_score(fast_follow) > _stock_policy_score(slow_burn)
+
+
+def test_compose_state_prefers_stronger_five_day_stock_when_other_signals_close() -> None:
+    market, sectors, _, cross_section = _make_demo_state()
+    stocks = [
+        StockForecastState("AAA", "有色", 0.52, 0.48, 0.66, 0.54, 0.01, 0.84),
+        StockForecastState("BBB", "有色", 0.56, 0.71, 0.62, 0.53, 0.01, 0.84),
+    ]
+
+    composite_state = compose_state(
+        market=market,
+        sectors=sectors,
+        stocks=stocks,
+        cross_section=cross_section,
+    )
+
+    assert composite_state.stocks[0].symbol == "BBB"
+
+
+def test_v2_policy_filters_halted_stock_and_freezes_existing_position() -> None:
+    market, sectors, _, cross_section = _make_demo_state()
+    stocks = [
+        StockForecastState("AAA", "有色", 0.58, 0.63, 0.68, 0.57, 0.02, 0.90, tradability_status="halted"),
+        StockForecastState("BBB", "有色", 0.54, 0.59, 0.63, 0.55, 0.02, 0.86),
+    ]
+    composite_state = compose_state(
+        market=market,
+        sectors=sectors,
+        stocks=stocks,
+        cross_section=cross_section,
+    )
+
+    decision = apply_policy(
+        PolicyInput(
+            composite_state=composite_state,
+            current_weights={"AAA": 0.18},
+            current_cash=0.82,
+            total_equity=1.0,
+        )
+    )
+
+    assert decision.symbol_target_weights["AAA"] == 0.18
+    assert "BBB" in decision.symbol_target_weights
+    assert any("holding frozen" in note for note in decision.risk_notes)
+
+
+def test_v2_policy_blocks_new_entry_when_data_is_insufficient() -> None:
+    market, sectors, _, cross_section = _make_demo_state()
+    stocks = [
+        StockForecastState("AAA", "有色", 0.60, 0.66, 0.70, 0.60, 0.03, 0.88, tradability_status="data_insufficient"),
+        StockForecastState("BBB", "化工", 0.55, 0.58, 0.62, 0.53, 0.02, 0.84),
+    ]
+    composite_state = compose_state(
+        market=market,
+        sectors=sectors,
+        stocks=stocks,
+        cross_section=cross_section,
+    )
+
+    decision = apply_policy(
+        PolicyInput(
+            composite_state=composite_state,
+            current_weights={},
+            current_cash=1.0,
+            total_equity=1.0,
+        )
+    )
+
+    assert "AAA" not in decision.symbol_target_weights
+    assert any("new entry blocked" in note for note in decision.risk_notes)
+
+
+def test_v2_policy_suppresses_small_rebalance_gap() -> None:
+    market, sectors, stocks, cross_section = _make_demo_state()
+    composite_state = compose_state(
+        market=market,
+        sectors=sectors,
+        stocks=stocks,
+        cross_section=cross_section,
+    )
+
+    decision = apply_policy(
+        PolicyInput(
+            composite_state=composite_state,
+            current_weights={
+                "000630.SZ": 0.20,
+                "600160.SH": 0.19,
+                "603619.SH": 0.18,
+                "603516.SH": 0.18,
+            },
+            current_cash=0.25,
+            total_equity=1.0,
+        )
+    )
+
+    deltas = [
+        abs(decision.symbol_target_weights.get(symbol, 0.0) - weight)
+        for symbol, weight in {
+            "000630.SZ": 0.20,
+            "600160.SH": 0.19,
+            "603619.SH": 0.18,
+            "603516.SH": 0.18,
+        }.items()
+    ]
+    assert any(delta < 0.02 for delta in deltas)
+    assert any("below threshold" in note for note in decision.risk_notes)
+
+
+def test_v2_policy_caps_single_stock_weight() -> None:
+    market, sectors, _, cross_section = _make_demo_state()
+    stocks = [
+        StockForecastState("AAA", "有色", 0.70, 0.78, 0.84, 0.70, 0.05, 0.96),
+        StockForecastState("BBB", "有色", 0.62, 0.68, 0.72, 0.58, 0.03, 0.90),
+    ]
+    composite_state = compose_state(
+        market=market,
+        sectors=sectors[:1],
+        stocks=stocks,
+        cross_section=cross_section,
+    )
+
+    decision = apply_policy(
+        PolicyInput(
+            composite_state=composite_state,
+            current_weights={},
+            current_cash=1.0,
+            total_equity=1.0,
+        )
+    )
+
+    assert max(decision.symbol_target_weights.values()) <= 0.35 + 1e-9

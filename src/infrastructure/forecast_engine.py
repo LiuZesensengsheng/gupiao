@@ -28,6 +28,21 @@ MID_BUCKET_REPRESENTATIVES = [-0.16, -0.06, 0.0, 0.06, 0.16]
 QUANTILE_LEVELS = (0.10, 0.30, 0.50, 0.70, 0.90)
 
 
+def _is_actionable_status(status: str) -> bool:
+    return str(status) not in {"halted", "delisted"}
+
+
+def _adjust_score_for_status(score: float, status: str) -> float:
+    status = str(status)
+    if status == "delisted":
+        return -1e6
+    if status == "halted":
+        return min(float(score), 0.05)
+    if status == "data_insufficient":
+        return float(score) * 0.65
+    return float(score)
+
+
 @dataclass(frozen=True)
 class ReturnBucketProfile:
     bucket_probs: list[float]
@@ -485,12 +500,16 @@ def run_quant_pipeline(
         short_prob = float(short_probs[idx])
         five_prob = float(five_probs[idx])
         mid_prob = float(mid_probs[idx])
-        score = _distributional_score(
-            short_prob=short_prob,
-            five_prob=five_prob,
-            mid_prob=mid_prob,
-            short_expected_ret=float(short_bucket.expected_return),
-            mid_expected_ret=float(mid_bucket.expected_return),
+        status = str(latest_row.get("tradability_status", "normal") or "normal")
+        score = _adjust_score_for_status(
+            _distributional_score(
+                short_prob=short_prob,
+                five_prob=five_prob,
+                mid_prob=mid_prob,
+                short_expected_ret=float(short_bucket.expected_return),
+                mid_expected_ret=float(mid_bucket.expected_return),
+            ),
+            status,
         )
         symbol = normalize_symbol(str(latest_row["symbol"])).symbol
         stock_rows.append(
@@ -524,6 +543,7 @@ def run_quant_pipeline(
                 mid_q90=float(mid_bucket.q90),
                 short_bucket_probs=list(short_bucket.bucket_probs),
                 mid_bucket_probs=list(mid_bucket.bucket_probs),
+                tradability_status=status,
             )
         )
 
@@ -531,13 +551,20 @@ def run_quant_pipeline(
         raise DataError("No valid stock rows with complete features for selected universe.")
 
     total_exposure = target_exposure(market_forecast.short_prob, market_forecast.mid_prob)
-    weights = allocate_weights(
-        [row.score for row in stock_rows],
+    tradable_indices = [
+        idx for idx, row in enumerate(stock_rows)
+        if _is_actionable_status(row.tradability_status)
+    ]
+    tradable_rows = [stock_rows[idx] for idx in tradable_indices]
+    tradable_weights = allocate_weights(
+        [row.score for row in tradable_rows],
         total_exposure=total_exposure,
         threshold=float(weight_threshold),
         max_positions=int(max_positions),
     )
-    for row, weight in zip(stock_rows, weights):
-        row.suggested_weight = float(weight)
+    for row in stock_rows:
+        row.suggested_weight = 0.0
+    for idx, weight in zip(tradable_indices, tradable_weights):
+        stock_rows[idx].suggested_weight = float(weight)
     stock_rows.sort(key=lambda x: x.score, reverse=True)
     return market_forecast, stock_rows

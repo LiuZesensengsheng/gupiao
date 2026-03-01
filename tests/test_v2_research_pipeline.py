@@ -177,3 +177,24 @@ def test_backtest_summary_carries_cross_section_metrics() -> None:
     assert summary.avg_top_bottom_spread == 0.0
     assert summary.avg_top_k_hit_rate == 0.0
     assert summary.horizon_metrics == {}
+
+
+def test_backtest_summary_accepts_multi_horizon_metrics_payload() -> None:
+    summary = V2BacktestSummary(
+        start_date="2024-01-01",
+        end_date="2024-12-31",
+        n_days=120,
+        total_return=0.12,
+        annual_return=0.10,
+        max_drawdown=-0.08,
+        avg_turnover=0.18,
+        total_cost=0.01,
+        horizon_metrics={
+            "1d": {"rank_ic": 0.11, "top_decile_return": 0.002, "top_bottom_spread": 0.004, "top_k_hit_rate": 0.52},
+            "5d": {"rank_ic": 0.09, "top_decile_return": 0.006, "top_bottom_spread": 0.010, "top_k_hit_rate": 0.55},
+            "20d": {"rank_ic": 0.07, "top_decile_return": 0.018, "top_bottom_spread": 0.025, "top_k_hit_rate": 0.57},
+        },
+    )
+
+    assert set(summary.horizon_metrics) == {"1d", "5d", "20d"}
+    assert summary.horizon_metrics["5d"]["top_k_hit_rate"] == 0.55

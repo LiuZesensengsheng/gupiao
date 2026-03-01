@@ -212,6 +212,46 @@ def _distributional_score(
     return float(0.4 * base_score + 0.6 * dist_score)
 
 
+def _is_actionable_status(status: str) -> bool:
+    return str(status) not in {"halted", "delisted"}
+
+
+def _status_tradeability_limit(status: str) -> float:
+    status = str(status)
+    if status in {"halted", "delisted"}:
+        return 0.0
+    if status == "data_insufficient":
+        return 0.35
+    return 1.0
+
+
+def _status_score_penalty(status: str) -> float:
+    status = str(status)
+    if status == "halted":
+        return 1.0
+    if status == "delisted":
+        return 1.5
+    if status == "data_insufficient":
+        return 0.08
+    return 0.0
+
+
+def _alpha_score_components(stock: StockForecastState) -> dict[str, float]:
+    raw = {
+        "short": 0.20 * float(stock.up_1d_prob),
+        "five": 0.30 * float(stock.up_5d_prob),
+        "mid": 0.25 * float(stock.up_20d_prob),
+        "excess": 0.15 * float(stock.excess_vs_sector_prob),
+        "tradeability": 0.10 * float(stock.tradeability_score),
+        "event": 0.05 * float(stock.event_impact_score),
+    }
+    raw_score = float(sum(raw.values()))
+    penalty = float(_status_score_penalty(getattr(stock, "tradability_status", "normal")))
+    raw["status_penalty"] = penalty
+    raw["alpha_score"] = float(raw_score - penalty)
+    return raw
+
+
 def _build_stock_states_from_panel_slice(
     *,
     panel_row: pd.DataFrame,
@@ -284,9 +324,13 @@ def _build_stock_states_from_panel_slice(
         short_expected_ret = float(item["short_expected_ret"])
         mid_expected_ret = float(item["mid_expected_ret"])
         sector = str(item["sector"])
+        status = str(panel_row.loc[panel_row["symbol"] == str(item["symbol"]), "tradability_status"].iloc[0]) if "tradability_status" in panel_row.columns and not panel_row.loc[panel_row["symbol"] == str(item["symbol"]), "tradability_status"].empty else "normal"
         tradeability = _clip(1.0 - abs(short_prob - mid_prob), 0.0, 1.0)
+        tradeability = min(tradeability, _status_tradeability_limit(status))
         expected_anchor = float(np.clip(mid_expected_ret / 0.20, -0.5, 0.5))
         event_impact = float(_clip(0.5 + short_expected_ret / 0.06, 0.0, 1.0))
+        if status in {"halted", "delisted"}:
+            event_impact = 0.0
         out.append(
             StockForecastState(
                 symbol=str(item["symbol"]),
@@ -306,6 +350,7 @@ def _build_stock_states_from_panel_slice(
                 ),
                 event_impact_score=event_impact,
                 tradeability_score=float(tradeability),
+                tradability_status=status,
             )
         )
         realized_1d = np.nan
@@ -549,17 +594,21 @@ def _build_stock_states_from_rows(
 
     for row in rows:
         sector = sector_map.get(row.symbol, "其他")
+        status = str(getattr(row, "tradability_status", "normal") or "normal")
         five_prob = _safe_float(getattr(row, "five_prob", 0.6 * float(row.short_prob) + 0.4 * float(row.mid_prob)), 0.5)
         tradeability = _clip(
             1.0 - (0.55 * abs(float(row.short_prob) - five_prob) + 0.45 * abs(five_prob - float(row.mid_prob))),
             0.0,
             1.0,
         )
+        tradeability = min(tradeability, _status_tradeability_limit(status))
         short_expected_ret = _safe_float(getattr(row, "short_expected_ret", 0.0), 0.0)
         mid_expected_ret = _safe_float(getattr(row, "mid_expected_ret", 0.0), 0.0)
         sector_excess_anchor = 0.0 if sector_strength_map is None else float(sector_strength_map.get(sector, 0.0))
         expected_anchor = float(np.clip(mid_expected_ret / 0.20, -0.5, 0.5))
         event_impact = float(_clip(0.5 + short_expected_ret / 0.06, 0.0, 1.0))
+        if status in {"halted", "delisted"}:
+            event_impact = 0.0
         out.append(
             StockForecastState(
                 symbol=row.symbol,
@@ -580,6 +629,7 @@ def _build_stock_states_from_rows(
                 ),
                 event_impact_score=event_impact,
                 tradeability_score=float(tradeability),
+                tradability_status=status,
             )
         )
     out.sort(
@@ -644,14 +694,7 @@ def _ranked_sector_budgets(sectors: Iterable[SectorForecastState], *, target_exp
 
 
 def _stock_policy_score(stock: StockForecastState) -> float:
-    return float(
-        0.20 * float(stock.up_1d_prob)
-        + 0.30 * float(stock.up_5d_prob)
-        + 0.25 * float(stock.up_20d_prob)
-        + 0.15 * float(stock.excess_vs_sector_prob)
-        + 0.10 * float(stock.tradeability_score)
-        + 0.05 * float(stock.event_impact_score)
-    )
+    return float(_alpha_score_components(stock)["alpha_score"])
 
 
 def _allocate_sector_slots(
@@ -701,8 +744,11 @@ def _allocate_with_sector_budgets(
     sector_budgets: dict[str, float],
     target_position_count: int,
 ) -> dict[str, float]:
+    max_single_position = 0.35
     available_by_sector: dict[str, list[tuple[StockForecastState, float]]] = {}
     for stock in stocks:
+        if not _is_actionable_status(getattr(stock, "tradability_status", "normal")):
+            continue
         score = _stock_policy_score(stock)
         available_by_sector.setdefault(stock.sector, []).append((stock, score))
     for sector in list(available_by_sector):
@@ -719,16 +765,128 @@ def _allocate_with_sector_budgets(
         picks = available_by_sector.get(sector, [])[: max(0, int(slots))]
         if not picks or sector_budget <= 1e-9:
             continue
-        sector_scores = [max(0.0, score - 0.50) for _, score in picks]
-        sector_total = float(sum(sector_scores))
-        if sector_total <= 1e-9:
-            equal_weight = sector_budget / float(len(picks))
-            for stock, _ in picks:
-                symbol_target_weights[stock.symbol] = float(equal_weight)
-            continue
-        for (stock, _), score in zip(picks, sector_scores):
-            symbol_target_weights[stock.symbol] = float(sector_budget) * float(score) / sector_total
+        cap = min(float(max_single_position), float(sector_budget))
+        remaining = float(sector_budget)
+        uncapped = list(picks)
+        while uncapped and remaining > 1e-9:
+            sector_scores = [max(0.0, score - 0.50) for _, score in uncapped]
+            sector_total = float(sum(sector_scores))
+            if sector_total <= 1e-9:
+                provisional = [remaining / float(len(uncapped))] * len(uncapped)
+            else:
+                provisional = [remaining * float(score) / sector_total for score in sector_scores]
+            over_limit = [
+                idx for idx, weight in enumerate(provisional)
+                if float(weight) > cap + 1e-9
+            ]
+            if not over_limit:
+                for (stock, _), weight in zip(uncapped, provisional):
+                    symbol_target_weights[stock.symbol] = float(weight)
+                remaining = 0.0
+                break
+            next_uncapped: list[tuple[StockForecastState, float]] = []
+            for idx, pair in enumerate(uncapped):
+                stock, score = pair
+                if idx in over_limit:
+                    symbol_target_weights[stock.symbol] = float(cap)
+                    remaining -= float(cap)
+                else:
+                    next_uncapped.append((stock, score))
+            uncapped = next_uncapped
     return symbol_target_weights
+
+
+def _finalize_target_weights(
+    *,
+    desired_weights: dict[str, float],
+    current_weights: dict[str, float],
+    stocks: list[StockForecastState],
+    target_exposure: float,
+    min_trade_delta: float,
+) -> tuple[dict[str, float], list[str]]:
+    adjusted = {symbol: max(0.0, float(weight)) for symbol, weight in desired_weights.items()}
+    state_map = {item.symbol: item for item in stocks}
+    notes: list[str] = []
+    locked_symbols: set[str] = set()
+
+    all_symbols = sorted(set(adjusted) | set(current_weights))
+    for symbol in all_symbols:
+        current = max(0.0, float(current_weights.get(symbol, 0.0)))
+        state = state_map.get(symbol)
+        status = "data_insufficient" if state is None else str(getattr(state, "tradability_status", "normal") or "normal")
+        target = max(0.0, float(adjusted.get(symbol, 0.0)))
+
+        if state is None and current > 1e-9:
+            adjusted[symbol] = current
+            locked_symbols.add(symbol)
+            notes.append(f"{symbol}: missing state, holding frozen.")
+            continue
+        if not _is_actionable_status(status):
+            if current > 1e-9:
+                adjusted[symbol] = current
+                locked_symbols.add(symbol)
+                notes.append(f"{symbol}: {status}, holding frozen.")
+            else:
+                adjusted.pop(symbol, None)
+                notes.append(f"{symbol}: {status}, new entry blocked.")
+            continue
+        if status == "data_insufficient":
+            if current <= 1e-9 and target > 1e-9:
+                adjusted.pop(symbol, None)
+                notes.append(f"{symbol}: data insufficient, new entry blocked.")
+                continue
+            if target > current + 1e-9:
+                adjusted[symbol] = current
+                locked_symbols.add(symbol)
+                notes.append(f"{symbol}: data insufficient, add-on blocked.")
+                continue
+
+    for symbol in sorted(set(adjusted) | set(current_weights)):
+        current = max(0.0, float(current_weights.get(symbol, 0.0)))
+        target = max(0.0, float(adjusted.get(symbol, 0.0)))
+        if abs(target - current) < float(min_trade_delta):
+            if abs(target - current) > 1e-9:
+                notes.append(f"{symbol}: rebalance gap below threshold.")
+            if current > 1e-9:
+                adjusted[symbol] = current
+                locked_symbols.add(symbol)
+            else:
+                adjusted.pop(symbol, None)
+
+    locked_total = float(sum(max(0.0, float(adjusted.get(symbol, 0.0))) for symbol in locked_symbols))
+    free_symbols = [
+        symbol for symbol, weight in adjusted.items()
+        if symbol not in locked_symbols and float(weight) > 1e-9
+    ]
+    free_total = float(sum(float(adjusted[symbol]) for symbol in free_symbols))
+    free_budget = max(0.0, float(target_exposure) - locked_total)
+    if free_total > free_budget + 1e-9 and free_total > 1e-9:
+        scale = float(free_budget / free_total) if free_budget > 1e-9 else 0.0
+        for symbol in free_symbols:
+            adjusted[symbol] = float(adjusted[symbol]) * scale
+        notes.append("Actionable targets scaled down to respect target exposure after frozen holdings.")
+
+    adjusted = {
+        symbol: float(weight)
+        for symbol, weight in adjusted.items()
+        if float(weight) > 1e-6
+    }
+    return adjusted, notes
+
+
+def _sector_budgets_from_weights(
+    *,
+    symbol_weights: dict[str, float],
+    stocks: list[StockForecastState],
+) -> dict[str, float]:
+    state_map = {item.symbol: item for item in stocks}
+    out: dict[str, float] = {}
+    for symbol, weight in symbol_weights.items():
+        if float(weight) <= 1e-9:
+            continue
+        sector = state_map.get(symbol).sector if state_map.get(symbol) is not None else "其他"
+        out[sector] = out.get(sector, 0.0) + float(weight)
+    return out
 
 
 def apply_policy(
@@ -771,11 +929,23 @@ def apply_policy(
         risk_notes.append("Fund flow weak.")
 
     target_exposure = _clip(target_exposure, 0.0, 1.0)
-    sector_budgets = _ranked_sector_budgets(state.sectors[: max(1, target_position_count)], target_exposure=target_exposure)
-    symbol_target_weights = _allocate_with_sector_budgets(
+    desired_sector_budgets = _ranked_sector_budgets(state.sectors[: max(1, target_position_count)], target_exposure=target_exposure)
+    desired_symbol_target_weights = _allocate_with_sector_budgets(
         stocks=state.stocks,
-        sector_budgets=sector_budgets,
+        sector_budgets=desired_sector_budgets,
         target_position_count=int(target_position_count),
+    )
+    symbol_target_weights, execution_notes = _finalize_target_weights(
+        desired_weights=desired_symbol_target_weights,
+        current_weights=policy_input.current_weights,
+        stocks=state.stocks,
+        target_exposure=target_exposure,
+        min_trade_delta=min(0.02, 0.25 * float(turnover_cap)),
+    )
+    risk_notes.extend(execution_notes)
+    sector_budgets = _sector_budgets_from_weights(
+        symbol_weights=symbol_target_weights,
+        stocks=state.stocks,
     )
 
     current_total = sum(max(0.0, float(v)) for v in policy_input.current_weights.values())
@@ -909,7 +1079,19 @@ def _simulate_execution_day(
         if abs(delta) <= 1e-4:
             continue
         state = state_map.get(symbol)
+        frame = stock_frames.get(symbol)
+        day_row = None
+        if frame is not None:
+            day_row = frame[frame["date"] == date]
+        status = "normal"
+        if state is not None:
+            status = str(getattr(state, "tradability_status", "normal") or "normal")
+        elif frame is None or day_row is None or day_row.empty:
+            status = "halted"
+        if not _is_actionable_status(status):
+            continue
         tradeability = 0.45 if state is None else _clip(float(state.tradeability_score), 0.10, 1.0)
+        tradeability = min(tradeability, _status_tradeability_limit(status))
         liquidity_cap = 0.03 + 0.12 * tradeability
         remaining_turnover = max(0.0, total_turnover_budget - used_turnover)
         max_abs_trade = min(abs(delta), liquidity_cap, remaining_turnover)

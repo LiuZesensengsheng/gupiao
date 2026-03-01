@@ -58,6 +58,7 @@ class ForecastRow:
     short_bucket_probs: list[float] = field(default_factory=list)
     mid_bucket_probs: list[float] = field(default_factory=list)
     suggested_weight: float = 0.0
+    tradability_status: str = "normal"
 
 
 @dataclass

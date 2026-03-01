@@ -1,0 +1,417 @@
+from __future__ import annotations
+
+from pathlib import Path
+
+import pandas as pd
+
+from src.application.v2_contracts import (
+    CompositeState,
+    CrossSectionForecastState,
+    DailyRunResult,
+    LearnedPolicyModel,
+    MarketForecastState,
+    PolicyDecision,
+    PolicySpec,
+    SectorForecastState,
+    StockForecastState,
+    StrategySnapshot,
+    V2BacktestSummary,
+    V2CalibrationResult,
+    V2PolicyLearningResult,
+)
+from src.application.v2_services import _simulate_execution_day
+from src.domain.entities import TradeAction
+from src.interfaces.presenters.html_dashboard import write_v2_daily_dashboard, write_v2_research_dashboard
+from src.interfaces.presenters.markdown_reports import write_v2_daily_report, write_v2_research_report
+
+
+def _make_daily_result() -> DailyRunResult:
+    composite = CompositeState(
+        market=MarketForecastState(
+            as_of_date="2026-03-01",
+            up_1d_prob=0.56,
+            up_5d_prob=0.61,
+            up_20d_prob=0.64,
+            trend_state="trend",
+            drawdown_risk=0.22,
+            volatility_regime="normal",
+            liquidity_stress=0.18,
+        ),
+        cross_section=CrossSectionForecastState(
+            as_of_date="2026-03-01",
+            large_vs_small_bias=0.08,
+            growth_vs_value_bias=-0.03,
+            fund_flow_strength=0.12,
+            margin_risk_on_score=0.10,
+            breadth_strength=0.20,
+            leader_participation=0.62,
+            weak_stock_ratio=0.24,
+        ),
+        sectors=[
+            SectorForecastState("有色", 0.58, 0.64, 0.18, 0.24, 0.20),
+        ],
+        stocks=[
+            StockForecastState("AAA", "有色", 0.55, 0.62, 0.66, 0.57, 0.03, 0.88),
+        ],
+        strategy_mode="trend_follow",
+        risk_regime="risk_on",
+    )
+    decision = PolicyDecision(
+        target_exposure=0.70,
+        target_position_count=1,
+        rebalance_now=True,
+        rebalance_intensity=0.20,
+        intraday_t_allowed=False,
+        turnover_cap=0.25,
+        sector_budgets={"有色": 0.70},
+        symbol_target_weights={"AAA": 0.70},
+        risk_notes=["测试备注"],
+    )
+    return DailyRunResult(
+        snapshot=StrategySnapshot(
+            strategy_id="swing_v2",
+            universe_id="smoke",
+            feature_set_version="v2",
+            market_model_id="market_v2",
+            sector_model_id="sector_v2",
+            stock_model_id="stock_panel_v2",
+            cross_section_model_id="cross_v2",
+            policy_version="policy_v2",
+            execution_version="exec_v2",
+        ),
+        composite_state=composite,
+        policy_decision=decision,
+        trade_actions=[
+            TradeAction(
+                symbol="AAA",
+                name="样例股",
+                action="BUY",
+                current_weight=0.20,
+                target_weight=0.70,
+                delta_weight=0.50,
+                note="加仓",
+            )
+        ],
+    )
+
+
+def _make_backtest(annual_return: float) -> V2BacktestSummary:
+    return V2BacktestSummary(
+        start_date="2024-01-01",
+        end_date="2024-12-31",
+        n_days=120,
+        total_return=0.18,
+        annual_return=annual_return,
+        max_drawdown=-0.08,
+        avg_turnover=0.16,
+        total_cost=0.01,
+        avg_rank_ic=0.11,
+        avg_top_decile_return=0.008,
+        avg_top_bottom_spread=0.012,
+        avg_top_k_hit_rate=0.56,
+        horizon_metrics={
+            "1d": {"rank_ic": 0.12, "top_decile_return": 0.003, "top_bottom_spread": 0.005, "top_k_hit_rate": 0.52},
+            "5d": {"rank_ic": 0.10, "top_decile_return": 0.007, "top_bottom_spread": 0.012, "top_k_hit_rate": 0.56},
+            "20d": {"rank_ic": 0.08, "top_decile_return": 0.018, "top_bottom_spread": 0.026, "top_k_hit_rate": 0.59},
+        },
+    )
+
+
+def test_simulate_execution_day_respects_turnover_and_liquidity_caps() -> None:
+    date = pd.Timestamp("2024-01-02")
+    next_date = pd.Timestamp("2024-01-03")
+    decision = PolicyDecision(
+        target_exposure=0.60,
+        target_position_count=1,
+        rebalance_now=True,
+        rebalance_intensity=0.40,
+        intraday_t_allowed=False,
+        turnover_cap=0.20,
+        sector_budgets={"有色": 0.60},
+        symbol_target_weights={"AAA": 0.60},
+    )
+    stock_states = [
+        StockForecastState("AAA", "有色", 0.55, 0.60, 0.64, 0.56, 0.0, 0.10),
+    ]
+    stock_frames = {
+        "AAA": pd.DataFrame(
+            {
+                "date": [date],
+                "fwd_ret_1": [0.0],
+            }
+        )
+    }
+
+    daily_ret, turnover, cost, fill_ratio, slip_bps, next_weights, next_cash = _simulate_execution_day(
+        date=date,
+        next_date=next_date,
+        decision=decision,
+        current_weights={},
+        current_cash=1.0,
+        stock_states=stock_states,
+        stock_frames=stock_frames,
+        total_commission_rate=0.001,
+        base_slippage_rate=0.0005,
+    )
+
+    assert round(turnover, 3) == 0.042
+    assert 0.0 < fill_ratio < 1.0
+    assert slip_bps > 0.0
+    assert cost > 0.0
+    assert next_weights["AAA"] < 0.05
+    assert 0.95 < next_cash < 1.0
+    assert daily_ret < 0.0
+
+
+def test_simulate_execution_day_tolerates_missing_price_row_for_held_position() -> None:
+    date = pd.Timestamp("2024-01-02")
+    next_date = pd.Timestamp("2024-01-03")
+    decision = PolicyDecision(
+        target_exposure=0.40,
+        target_position_count=1,
+        rebalance_now=False,
+        rebalance_intensity=0.0,
+        intraday_t_allowed=False,
+        turnover_cap=0.0,
+        sector_budgets={"有色": 0.40},
+        symbol_target_weights={"AAA": 0.40},
+    )
+
+    daily_ret, turnover, cost, fill_ratio, slip_bps, next_weights, next_cash = _simulate_execution_day(
+        date=date,
+        next_date=next_date,
+        decision=decision,
+        current_weights={"AAA": 0.40},
+        current_cash=0.60,
+        stock_states=[StockForecastState("AAA", "有色", 0.50, 0.52, 0.55, 0.50, 0.0, 0.80)],
+        stock_frames={
+            "AAA": pd.DataFrame(
+                {
+                    "date": [pd.Timestamp("2024-01-05")],
+                    "fwd_ret_1": [0.03],
+                }
+            )
+        },
+        total_commission_rate=0.001,
+        base_slippage_rate=0.0005,
+    )
+
+    assert daily_ret == 0.0
+    assert turnover == 0.0
+    assert cost == 0.0
+    assert fill_ratio == 0.0
+    assert slip_bps == 0.0
+    assert next_weights["AAA"] == 0.40
+    assert next_cash == 0.60
+
+
+def test_simulate_execution_day_tolerates_missing_stock_frame_for_held_position() -> None:
+    date = pd.Timestamp("2024-01-02")
+    next_date = pd.Timestamp("2024-01-03")
+    decision = PolicyDecision(
+        target_exposure=0.30,
+        target_position_count=1,
+        rebalance_now=False,
+        rebalance_intensity=0.0,
+        intraday_t_allowed=False,
+        turnover_cap=0.0,
+        sector_budgets={"有色": 0.30},
+        symbol_target_weights={"AAA": 0.30},
+    )
+
+    daily_ret, turnover, cost, fill_ratio, slip_bps, next_weights, next_cash = _simulate_execution_day(
+        date=date,
+        next_date=next_date,
+        decision=decision,
+        current_weights={"AAA": 0.30},
+        current_cash=0.70,
+        stock_states=[],
+        stock_frames={},
+        total_commission_rate=0.001,
+        base_slippage_rate=0.0005,
+    )
+
+    assert daily_ret == 0.0
+    assert turnover == 0.0
+    assert cost == 0.0
+    assert fill_ratio == 0.0
+    assert slip_bps == 0.0
+    assert next_weights["AAA"] == 0.30
+    assert next_cash == 0.70
+
+
+def test_simulate_execution_day_uses_fallback_tradeability_when_state_missing() -> None:
+    date = pd.Timestamp("2024-01-02")
+    next_date = pd.Timestamp("2024-01-03")
+    decision = PolicyDecision(
+        target_exposure=0.50,
+        target_position_count=1,
+        rebalance_now=True,
+        rebalance_intensity=0.30,
+        intraday_t_allowed=False,
+        turnover_cap=0.30,
+        sector_budgets={"有色": 0.50},
+        symbol_target_weights={"AAA": 0.50},
+    )
+    stock_frames = {
+        "AAA": pd.DataFrame(
+            {
+                "date": [date],
+                "fwd_ret_1": [0.0],
+            }
+        )
+    }
+
+    daily_ret, turnover, cost, fill_ratio, slip_bps, next_weights, next_cash = _simulate_execution_day(
+        date=date,
+        next_date=next_date,
+        decision=decision,
+        current_weights={},
+        current_cash=1.0,
+        stock_states=[],
+        stock_frames=stock_frames,
+        total_commission_rate=0.001,
+        base_slippage_rate=0.0005,
+    )
+
+    assert round(turnover, 3) == 0.084
+    assert fill_ratio < 1.0
+    assert slip_bps > 0.0
+    assert cost > 0.0
+    assert next_weights["AAA"] < 0.09
+    assert 0.90 < next_cash < 1.0
+    assert daily_ret < 0.0
+
+
+def test_simulate_execution_day_skips_trades_for_halted_status() -> None:
+    date = pd.Timestamp("2024-01-02")
+    next_date = pd.Timestamp("2024-01-03")
+    decision = PolicyDecision(
+        target_exposure=0.40,
+        target_position_count=1,
+        rebalance_now=True,
+        rebalance_intensity=0.30,
+        intraday_t_allowed=False,
+        turnover_cap=0.20,
+        sector_budgets={"有色": 0.40},
+        symbol_target_weights={"AAA": 0.40},
+    )
+
+    daily_ret, turnover, cost, fill_ratio, slip_bps, next_weights, next_cash = _simulate_execution_day(
+        date=date,
+        next_date=next_date,
+        decision=decision,
+        current_weights={"AAA": 0.10},
+        current_cash=0.90,
+        stock_states=[StockForecastState("AAA", "有色", 0.55, 0.60, 0.64, 0.56, 0.0, 0.90, tradability_status="halted")],
+        stock_frames={
+            "AAA": pd.DataFrame(
+                {
+                    "date": [date],
+                    "fwd_ret_1": [0.02],
+                }
+            )
+        },
+        total_commission_rate=0.001,
+        base_slippage_rate=0.0005,
+    )
+
+    assert turnover == 0.0
+    assert cost == 0.0
+    assert fill_ratio == 0.0
+    assert slip_bps == 0.0
+    assert next_weights["AAA"] > 0.10
+    assert next_cash < 0.90
+
+
+def test_v2_markdown_reports_keep_key_chinese_sections(tmp_path: Path) -> None:
+    daily_result = _make_daily_result()
+    daily_path = write_v2_daily_report(tmp_path / "daily.md", daily_result)
+    daily_text = daily_path.read_text(encoding="utf-8")
+
+    assert "5日上涨概率" in daily_text
+    assert "5日概率" in daily_text
+    assert "交易计划" in daily_text
+
+    baseline = _make_backtest(0.24)
+    calibrated = _make_backtest(0.26)
+    learned = _make_backtest(0.20)
+    research_path = write_v2_research_report(
+        tmp_path / "research.md",
+        strategy_id="swing_v2",
+        baseline=baseline,
+        calibration=V2CalibrationResult(
+            best_policy=PolicySpec(),
+            best_score=0.12,
+            baseline=baseline,
+            calibrated=calibrated,
+        ),
+        learning=V2PolicyLearningResult(
+            model=LearnedPolicyModel(
+                feature_names=["x1"],
+                exposure_intercept=0.5,
+                exposure_coef=[0.1],
+                position_intercept=2.0,
+                position_coef=[0.1],
+                turnover_intercept=0.2,
+                turnover_coef=[0.05],
+                train_rows=64,
+                train_r2_exposure=0.20,
+                train_r2_positions=0.18,
+                train_r2_turnover=0.12,
+            ),
+            baseline=baseline,
+            learned=learned,
+        ),
+    )
+    research_text = research_path.read_text(encoding="utf-8")
+
+    assert "多周期横截面分层指标" in research_text
+    assert "| 基线 | 5d |" in research_text
+
+
+def test_v2_html_dashboards_keep_key_chinese_sections(tmp_path: Path) -> None:
+    daily_result = _make_daily_result()
+    daily_path = write_v2_daily_dashboard(tmp_path / "daily.html", daily_result)
+    daily_html = daily_path.read_text(encoding="utf-8")
+
+    assert "V2 每日策略看板" in daily_html
+    assert "买入" in daily_html
+    assert "5日上涨概率" in daily_html
+
+    baseline = _make_backtest(0.24)
+    calibrated = _make_backtest(0.26)
+    learned = _make_backtest(0.20)
+    research_path = write_v2_research_dashboard(
+        tmp_path / "research.html",
+        strategy_id="swing_v2",
+        baseline=baseline,
+        calibration=V2CalibrationResult(
+            best_policy=PolicySpec(),
+            best_score=0.12,
+            baseline=baseline,
+            calibrated=calibrated,
+        ),
+        learning=V2PolicyLearningResult(
+            model=LearnedPolicyModel(
+                feature_names=["x1"],
+                exposure_intercept=0.5,
+                exposure_coef=[0.1],
+                position_intercept=2.0,
+                position_coef=[0.1],
+                turnover_intercept=0.2,
+                turnover_coef=[0.05],
+                train_rows=64,
+                train_r2_exposure=0.20,
+                train_r2_positions=0.18,
+                train_r2_turnover=0.12,
+            ),
+            baseline=baseline,
+            learned=learned,
+        ),
+    )
+    research_html = research_path.read_text(encoding="utf-8")
+
+    assert "V2 研究回测看板" in research_html
+    assert "多周期横截面分层指标" in research_html
+    assert ">5d<" in research_html

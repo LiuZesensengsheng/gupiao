@@ -38,6 +38,7 @@ class StockForecastState:
     excess_vs_sector_prob: float
     event_impact_score: float
     tradeability_score: float
+    tradability_status: str = "normal"
 
 
 @dataclass(frozen=True)

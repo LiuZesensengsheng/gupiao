@@ -9,6 +9,7 @@ from src.infrastructure.forecast_engine import (
     MID_RETURN_BUCKET_EDGES,
     SHORT_BUCKET_REPRESENTATIVES,
     SHORT_RETURN_BUCKET_EDGES,
+    _distributional_score,
     estimate_return_bucket_profile,
 )
 
@@ -45,9 +46,12 @@ def test_build_features_adds_bucket_targets() -> None:
     feat = build_features(_make_price_frame())
 
     assert "target_1d_bucket" in feat.columns
+    assert "target_5d_up" in feat.columns
     assert "target_20d_bucket" in feat.columns
+    valid_5d = feat["target_5d_up"].dropna()
     valid_1d = feat["target_1d_bucket"].dropna()
     valid_20d = feat["target_20d_bucket"].dropna()
+    assert valid_5d.between(0, 1).all()
     assert valid_1d.between(0, 4).all()
     assert valid_20d.between(0, 4).all()
 
@@ -83,3 +87,22 @@ def test_estimate_return_bucket_profile_produces_valid_distribution() -> None:
     assert all(prob >= 0.0 for prob in profile_20d.bucket_probs)
     assert -0.05 <= profile_1d.expected_return <= 0.05
     assert -0.20 <= profile_20d.expected_return <= 0.20
+
+
+def test_distributional_score_improves_when_five_day_signal_improves() -> None:
+    weak_mid = _distributional_score(
+        short_prob=0.52,
+        five_prob=0.48,
+        mid_prob=0.56,
+        short_expected_ret=0.002,
+        mid_expected_ret=0.018,
+    )
+    strong_mid = _distributional_score(
+        short_prob=0.52,
+        five_prob=0.66,
+        mid_prob=0.56,
+        short_expected_ret=0.002,
+        mid_expected_ret=0.018,
+    )
+
+    assert strong_mid > weak_mid
