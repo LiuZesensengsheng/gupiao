@@ -22,3 +22,10 @@ def test_driver_explainer_formats_driver_list_with_chart_pattern_features() -> N
     assert "上影线占比" in text
     assert "5日振幅收缩" in text
     assert "突破20日前高" in text
+
+
+def test_driver_explainer_formats_interaction_chart_features() -> None:
+    assert "缩量后突破强度" in format_driver_text("squeeze_breakout_score(+0.88)")
+    assert "突破质量分" in format_driver_text("breakout_quality_score(+0.74)")
+    assert "冲高回落风险" in format_driver_text("exhaustion_reversal_risk(-0.52)")
+    assert "回踩修复强度" in format_driver_text("pullback_reclaim_score(+0.41)")

@@ -36,6 +36,10 @@ _BASE_LABELS = {
     "distance_to_20d_high": "距20日前高偏离",
     "distance_to_20d_low": "距20日前低偏离",
     "volume_breakout_ratio": "放量突破强度",
+    "squeeze_breakout_score": "缩量后突破强度",
+    "breakout_quality_score": "突破质量分",
+    "exhaustion_reversal_risk": "冲高回落风险",
+    "pullback_reclaim_score": "回踩修复强度",
     "hvbd_recent_5": "近5日高位巨量阴线",
 }
 

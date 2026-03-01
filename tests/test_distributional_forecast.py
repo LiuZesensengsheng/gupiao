@@ -153,6 +153,10 @@ def test_build_features_adds_pattern_and_breakout_features() -> None:
         "distance_to_20d_high",
         "distance_to_20d_low",
         "volume_breakout_ratio",
+        "squeeze_breakout_score",
+        "breakout_quality_score",
+        "exhaustion_reversal_risk",
+        "pullback_reclaim_score",
     ]:
         assert col in feat.columns
 
@@ -168,3 +172,7 @@ def test_build_features_adds_pattern_and_breakout_features() -> None:
     assert float(latest["distance_to_20d_high"]) > 0.0
     assert float(latest["distance_to_20d_low"]) > 0.0
     assert float(latest["volume_breakout_ratio"]) > 1.0
+    assert float(latest["squeeze_breakout_score"]) >= 0.0
+    assert float(latest["breakout_quality_score"]) > 0.0
+    assert float(latest["exhaustion_reversal_risk"]) >= 0.0
+    assert float(latest["pullback_reclaim_score"]) >= 0.0

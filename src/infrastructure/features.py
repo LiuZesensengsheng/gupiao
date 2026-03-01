@@ -35,6 +35,10 @@ BASE_FEATURE_COLUMNS = [
     "distance_to_20d_high",
     "distance_to_20d_low",
     "volume_breakout_ratio",
+    "squeeze_breakout_score",
+    "breakout_quality_score",
+    "exhaustion_reversal_risk",
+    "pullback_reclaim_score",
     "hvbd_recent_5",
 ]
 
@@ -145,6 +149,35 @@ def build_features(df: pd.DataFrame) -> pd.DataFrame:
     out["distance_to_20d_low"] = (close - prev_low_20) / (prev_low_20 + 1e-9)
     out["volume_breakout_ratio"] = (
         out["vol_ratio_20"] * np.where(out["breakout_above_20_high"].fillna(0.0) > 0.5, 1.0, 0.0)
+    )
+    close_near_high = (close - low) / (candle_range_safe + 1e-9)
+    close_near_low = (high - close) / (candle_range_safe + 1e-9)
+    squeeze_component = np.clip((1.20 - out["range_contraction_5"]) / 0.60, 0.0, 1.5)
+    volume_component = np.clip(out["vol_ratio_20"] / 2.0, 0.0, 2.0)
+    out["squeeze_breakout_score"] = (
+        out["breakout_above_20_high"].fillna(0.0)
+        * squeeze_component
+        * volume_component
+    )
+    out["breakout_quality_score"] = (
+        out["breakout_above_20_high"].fillna(0.0)
+        * (
+            0.40 * np.clip(out["volume_breakout_ratio"], 0.0, 3.0)
+            + 0.35 * np.clip(out["body_ratio_1"], 0.0, 1.0)
+            + 0.25 * np.clip(close_near_high, 0.0, 1.0)
+        )
+    )
+    out["exhaustion_reversal_risk"] = (
+        np.clip(out["upper_shadow_ratio_1"], 0.0, 1.0)
+        * np.clip(out["price_pos_20"], 0.0, 1.0)
+        * np.clip(out["vol_ratio_20"], 0.0, 3.0)
+        * np.clip(0.4 + 0.6 * close_near_low, 0.0, 1.0)
+    )
+    out["pullback_reclaim_score"] = (
+        np.clip(out["lower_shadow_ratio_1"], 0.0, 1.0)
+        * np.clip(out["body_ratio_1"], 0.0, 1.0)
+        * np.clip(1.0 - out["drawdown_20"].abs(), 0.0, 1.0)
+        * np.clip(0.5 + 0.5 * out["up_streak_3"] - 0.3 * out["down_streak_3"], 0.0, 1.0)
     )
 
     out["gap_1"] = open_ / close.shift(1) - 1.0
