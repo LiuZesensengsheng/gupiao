@@ -117,6 +117,7 @@ def write_forecast_report(
     lines.append("| 维度 | 上涨概率 | 说明 |")
     lines.append("|---|---:|---|")
     lines.append(f"| 短期(1日) | {_to_percent(market_forecast.short_prob)} | 次日方向概率 |")
+    lines.append(f"| 中短期(5日) | {_to_percent(market_forecast.five_prob)} | 未来5日方向概率 |")
     lines.append(f"| 中期(20日) | {_to_percent(market_forecast.mid_prob)} | 未来20日方向概率 |")
     if market_forecast.short_bucket_probs:
         lines.append(f"| 短期期望收益 | {_to_percent(market_forecast.short_expected_ret)} | 多档收益桶加权期望 |")
@@ -156,11 +157,11 @@ def write_forecast_report(
     lines.append("")
     lines.append("## 个股预测")
     lines.append("")
-    lines.append("| 个股 | 短期概率 | 中期概率 | 短期Q50 | 中期Q50 | 短期期望收益 | 中期期望收益 | 综合分数 | 建议权重 |")
-    lines.append("|---|---:|---:|---:|---:|---:|---:|---:|---:|")
+    lines.append("| 个股 | 1日概率 | 5日概率 | 20日概率 | 短期Q50 | 中期Q50 | 短期期望收益 | 中期期望收益 | 综合分数 | 建议权重 |")
+    lines.append("|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|")
     for row in stock_rows:
         lines.append(
-            f"| {row.name} ({row.symbol}) | {_to_percent(row.short_prob)} | {_to_percent(row.mid_prob)} | {_to_percent(row.short_q50)} | {_to_percent(row.mid_q50)} | {_to_percent(row.short_expected_ret)} | {_to_percent(row.mid_expected_ret)} | {row.score:.3f} | {_to_percent(row.suggested_weight)} |"
+            f"| {row.name} ({row.symbol}) | {_to_percent(row.short_prob)} | {_to_percent(row.five_prob)} | {_to_percent(row.mid_prob)} | {_to_percent(row.short_q50)} | {_to_percent(row.mid_q50)} | {_to_percent(row.short_expected_ret)} | {_to_percent(row.mid_expected_ret)} | {row.score:.3f} | {_to_percent(row.suggested_weight)} |"
         )
     lines.append("")
     lines.append("## 因子解释 (最新截面)")

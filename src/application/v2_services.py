@@ -195,14 +195,20 @@ def _predict_quantile_profile(
 def _distributional_score(
     *,
     short_prob: float,
+    five_prob: float,
     mid_prob: float,
     short_expected_ret: float,
     mid_expected_ret: float,
 ) -> float:
-    base_score = blend_horizon_score(float(short_prob), float(mid_prob), short_weight=0.55)
+    base_score = float(
+        0.25 * float(short_prob)
+        + 0.35 * float(five_prob)
+        + 0.40 * float(mid_prob)
+    )
     short_ret_score = float(np.clip(0.5 + float(short_expected_ret) / 0.06, 0.0, 1.0))
+    five_ret_score = float(np.clip(0.5 + (0.35 * float(short_expected_ret) + 0.65 * float(mid_expected_ret)) / 0.12, 0.0, 1.0))
     mid_ret_score = float(np.clip(0.5 + float(mid_expected_ret) / 0.20, 0.0, 1.0))
-    dist_score = blend_horizon_score(short_ret_score, mid_ret_score, short_weight=0.35)
+    dist_score = float(0.20 * short_ret_score + 0.35 * five_ret_score + 0.45 * mid_ret_score)
     return float(0.4 * base_score + 0.6 * dist_score)
 
 
@@ -211,6 +217,7 @@ def _build_stock_states_from_panel_slice(
     panel_row: pd.DataFrame,
     feature_cols: list[str],
     short_model: LogisticBinaryModel,
+    five_model: LogisticBinaryModel,
     mid_model: LogisticBinaryModel,
     short_q_models: tuple[QuantileLinearModel, QuantileLinearModel, QuantileLinearModel, QuantileLinearModel, QuantileLinearModel],
     mid_q_models: tuple[QuantileLinearModel, QuantileLinearModel, QuantileLinearModel, QuantileLinearModel, QuantileLinearModel],
@@ -219,6 +226,7 @@ def _build_stock_states_from_panel_slice(
         return [], pd.DataFrame()
 
     short_probs = short_model.predict_proba(panel_row, feature_cols)
+    five_probs = five_model.predict_proba(panel_row, feature_cols)
     mid_probs = mid_model.predict_proba(panel_row, feature_cols)
 
     interim_rows: list[dict[str, float | str]] = []
@@ -240,17 +248,20 @@ def _build_stock_states_from_panel_slice(
         symbol = str(latest_row["symbol"])
         sector = str(latest_row.get("sector", "其他") or "其他")
         short_prob = float(short_probs[idx])
+        five_prob = float(five_probs[idx])
         mid_prob = float(mid_probs[idx])
         interim_rows.append(
             {
                 "symbol": symbol,
                 "sector": sector,
                 "short_prob": short_prob,
+                "five_prob": five_prob,
                 "mid_prob": mid_prob,
                 "short_expected_ret": float(short_profile.expected_return),
                 "mid_expected_ret": float(mid_profile.expected_return),
                 "score": _distributional_score(
                     short_prob=short_prob,
+                    five_prob=five_prob,
                     mid_prob=mid_prob,
                     short_expected_ret=float(short_profile.expected_return),
                     mid_expected_ret=float(mid_profile.expected_return),
@@ -268,6 +279,7 @@ def _build_stock_states_from_panel_slice(
     out: list[StockForecastState] = []
     for item in interim_rows:
         short_prob = float(item["short_prob"])
+        five_prob = float(item["five_prob"])
         mid_prob = float(item["mid_prob"])
         short_expected_ret = float(item["short_expected_ret"])
         mid_expected_ret = float(item["mid_expected_ret"])
@@ -280,7 +292,7 @@ def _build_stock_states_from_panel_slice(
                 symbol=str(item["symbol"]),
                 sector=sector,
                 up_1d_prob=short_prob,
-                up_5d_prob=float(0.6 * short_prob + 0.4 * mid_prob),
+                up_5d_prob=five_prob,
                 up_20d_prob=mid_prob,
                 excess_vs_sector_prob=float(
                     _clip(
@@ -317,6 +329,7 @@ def _build_stock_states_from_panel_slice(
         key=lambda stock: (
             _distributional_score(
                 short_prob=stock.up_1d_prob,
+                five_prob=stock.up_5d_prob,
                 mid_prob=stock.up_20d_prob,
                 short_expected_ret=float(stock.event_impact_score - 0.5) * 0.06,
                 mid_expected_ret=float(stock.excess_vs_sector_prob - 0.5) * 0.20,
@@ -452,6 +465,7 @@ def _build_market_and_cross_section_states(
     use_margin_features: bool,
     margin_market_file: str,
     market_short_prob: float,
+    market_five_prob: float | None,
     market_mid_prob: float,
 ) -> tuple[MarketForecastState, CrossSectionForecastState]:
     market_raw = load_symbol_daily(
@@ -493,7 +507,9 @@ def _build_market_and_cross_section_states(
     market = MarketForecastState(
         as_of_date=str(latest["date"].date()),
         up_1d_prob=float(market_short_prob),
-        up_5d_prob=float(0.6 * market_short_prob + 0.4 * market_mid_prob),
+        up_5d_prob=float(
+            market_five_prob if market_five_prob is not None else (0.6 * market_short_prob + 0.4 * market_mid_prob)
+        ),
         up_20d_prob=float(market_mid_prob),
         trend_state=str(state.state_code),
         drawdown_risk=_clip(abs(float(latest.get("mkt_drawdown_20", 0.0) or 0.0)), 0.0, 1.0),
@@ -533,7 +549,12 @@ def _build_stock_states_from_rows(
 
     for row in rows:
         sector = sector_map.get(row.symbol, "其他")
-        tradeability = _clip(1.0 - abs(float(row.short_prob) - float(row.mid_prob)), 0.0, 1.0)
+        five_prob = _safe_float(getattr(row, "five_prob", 0.6 * float(row.short_prob) + 0.4 * float(row.mid_prob)), 0.5)
+        tradeability = _clip(
+            1.0 - (0.55 * abs(float(row.short_prob) - five_prob) + 0.45 * abs(five_prob - float(row.mid_prob))),
+            0.0,
+            1.0,
+        )
         short_expected_ret = _safe_float(getattr(row, "short_expected_ret", 0.0), 0.0)
         mid_expected_ret = _safe_float(getattr(row, "mid_expected_ret", 0.0), 0.0)
         sector_excess_anchor = 0.0 if sector_strength_map is None else float(sector_strength_map.get(sector, 0.0))
@@ -544,7 +565,7 @@ def _build_stock_states_from_rows(
                 symbol=row.symbol,
                 sector=sector,
                 up_1d_prob=float(row.short_prob),
-                up_5d_prob=float(0.6 * float(row.short_prob) + 0.4 * float(row.mid_prob)),
+                up_5d_prob=float(five_prob),
                 up_20d_prob=float(row.mid_prob),
                 excess_vs_sector_prob=float(
                     _clip(
@@ -562,7 +583,7 @@ def _build_stock_states_from_rows(
             )
         )
     out.sort(
-        key=lambda item: (item.up_20d_prob, item.excess_vs_sector_prob, item.tradeability_score),
+        key=lambda item: (_stock_policy_score(item), item.up_20d_prob, item.excess_vs_sector_prob),
         reverse=True,
     )
     return out
@@ -597,7 +618,7 @@ def compose_state(
     ordered_sectors = sorted(sectors, key=lambda item: (item.up_20d_prob, item.relative_strength), reverse=True)
     ordered_stocks = sorted(
         stocks,
-        key=lambda item: (item.up_20d_prob, item.excess_vs_sector_prob, item.tradeability_score),
+        key=lambda item: (_stock_policy_score(item), item.up_20d_prob, item.excess_vs_sector_prob),
         reverse=True,
     )
     return CompositeState(
@@ -624,8 +645,9 @@ def _ranked_sector_budgets(sectors: Iterable[SectorForecastState], *, target_exp
 
 def _stock_policy_score(stock: StockForecastState) -> float:
     return float(
-        0.45 * float(stock.up_20d_prob)
-        + 0.25 * float(stock.up_5d_prob)
+        0.20 * float(stock.up_1d_prob)
+        + 0.30 * float(stock.up_5d_prob)
+        + 0.25 * float(stock.up_20d_prob)
         + 0.15 * float(stock.excess_vs_sector_prob)
         + 0.10 * float(stock.tradeability_score)
         + 0.05 * float(stock.event_impact_score)
@@ -1035,6 +1057,7 @@ def _build_market_and_cross_section_from_prebuilt_frame(
     *,
     market_frame: pd.DataFrame,
     market_short_prob: float,
+    market_five_prob: float | None,
     market_mid_prob: float,
 ) -> tuple[MarketForecastState, CrossSectionForecastState]:
     latest = market_frame.sort_values("date").iloc[-1]
@@ -1061,7 +1084,9 @@ def _build_market_and_cross_section_from_prebuilt_frame(
     market = MarketForecastState(
         as_of_date=str(latest["date"].date()),
         up_1d_prob=float(market_short_prob),
-        up_5d_prob=float(0.6 * market_short_prob + 0.4 * market_mid_prob),
+        up_5d_prob=float(
+            market_five_prob if market_five_prob is not None else (0.6 * market_short_prob + 0.4 * market_mid_prob)
+        ),
         up_20d_prob=float(market_mid_prob),
         trend_state=str(state.state_code),
         drawdown_risk=_clip(abs(drawdown_raw), 0.0, 1.0),
@@ -1266,6 +1291,11 @@ def _run_v2_backtest_core(
             market_feature_cols,
             "mkt_target_1d_up",
         )
+        market_five_model = LogisticBinaryModel(l2=float(settings["l2"])).fit(
+            market_train,
+            market_feature_cols,
+            "mkt_target_5d_up",
+        )
         market_mid_model = LogisticBinaryModel(l2=float(settings["l2"])).fit(
             market_train,
             market_feature_cols,
@@ -1278,6 +1308,11 @@ def _run_v2_backtest_core(
             panel_train,
             feature_cols,
             "target_1d_excess_mkt_up",
+        )
+        panel_five_model = LogisticBinaryModel(l2=float(settings["l2"])).fit(
+            panel_train,
+            feature_cols,
+            "target_5d_excess_mkt_up",
         )
         panel_mid_model = LogisticBinaryModel(l2=float(settings["l2"])).fit(
             panel_train,
@@ -1305,10 +1340,12 @@ def _run_v2_backtest_core(
             if market_row.empty:
                 continue
             mkt_short = float(market_short_model.predict_proba(market_row, market_feature_cols)[0])
+            mkt_five = float(market_five_model.predict_proba(market_row, market_feature_cols)[0])
             mkt_mid = float(market_mid_model.predict_proba(market_row, market_feature_cols)[0])
             market_state, cross_section = _build_market_and_cross_section_from_prebuilt_frame(
                 market_frame=market_valid[market_valid["date"] <= date].copy(),
                 market_short_prob=mkt_short,
+                market_five_prob=mkt_five,
                 market_mid_prob=mkt_mid,
             )
             panel_row = panel[panel["date"] == date].copy()
@@ -1316,6 +1353,7 @@ def _run_v2_backtest_core(
                 panel_row=panel_row,
                 feature_cols=feature_cols,
                 short_model=panel_short_model,
+                five_model=panel_five_model,
                 mid_model=panel_mid_model,
                 short_q_models=panel_short_q_models,
                 mid_q_models=panel_mid_q_models,
@@ -1812,6 +1850,7 @@ def run_daily_v2_live(
         use_margin_features=bool(settings["use_margin_features"]),
         margin_market_file=str(settings["margin_market_file"]),
         market_short_prob=float(market_forecast.short_prob),
+        market_five_prob=float(market_forecast.five_prob),
         market_mid_prob=float(market_forecast.mid_prob),
     )
     sector_frames = build_sector_daily_frames(

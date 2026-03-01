@@ -32,6 +32,7 @@ class ForecastRow:
     name: str
     latest_date: pd.Timestamp
     short_prob: float
+    five_prob: float
     mid_prob: float
     score: float
     short_drivers: list[str]
@@ -65,6 +66,7 @@ class MarketForecast:
     name: str
     latest_date: pd.Timestamp
     short_prob: float
+    five_prob: float
     mid_prob: float
     short_eval: BinaryMetrics
     mid_eval: BinaryMetrics

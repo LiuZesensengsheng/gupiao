@@ -218,14 +218,20 @@ def estimate_return_bucket_profile(
 def _distributional_score(
     *,
     short_prob: float,
+    five_prob: float,
     mid_prob: float,
     short_expected_ret: float,
     mid_expected_ret: float,
 ) -> float:
-    base_score = blend_horizon_score(float(short_prob), float(mid_prob), short_weight=0.55)
+    base_score = float(
+        0.25 * float(short_prob)
+        + 0.35 * float(five_prob)
+        + 0.40 * float(mid_prob)
+    )
     short_ret_score = float(np.clip(0.5 + float(short_expected_ret) / 0.06, 0.0, 1.0))
+    five_ret_score = float(np.clip(0.5 + (0.35 * float(short_expected_ret) + 0.65 * float(mid_expected_ret)) / 0.12, 0.0, 1.0))
     mid_ret_score = float(np.clip(0.5 + float(mid_expected_ret) / 0.20, 0.0, 1.0))
-    dist_score = blend_horizon_score(short_ret_score, mid_ret_score, short_weight=0.35)
+    dist_score = float(0.20 * short_ret_score + 0.35 * five_ret_score + 0.45 * mid_ret_score)
     return float(0.4 * base_score + 0.6 * dist_score)
 
 
@@ -315,6 +321,9 @@ def run_quant_pipeline(
     market_short_model = _fit_latest_model(
         market_feat, feature_cols=market_feature_cols, target_col="mkt_target_1d_up", l2=l2
     )
+    market_five_model = _fit_latest_model(
+        market_feat, feature_cols=market_feature_cols, target_col="mkt_target_5d_up", l2=l2
+    )
     market_mid_model = _fit_latest_model(
         market_feat, feature_cols=market_feature_cols, target_col="mkt_target_20d_up", l2=l2
     )
@@ -326,6 +335,7 @@ def run_quant_pipeline(
         name=market_security.name,
         latest_date=pd.Timestamp(mkt_latest["date"]),
         short_prob=float(market_short_model.predict_proba(mkt_latest_df, market_feature_cols)[0]),
+        five_prob=float(market_five_model.predict_proba(mkt_latest_df, market_feature_cols)[0]),
         mid_prob=float(market_mid_model.predict_proba(mkt_latest_df, market_feature_cols)[0]),
         short_eval=(
             _walk_forward_eval(
@@ -405,6 +415,7 @@ def run_quant_pipeline(
         raise DataError("No valid stock rows with complete panel features for selected universe.")
 
     panel_short_model = _fit_latest_model(panel, feature_cols=feature_cols, target_col="target_1d_excess_mkt_up", l2=l2)
+    panel_five_model = _fit_latest_model(panel, feature_cols=feature_cols, target_col="target_5d_excess_mkt_up", l2=l2)
     panel_mid_model = _fit_latest_model(panel, feature_cols=feature_cols, target_col="target_20d_excess_sector_up", l2=l2)
     panel_short_q_models = _fit_quantile_quintet(
         panel,
@@ -453,6 +464,7 @@ def run_quant_pipeline(
         raise DataError("No latest panel rows available for stock prediction.")
 
     short_probs = panel_short_model.predict_proba(latest_panel, feature_cols=feature_cols)
+    five_probs = panel_five_model.predict_proba(latest_panel, feature_cols=feature_cols)
     mid_probs = panel_mid_model.predict_proba(latest_panel, feature_cols=feature_cols)
 
     stock_rows: list[ForecastRow] = []
@@ -471,9 +483,11 @@ def run_quant_pipeline(
             q_models=panel_mid_q_models,
         )
         short_prob = float(short_probs[idx])
+        five_prob = float(five_probs[idx])
         mid_prob = float(mid_probs[idx])
         score = _distributional_score(
             short_prob=short_prob,
+            five_prob=five_prob,
             mid_prob=mid_prob,
             short_expected_ret=float(short_bucket.expected_return),
             mid_expected_ret=float(mid_bucket.expected_return),
@@ -485,6 +499,7 @@ def run_quant_pipeline(
                 name=str(latest_row.get("name", symbol)),
                 latest_date=pd.Timestamp(latest_row["date"]),
                 short_prob=short_prob,
+                five_prob=five_prob,
                 mid_prob=mid_prob,
                 score=score,
                 short_drivers=panel_short_model.top_drivers(latest_row, top_n=3),
