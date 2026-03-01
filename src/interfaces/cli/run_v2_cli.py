@@ -6,11 +6,15 @@ from pathlib import Path
 
 from src.application.v2_services import (
     calibrate_v2_policy,
+    learn_v2_policy_model,
+    load_published_v2_policy_model,
+    publish_v2_research_artifacts,
     run_daily_v2_live,
     run_v2_backtest_live,
     summarize_daily_run,
     summarize_v2_backtest,
     summarize_v2_calibration,
+    summarize_v2_policy_learning,
 )
 from src.application.v2_workflow import (
     build_daily_run_blueprint,
@@ -35,6 +39,7 @@ def build_parser() -> argparse.ArgumentParser:
     daily.add_argument("--universe-limit", dest="universe_limit", type=int, default=None, help="Optional universe size override")
     daily.add_argument("--report", default="reports/v2_daily_report.md", help="Markdown report output path")
     daily.add_argument("--dashboard", default="reports/v2_daily_dashboard.html", help="HTML dashboard output path")
+    daily.add_argument("--artifact-root", default="artifacts/v2", help="Published artifact root for learned policy snapshots")
 
     research = sub.add_parser("research-run", help="Print the V2 research workflow stages")
     research.add_argument("--strategy", default="swing_v2", help="Target strategy id")
@@ -44,6 +49,7 @@ def build_parser() -> argparse.ArgumentParser:
     research.add_argument("--universe-limit", dest="universe_limit", type=int, default=None, help="Optional universe size override")
     research.add_argument("--report", default="reports/v2_research_report.md", help="Markdown report output path")
     research.add_argument("--dashboard", default="reports/v2_research_dashboard.html", help="HTML dashboard output path")
+    research.add_argument("--artifact-root", default="artifacts/v2", help="Artifact output root for research runs")
 
     return parser
 
@@ -77,11 +83,18 @@ def main() -> int:
             source=args.source,
             universe_file=args.universe_file,
             universe_limit=args.universe_limit,
+            artifact_root=str(args.artifact_root),
+        )
+        published_model = load_published_v2_policy_model(
+            strategy_id=str(args.strategy),
+            artifact_root=str(args.artifact_root),
         )
         report_path = write_v2_daily_report(str(args.report), result)
         dashboard_path = write_v2_daily_dashboard(str(args.dashboard), result)
         print(f"[V2] daily-run report: {Path(report_path).resolve()}")
         print(f"[V2] daily-run dashboard: {Path(dashboard_path).resolve()}")
+        if published_model is not None:
+            print(f"[V2] daily-run policy snapshot: {Path(str(args.artifact_root)).resolve() / str(args.strategy) / 'latest_policy_model.json'}")
         print("[V2] daily-run summary:")
         print(json.dumps(summarize_daily_run(result), ensure_ascii=False, indent=2))
         return 0
@@ -107,24 +120,50 @@ def main() -> int:
             universe_file=args.universe_file,
             universe_limit=args.universe_limit,
         )
+        learning = learn_v2_policy_model(
+            strategy_id=str(args.strategy),
+            config_path=str(args.config),
+            source=args.source,
+            universe_file=args.universe_file,
+            universe_limit=args.universe_limit,
+            baseline=baseline,
+        )
+        artifacts = publish_v2_research_artifacts(
+            strategy_id=str(args.strategy),
+            artifact_root=str(args.artifact_root),
+            config_path=str(args.config),
+            source=args.source,
+            universe_file=args.universe_file,
+            universe_limit=args.universe_limit,
+            baseline=baseline,
+            calibration=calibration,
+            learning=learning,
+        )
         report_path = write_v2_research_report(
             str(args.report),
             strategy_id=str(args.strategy),
             baseline=baseline,
             calibration=calibration,
+            learning=learning,
+            artifacts=artifacts,
         )
         dashboard_path = write_v2_research_dashboard(
             str(args.dashboard),
             strategy_id=str(args.strategy),
             baseline=baseline,
             calibration=calibration,
+            learning=learning,
+            artifacts=artifacts,
         )
         print(f"[V2] research report: {Path(report_path).resolve()}")
         print(f"[V2] research dashboard: {Path(dashboard_path).resolve()}")
+        print(f"[V2] research artifacts: {Path(str(artifacts['run_dir'])).resolve()}")
         print("[V2] research baseline backtest:")
         print(json.dumps(summarize_v2_backtest(baseline), ensure_ascii=False, indent=2))
         print("[V2] policy calibration:")
         print(json.dumps(summarize_v2_calibration(calibration), ensure_ascii=False, indent=2))
+        print("[V2] learned policy:")
+        print(json.dumps(summarize_v2_policy_learning(learning), ensure_ascii=False, indent=2))
         return 0
 
     raise ValueError(f"Unsupported task: {args.task}")

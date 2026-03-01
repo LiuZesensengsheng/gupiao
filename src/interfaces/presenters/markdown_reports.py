@@ -6,7 +6,12 @@ from typing import Sequence
 import pandas as pd
 
 from src.application.use_cases import DailyFusionResult, DiscoveryResult
-from src.application.v2_contracts import DailyRunResult as V2DailyRunResult, V2BacktestSummary, V2CalibrationResult
+from src.application.v2_contracts import (
+    DailyRunResult as V2DailyRunResult,
+    V2BacktestSummary,
+    V2CalibrationResult,
+    V2PolicyLearningResult,
+)
 from src.domain.entities import BacktestMetrics, BinaryMetrics, DiscoveryRow, ForecastRow, MarketForecast
 from src.domain.policies import market_regime, target_exposure
 from src.interfaces.presenters.driver_explainer import format_driver_list
@@ -472,6 +477,8 @@ def write_v2_research_report(
     strategy_id: str,
     baseline: V2BacktestSummary,
     calibration: V2CalibrationResult,
+    learning: V2PolicyLearningResult,
+    artifacts: dict[str, str] | None = None,
 ) -> Path:
     report_path = Path(out_path)
     report_path.parent.mkdir(parents=True, exist_ok=True)
@@ -483,42 +490,66 @@ def write_v2_research_report(
     lines.append("")
     lines.append("## 基线回测")
     lines.append("")
-    lines.append("| 开始 | 结束 | 交易日 | 总收益 | 年化收益 | 最大回撤 | 平均换手 | 总成本 |")
-    lines.append("|---|---|---:|---:|---:|---:|---:|---:|")
+    lines.append("| 开始 | 结束 | 交易日 | 总收益 | 毛收益 | 年化收益 | 年化波动 | 胜率 | 最大回撤 | 平均换手 | 平均成交率 | 平均滑点 | 总成本 |")
+    lines.append("|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|")
     lines.append(
-        f"| {baseline.start_date or 'NA'} | {baseline.end_date or 'NA'} | {baseline.n_days} | {_to_percent(baseline.total_return)} | "
-        f"{_to_percent(baseline.annual_return)} | {_to_percent(baseline.max_drawdown)} | {_to_percent(baseline.avg_turnover)} | {_to_percent(baseline.total_cost)} |"
+        f"| {baseline.start_date or 'NA'} | {baseline.end_date or 'NA'} | {baseline.n_days} | {_to_percent(baseline.total_return)} | {_to_percent(baseline.gross_total_return)} | "
+        f"{_to_percent(baseline.annual_return)} | {_to_percent(baseline.annual_vol)} | {_to_percent(baseline.win_rate)} | {_to_percent(baseline.max_drawdown)} | "
+        f"{_to_percent(baseline.avg_turnover)} | {_to_percent(baseline.avg_fill_ratio)} | {_to_bp(baseline.avg_slippage_bps / 10000.0)} | {_to_percent(baseline.total_cost)} |"
     )
     lines.append("")
     lines.append("## 策略校准")
     lines.append("")
     lines.append(f"- 最优评分: {_to_float(calibration.best_score, 4)}")
     lines.append(
-        f"- 风险偏好仓位: risk_on={_to_percent(calibration.best_policy.risk_on_exposure)}, "
-        f"cautious={_to_percent(calibration.best_policy.cautious_exposure)}, "
-        f"risk_off={_to_percent(calibration.best_policy.risk_off_exposure)}"
+        f"- 风险偏好仓位: 积极={_to_percent(calibration.best_policy.risk_on_exposure)}, "
+        f"谨慎={_to_percent(calibration.best_policy.cautious_exposure)}, "
+        f"收缩={_to_percent(calibration.best_policy.risk_off_exposure)}"
     )
     lines.append(
-        f"- 持仓数: risk_on={calibration.best_policy.risk_on_positions}, "
-        f"cautious={calibration.best_policy.cautious_positions}, "
-        f"risk_off={calibration.best_policy.risk_off_positions}"
+        f"- 持仓数: 积极={calibration.best_policy.risk_on_positions}, "
+        f"谨慎={calibration.best_policy.cautious_positions}, "
+        f"收缩={calibration.best_policy.risk_off_positions}"
     )
     lines.append(
-        f"- 换手上限: risk_on={_to_percent(calibration.best_policy.risk_on_turnover_cap)}, "
-        f"cautious={_to_percent(calibration.best_policy.cautious_turnover_cap)}, "
-        f"risk_off={_to_percent(calibration.best_policy.risk_off_turnover_cap)}"
+        f"- 换手上限: 积极={_to_percent(calibration.best_policy.risk_on_turnover_cap)}, "
+        f"谨慎={_to_percent(calibration.best_policy.cautious_turnover_cap)}, "
+        f"收缩={_to_percent(calibration.best_policy.risk_off_turnover_cap)}"
     )
     lines.append("")
-    lines.append("| 方案 | 开始 | 结束 | 交易日 | 总收益 | 年化收益 | 最大回撤 | 平均换手 | 总成本 |")
-    lines.append("|---|---|---|---:|---:|---:|---:|---:|---:|")
+    lines.append("| 方案 | 开始 | 结束 | 交易日 | 总收益 | 年化收益 | 最大回撤 | 平均换手 | 平均成交率 | 平均滑点 | 总成本 |")
+    lines.append("|---|---|---|---:|---:|---:|---:|---:|---:|---:|---:|")
     lines.append(
-        f"| baseline | {calibration.baseline.start_date or 'NA'} | {calibration.baseline.end_date or 'NA'} | {calibration.baseline.n_days} | {_to_percent(calibration.baseline.total_return)} | "
-        f"{_to_percent(calibration.baseline.annual_return)} | {_to_percent(calibration.baseline.max_drawdown)} | {_to_percent(calibration.baseline.avg_turnover)} | {_to_percent(calibration.baseline.total_cost)} |"
+        f"| 基线参数 | {calibration.baseline.start_date or 'NA'} | {calibration.baseline.end_date or 'NA'} | {calibration.baseline.n_days} | {_to_percent(calibration.baseline.total_return)} | "
+        f"{_to_percent(calibration.baseline.annual_return)} | {_to_percent(calibration.baseline.max_drawdown)} | {_to_percent(calibration.baseline.avg_turnover)} | "
+        f"{_to_percent(calibration.baseline.avg_fill_ratio)} | {_to_bp(calibration.baseline.avg_slippage_bps / 10000.0)} | {_to_percent(calibration.baseline.total_cost)} |"
     )
     lines.append(
-        f"| calibrated | {calibration.calibrated.start_date or 'NA'} | {calibration.calibrated.end_date or 'NA'} | {calibration.calibrated.n_days} | {_to_percent(calibration.calibrated.total_return)} | "
-        f"{_to_percent(calibration.calibrated.annual_return)} | {_to_percent(calibration.calibrated.max_drawdown)} | {_to_percent(calibration.calibrated.avg_turnover)} | {_to_percent(calibration.calibrated.total_cost)} |"
+        f"| 校准参数 | {calibration.calibrated.start_date or 'NA'} | {calibration.calibrated.end_date or 'NA'} | {calibration.calibrated.n_days} | {_to_percent(calibration.calibrated.total_return)} | "
+        f"{_to_percent(calibration.calibrated.annual_return)} | {_to_percent(calibration.calibrated.max_drawdown)} | {_to_percent(calibration.calibrated.avg_turnover)} | "
+        f"{_to_percent(calibration.calibrated.avg_fill_ratio)} | {_to_bp(calibration.calibrated.avg_slippage_bps / 10000.0)} | {_to_percent(calibration.calibrated.total_cost)} |"
     )
+    lines.append("")
+    lines.append("## 学习型策略层")
+    lines.append("")
+    lines.append(f"- 样本数: {learning.model.train_rows}")
+    lines.append(f"- 仓位拟合R²: {_to_float(learning.model.train_r2_exposure, 4)}")
+    lines.append(f"- 持仓数拟合R²: {_to_float(learning.model.train_r2_positions, 4)}")
+    lines.append(f"- 换手上限拟合R²: {_to_float(learning.model.train_r2_turnover, 4)}")
+    lines.append("")
+    lines.append("| 方案 | 开始 | 结束 | 交易日 | 总收益 | 年化收益 | 最大回撤 | 平均换手 | 平均成交率 | 平均滑点 | 总成本 |")
+    lines.append("|---|---|---|---:|---:|---:|---:|---:|---:|---:|---:|")
+    lines.append(
+        f"| 学习型策略 | {learning.learned.start_date or 'NA'} | {learning.learned.end_date or 'NA'} | {learning.learned.n_days} | {_to_percent(learning.learned.total_return)} | "
+        f"{_to_percent(learning.learned.annual_return)} | {_to_percent(learning.learned.max_drawdown)} | {_to_percent(learning.learned.avg_turnover)} | "
+        f"{_to_percent(learning.learned.avg_fill_ratio)} | {_to_bp(learning.learned.avg_slippage_bps / 10000.0)} | {_to_percent(learning.learned.total_cost)} |"
+    )
+    if artifacts:
+        lines.append("")
+        lines.append("## 研究产物")
+        lines.append("")
+        for label, path in artifacts.items():
+            lines.append(f"- {label}: `{path}`")
 
     report_path.write_text("\n".join(lines), encoding="utf-8")
     return report_path

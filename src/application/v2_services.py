@@ -640,6 +640,7 @@ def _simulate_execution_day(
     executed_deltas: dict[str, float] = {}
     fill_ratios: list[float] = []
     slippage_rates: list[float] = []
+    slippage_amounts: list[float] = []
     total_turnover_budget = float(max(0.0, decision.turnover_cap))
     used_turnover = 0.0
 
@@ -662,6 +663,7 @@ def _simulate_execution_day(
         impact = max_abs_trade / max(liquidity_cap, 1e-6)
         slippage_rate = float(base_slippage_rate * (0.65 + 0.7 * impact + 0.35 * (1.0 - tradeability)))
         slippage_rates.append(slippage_rate)
+        slippage_amounts.append(float(abs(executed) * slippage_rate))
         used_turnover += abs(executed)
 
     executed_weights = {symbol: max(0.0, float(weight)) for symbol, weight in current_weights.items()}
@@ -694,7 +696,7 @@ def _simulate_execution_day(
         gross_end_value += value
 
     commission_cost = float(used_turnover * total_commission_rate)
-    slippage_cost = float(sum(abs(executed_deltas[s]) * rate for s, rate in zip(executed_deltas, slippage_rates))) if slippage_rates else 0.0
+    slippage_cost = float(sum(slippage_amounts)) if slippage_amounts else 0.0
     total_cost = float(commission_cost + slippage_cost)
     net_end_value = max(1e-9, gross_end_value - total_cost)
 
@@ -1272,8 +1274,9 @@ def learn_v2_policy_model(
     universe_file: str | None = None,
     universe_limit: int | None = None,
     l2: float = 1.0,
+    baseline: V2BacktestSummary | None = None,
 ) -> V2PolicyLearningResult:
-    baseline = run_v2_backtest_live(
+    baseline = baseline or run_v2_backtest_live(
         strategy_id=strategy_id,
         config_path=config_path,
         source=source,
@@ -1384,11 +1387,21 @@ def publish_v2_research_artifacts(
     *,
     strategy_id: str,
     artifact_root: str = "artifacts/v2",
-    settings: dict[str, object],
+    config_path: str = "config/api.json",
+    source: str | None = None,
+    universe_file: str | None = None,
+    universe_limit: int | None = None,
+    settings: dict[str, object] | None = None,
     baseline: V2BacktestSummary,
     calibration: V2CalibrationResult,
     learning: V2PolicyLearningResult,
 ) -> dict[str, str]:
+    settings = settings or _load_v2_runtime_settings(
+        config_path=config_path,
+        source=source,
+        universe_file=universe_file,
+        universe_limit=universe_limit,
+    )
     run_id = datetime.now().strftime("%Y%m%d_%H%M%S")
     base_dir = Path(str(artifact_root)) / str(strategy_id) / run_id
     base_dir.mkdir(parents=True, exist_ok=True)

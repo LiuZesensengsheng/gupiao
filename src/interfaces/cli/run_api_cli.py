@@ -941,6 +941,8 @@ def main() -> int:
         if args.print_effective_config:
             print(json.dumps({"task": args.task, "settings": _masked_settings(settings)}, indent=2, ensure_ascii=False))
             return 0
+        if args.task in {"daily", "forecast"}:
+            print("[V1] 提示: `daily` / `forecast` 仍为兼容入口；已被 V2 逐步覆盖，优先使用 `python3 run_v2.py daily-run` 或 `python3 run_v2.py research-run`。")
         if args.task == "daily":
             return run_daily(settings)
         if args.task == "forecast":

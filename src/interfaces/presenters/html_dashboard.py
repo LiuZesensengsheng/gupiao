@@ -8,7 +8,12 @@ import numpy as np
 import pandas as pd
 
 from src.application.use_cases import DailyFusionResult
-from src.application.v2_contracts import DailyRunResult as V2DailyRunResult, V2BacktestSummary, V2CalibrationResult
+from src.application.v2_contracts import (
+    DailyRunResult as V2DailyRunResult,
+    V2BacktestSummary,
+    V2CalibrationResult,
+    V2PolicyLearningResult,
+)
 from src.interfaces.presenters.driver_explainer import format_driver_list
 
 
@@ -46,6 +51,68 @@ def _int(v: float) -> str:
     if pd.isna(v):
         return "NA"
     return str(int(round(float(v))))
+
+
+def _v2_cn_action(value: str) -> str:
+    mapping = {
+        "BUY": "买入",
+        "SELL": "卖出",
+        "HOLD": "持有",
+    }
+    return mapping.get(str(value), str(value))
+
+
+def _v2_cn_strategy_mode(value: str) -> str:
+    mapping = {
+        "trend_follow": "趋势跟随",
+        "range_rotation": "震荡轮动",
+        "defensive": "防守",
+    }
+    return mapping.get(str(value), str(value))
+
+
+def _v2_cn_risk_regime(value: str) -> str:
+    mapping = {
+        "risk_on": "积极",
+        "cautious": "谨慎",
+        "risk_off": "收缩",
+    }
+    return mapping.get(str(value), str(value))
+
+
+def _v2_cn_trend_state(value: str) -> str:
+    mapping = {
+        "trend": "趋势",
+        "range": "震荡",
+        "risk_off": "风险收缩",
+    }
+    return mapping.get(str(value), str(value))
+
+
+def _v2_cn_volatility(value: str) -> str:
+    mapping = {
+        "high": "高波动",
+        "normal": "正常",
+        "low": "低波动",
+    }
+    return mapping.get(str(value), str(value))
+
+
+def _v2_cn_policy_field(value: str) -> str:
+    mapping = {
+        "risk_on_exposure": "积极状态总仓位",
+        "cautious_exposure": "谨慎状态总仓位",
+        "risk_off_exposure": "收缩状态总仓位",
+        "risk_on_positions": "积极状态持仓数",
+        "cautious_positions": "谨慎状态持仓数",
+        "risk_off_positions": "收缩状态持仓数",
+        "risk_on_turnover_cap": "积极状态换手上限",
+        "cautious_turnover_cap": "谨慎状态换手上限",
+        "risk_off_turnover_cap": "收缩状态换手上限",
+        "baseline": "基线",
+        "calibrated": "校准后",
+    }
+    return mapping.get(str(value), str(value))
 
 
 def _mix_hex(a: tuple[int, int, int], b: tuple[int, int, int], t: float) -> str:
@@ -276,14 +343,13 @@ def _mini_gauge_html(
     sx, sy = _polar(0.0)
     ex, ey = _polar(1.0)
     vx, vy = _polar(safe_value)
-    large_arc = 1 if safe_value > 0.5 else 0
     return (
         "<div class='gauge-card'>"
         f"<div class='gauge-label'>{escape(label)}</div>"
         f"<svg viewBox='0 0 {width:.0f} {height:.0f}' class='gauge' role='img' aria-label='{escape(label)}'>"
         f"<path d='M {sx:.1f} {sy:.1f} A {radius:.1f} {radius:.1f} 0 0 1 {ex:.1f} {ey:.1f}' "
         "fill='none' stroke='#e7ddcf' stroke-width='14' stroke-linecap='round'/>"
-        f"<path d='M {sx:.1f} {sy:.1f} A {radius:.1f} {radius:.1f} 0 {large_arc} 1 {vx:.1f} {vy:.1f}' "
+        f"<path d='M {sx:.1f} {sy:.1f} A {radius:.1f} {radius:.1f} 0 0 1 {vx:.1f} {vy:.1f}' "
         f"fill='none' stroke='{color}' stroke-width='14' stroke-linecap='round'/>"
         f"<circle cx='{vx:.1f}' cy='{vy:.1f}' r='5' fill='{color}'/>"
         f"<text x='{cx:.1f}' y='{(cy - radius * 0.25):.1f}' text-anchor='middle' font-size='30' font-weight='700' fill='#1e2a2f'>{_pct(safe_value)}</text>"
@@ -353,7 +419,7 @@ def _v2_action_donut_html(actions: list[object]) -> str:
         offset += dash
         legends.append(
             "<div class='donut-legend-row'>"
-            f"<span><i style='background:{palette[name]};'></i>{name}</span>"
+            f"<span><i style='background:{palette[name]};'></i>{escape(_v2_cn_action(name))}</span>"
             f"<strong>{counts[name]}</strong>"
             "</div>"
         )
@@ -395,8 +461,8 @@ def _v2_compare_bars_html(
             "<div class='compare-row'>"
             f"<div class='compare-label'>{escape(label)}</div>"
             "<div class='compare-bars'>"
-            f"<div class='compare-bar left'><span style='width:{left_width:.1f}%;'></span><em>{escape(left_label)} {escape(_pct(left))}</em></div>"
-            f"<div class='compare-bar right'><span style='width:{right_width:.1f}%;'></span><em>{escape(right_label)} {escape(_pct(right))}</em></div>"
+            f"<div class='compare-bar left'><span style='width:{left_width:.1f}%;'></span><em>{escape(_v2_cn_policy_field(left_label))} {escape(_pct(left))}</em></div>"
+            f"<div class='compare-bar right'><span style='width:{right_width:.1f}%;'></span><em>{escape(_v2_cn_policy_field(right_label))} {escape(_pct(right))}</em></div>"
             "</div>"
             f"<div class='compare-delta {'up' if improved else 'down'}'>{escape(delta_text)}</div>"
             "</div>"
@@ -1054,7 +1120,7 @@ def write_v2_daily_dashboard(out_path: str | Path, result: V2DailyRunResult) -> 
         trade_rows.append(
             "<tr>"
             f"<td>{escape(action.symbol)}</td>"
-            f"<td style='font-weight:700;color:{action_color};'>{escape(action.action)}</td>"
+            f"<td style='font-weight:700;color:{action_color};'>{escape(_v2_cn_action(action.action))}</td>"
             f"<td>{_pct(action.current_weight)}</td>"
             f"<td>{_pct(action.target_weight)}</td>"
             f"<td class='score' style='color:{_score_color(action.delta_weight)}'>{_pct(action.delta_weight)}</td>"
@@ -1063,13 +1129,49 @@ def write_v2_daily_dashboard(out_path: str | Path, result: V2DailyRunResult) -> 
         )
 
     risk_notes = "".join(f"<li>{escape(note)}</li>" for note in result.policy_decision.risk_notes) or "<li>无</li>"
+    sector_chart = _v2_hbar_chart_html(
+        [
+            (sector.sector, float(result.policy_decision.sector_budgets.get(sector.sector, 0.0)))
+            for sector in result.composite_state.sectors
+            if float(result.policy_decision.sector_budgets.get(sector.sector, 0.0)) > 0.0
+        ],
+        title="板块预算分布",
+        color="#b4472f",
+    )
+    stock_chart = _v2_hbar_chart_html(
+        sorted(
+            result.policy_decision.symbol_target_weights.items(),
+            key=lambda item: float(item[1]),
+            reverse=True,
+        ),
+        title="目标持仓权重",
+        color="#1f6b72",
+    )
+    market_gauges = (
+        _mini_gauge_html(result.composite_state.market.up_20d_prob, label="20日上涨概率", color="#b4472f")
+        + _mini_gauge_html(1.0 - result.composite_state.market.drawdown_risk, label="抗回撤强度", color="#1f6b72")
+        + _mini_gauge_html(1.0 - result.composite_state.market.liquidity_stress, label="流动性健康度", color="#7a8a6a")
+    )
+    action_donut = _v2_action_donut_html(result.trade_actions)
+    cross_rows = [
+        ("大小盘偏好", float(abs(result.composite_state.cross_section.large_vs_small_bias))),
+        ("成长价值偏好", float(abs(result.composite_state.cross_section.growth_vs_value_bias))),
+        ("资金强度", float(max(0.0, result.composite_state.cross_section.fund_flow_strength))),
+        ("宽度强度", float(max(0.0, result.composite_state.cross_section.breadth_strength))),
+    ]
+    cross_chart = _v2_hbar_chart_html(
+        cross_rows,
+        title="横截面强度",
+        color="#3c6fd1",
+        formatter=lambda value: f"{value:.3f}",
+    )
 
     html = f"""<!doctype html>
 <html lang="zh-CN">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>V2 每日策略 Dashboard</title>
+  <title>V2 每日策略看板</title>
   <style>
     :root {{
       --bg: #f6f1e8;
@@ -1096,6 +1198,7 @@ def write_v2_daily_dashboard(out_path: str | Path, result: V2DailyRunResult) -> 
     .grid {{ display: grid; gap: 18px; margin-top: 18px; }}
     .grid.two {{ grid-template-columns: repeat(2, minmax(0, 1fr)); }}
     .grid.three {{ grid-template-columns: repeat(3, minmax(0, 1fr)); }}
+    .grid.four {{ grid-template-columns: repeat(4, minmax(0, 1fr)); }}
     .card {{ background: var(--paper); border: 1px solid var(--line); border-radius: 22px; padding: 18px; box-shadow: 0 10px 24px rgba(40,30,10,0.05); }}
     .metric {{ font-size: 30px; font-weight: 700; }}
     .label {{ color: var(--muted); font-size: 12px; text-transform: uppercase; letter-spacing: 0.08em; }}
@@ -1105,32 +1208,67 @@ def write_v2_daily_dashboard(out_path: str | Path, result: V2DailyRunResult) -> 
     th {{ color: var(--muted); font-weight: 700; }}
     .score {{ font-weight: 700; }}
     ul {{ margin: 8px 0 0 18px; padding: 0; }}
+    .viz-grid {{ display: grid; gap: 18px; grid-template-columns: 1.3fr 1fr; margin-top: 18px; }}
+    .viz-card {{ background: var(--paper); border: 1px solid var(--line); border-radius: 22px; padding: 18px; box-shadow: 0 10px 24px rgba(40,30,10,0.05); }}
+    .viz-title {{ font-size: 16px; font-weight: 700; margin-bottom: 12px; }}
+    .gauge-panel {{ display: grid; gap: 14px; grid-template-columns: repeat(3, minmax(0, 1fr)); }}
+    .gauge-card {{ background: rgba(255,255,255,0.5); border: 1px solid #eadfce; border-radius: 18px; padding: 12px; }}
+    .gauge-label {{ font-size: 12px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.06em; margin-bottom: 4px; }}
+    .gauge {{ width: 100%; height: auto; display: block; }}
+    .hbar-row {{ display: grid; grid-template-columns: 110px 1fr 64px; gap: 10px; align-items: center; margin-top: 10px; }}
+    .hbar-row:first-of-type {{ margin-top: 0; }}
+    .hbar-label, .hbar-value {{ font-size: 12px; color: var(--muted); }}
+    .hbar-value {{ text-align: right; font-weight: 700; color: var(--ink); }}
+    .hbar-track {{ height: 12px; border-radius: 999px; background: #efe5d7; overflow: hidden; }}
+    .hbar-fill {{ height: 100%; border-radius: 999px; }}
+    .donut-wrap {{ height: 100%; }}
+    .donut-layout {{ display: grid; grid-template-columns: 160px 1fr; gap: 10px; align-items: center; }}
+    .donut {{ width: 100%; height: auto; display: block; }}
+    .donut-legend-row {{ display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 8px 0; border-bottom: 1px solid #ede3d5; font-size: 13px; }}
+    .donut-legend-row:last-child {{ border-bottom: none; }}
+    .donut-legend-row span {{ display: inline-flex; align-items: center; gap: 8px; }}
+    .donut-legend-row i {{ width: 10px; height: 10px; border-radius: 999px; display: inline-block; }}
+    .empty {{ border: 1px dashed #ddcfbc; border-radius: 16px; color: var(--muted); padding: 18px; text-align: center; background: rgba(255,255,255,0.55); }}
     @media (max-width: 900px) {{
-      .grid.two, .grid.three {{ grid-template-columns: 1fr; }}
+      .grid.two, .grid.three, .grid.four, .viz-grid, .gauge-panel, .donut-layout {{ grid-template-columns: 1fr; }}
       .wrap {{ padding: 14px; }}
       h1 {{ font-size: 28px; }}
+      .hbar-row {{ grid-template-columns: 88px 1fr 56px; }}
     }}
   </style>
 </head>
 <body>
   <div class="wrap">
     <section class="hero">
-      <h1>V2 每日策略 Dashboard</h1>
+      <h1>V2 每日策略看板</h1>
       <div class="sub">策略 {escape(result.snapshot.strategy_id)} | 股票池 {escape(result.snapshot.universe_id)} | 日期 {escape(result.composite_state.market.as_of_date)}</div>
       <div class="grid three">
         <div>
           <div class="label">策略模式</div>
-          <div class="metric">{escape(result.composite_state.strategy_mode)}</div>
+          <div class="metric">{escape(_v2_cn_strategy_mode(result.composite_state.strategy_mode))}</div>
         </div>
         <div>
           <div class="label">风险状态</div>
-          <div class="metric">{escape(result.composite_state.risk_regime)}</div>
+          <div class="metric">{escape(_v2_cn_risk_regime(result.composite_state.risk_regime))}</div>
         </div>
         <div>
           <div class="label">目标总仓位</div>
           <div class="metric">{_pct(result.policy_decision.target_exposure)}</div>
         </div>
       </div>
+    </section>
+
+    <section class="viz-grid">
+      <div class="viz-card">
+        <div class="viz-title">市场温度仪表</div>
+        <div class="gauge-panel">{market_gauges}</div>
+      </div>
+      {action_donut}
+    </section>
+
+    <section class="viz-grid">
+      {sector_chart}
+      {stock_chart}
     </section>
 
     <section class="grid two">
@@ -1140,9 +1278,9 @@ def write_v2_daily_dashboard(out_path: str | Path, result: V2DailyRunResult) -> 
           <tr><th>1日上涨概率</th><td>{_pct(result.composite_state.market.up_1d_prob)}</td></tr>
           <tr><th>5日上涨概率</th><td>{_pct(result.composite_state.market.up_5d_prob)}</td></tr>
           <tr><th>20日上涨概率</th><td>{_pct(result.composite_state.market.up_20d_prob)}</td></tr>
-          <tr><th>趋势状态</th><td>{escape(result.composite_state.market.trend_state)}</td></tr>
+          <tr><th>趋势状态</th><td>{escape(_v2_cn_trend_state(result.composite_state.market.trend_state))}</td></tr>
           <tr><th>回撤风险</th><td>{_pct(result.composite_state.market.drawdown_risk)}</td></tr>
-          <tr><th>波动状态</th><td>{escape(result.composite_state.market.volatility_regime)}</td></tr>
+          <tr><th>波动状态</th><td>{escape(_v2_cn_volatility(result.composite_state.market.volatility_regime))}</td></tr>
           <tr><th>流动性压力</th><td>{_pct(result.composite_state.market.liquidity_stress)}</td></tr>
         </table>
       </div>
@@ -1157,6 +1295,7 @@ def write_v2_daily_dashboard(out_path: str | Path, result: V2DailyRunResult) -> 
           <tr><th>龙头参与率</th><td>{_pct(result.composite_state.cross_section.leader_participation)}</td></tr>
           <tr><th>弱势股比例</th><td>{_pct(result.composite_state.cross_section.weak_stock_ratio)}</td></tr>
         </table>
+        <div style="margin-top:14px;">{cross_chart}</div>
       </div>
     </section>
 
@@ -1212,6 +1351,8 @@ def write_v2_research_dashboard(
     strategy_id: str,
     baseline: V2BacktestSummary,
     calibration: V2CalibrationResult,
+    learning: V2PolicyLearningResult,
+    artifacts: dict[str, str] | None = None,
 ) -> Path:
     path = Path(out_path)
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -1224,12 +1365,57 @@ def write_v2_research_dashboard(
             "</div>"
         )
 
+    compare_chart = _v2_compare_bars_html(
+        [
+            ("年化收益", float(baseline.annual_return), float(calibration.calibrated.annual_return), False),
+            ("总收益", float(baseline.total_return), float(calibration.calibrated.total_return), False),
+            ("最大回撤", abs(float(baseline.max_drawdown)), abs(float(calibration.calibrated.max_drawdown)), True),
+            ("平均换手", float(baseline.avg_turnover), float(calibration.calibrated.avg_turnover), True),
+            ("总成本", float(baseline.total_cost), float(calibration.calibrated.total_cost), True),
+        ],
+        left_label="baseline",
+        right_label="calibrated",
+    )
+    improvement_tiles = "".join(
+        [
+            _metric_tile(
+                "年化增量",
+                _pct(float(calibration.calibrated.annual_return) - float(baseline.annual_return)),
+                "#185e66" if float(calibration.calibrated.annual_return) >= float(baseline.annual_return) else "#c14d2d",
+            ),
+            _metric_tile(
+                "收益增量",
+                _pct(float(calibration.calibrated.total_return) - float(baseline.total_return)),
+                "#185e66" if float(calibration.calibrated.total_return) >= float(baseline.total_return) else "#c14d2d",
+            ),
+            _metric_tile(
+                "换手变化",
+                _pct(float(calibration.calibrated.avg_turnover) - float(baseline.avg_turnover)),
+                "#c14d2d" if float(calibration.calibrated.avg_turnover) > float(baseline.avg_turnover) else "#185e66",
+            ),
+            _metric_tile(
+                "成本变化",
+                _pct(float(calibration.calibrated.total_cost) - float(baseline.total_cost)),
+                "#c14d2d" if float(calibration.calibrated.total_cost) > float(baseline.total_cost) else "#185e66",
+            ),
+            _metric_tile(
+                "学习年化",
+                _pct(float(learning.learned.annual_return)),
+                "#185e66" if float(learning.learned.annual_return) >= float(baseline.annual_return) else "#c14d2d",
+            ),
+        ]
+    )
+    artifact_rows = "".join(
+        f"<tr><th>{escape(str(label))}</th><td>{escape(str(path_value))}</td></tr>"
+        for label, path_value in (artifacts or {}).items()
+    )
+
     html = f"""<!doctype html>
 <html lang="zh-CN">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>V2 研究回测 Dashboard</title>
+  <title>V2 研究回测看板</title>
   <style>
     :root {{
       --bg: #eef3f1;
@@ -1260,8 +1446,22 @@ def write_v2_research_dashboard(
     table {{ width: 100%; border-collapse: collapse; }}
     th, td {{ padding: 10px 8px; border-bottom: 1px solid #e8eef0; text-align: left; font-size: 13px; }}
     th {{ color: var(--muted); font-weight: 700; }}
+    .viz-card {{ padding: 18px; border-radius: 22px; background: linear-gradient(180deg, #fbfefe, #f3f7f8); border: 1px solid #e2ebef; }}
+    .compare-wrap {{ display: grid; gap: 14px; }}
+    .compare-row {{ display: grid; gap: 10px; grid-template-columns: 96px 1fr 92px; align-items: center; }}
+    .compare-label {{ font-size: 12px; color: var(--muted); font-weight: 700; }}
+    .compare-bars {{ display: grid; gap: 8px; }}
+    .compare-bar {{ position: relative; height: 26px; border-radius: 999px; overflow: hidden; background: #e8eef0; }}
+    .compare-bar span {{ display: block; height: 100%; }}
+    .compare-bar.left span {{ background: #185e66; }}
+    .compare-bar.right span {{ background: #c14d2d; }}
+    .compare-bar em {{ position: absolute; inset: 0; display: flex; align-items: center; padding: 0 10px; color: #102228; font-size: 12px; font-style: normal; font-weight: 700; }}
+    .compare-delta {{ text-align: right; font-size: 12px; font-weight: 700; }}
+    .compare-delta.up {{ color: #185e66; }}
+    .compare-delta.down {{ color: #c14d2d; }}
     @media (max-width: 900px) {{
       .grid.two, .grid.four {{ grid-template-columns: 1fr; }}
+      .compare-row {{ grid-template-columns: 1fr; }}
       .wrap {{ padding: 14px; }}
       h1 {{ font-size: 28px; }}
     }}
@@ -1270,7 +1470,7 @@ def write_v2_research_dashboard(
 <body>
   <div class="wrap">
     <section class="hero">
-      <h1>V2 研究回测 Dashboard</h1>
+      <h1>V2 研究回测看板</h1>
       <div class="sub">策略 {escape(strategy_id)} | 基线回测与策略校准结果</div>
       <div class="grid four">
         {_metric_tile("基线年化", _pct(baseline.annual_return), "#185e66")}
@@ -1280,29 +1480,61 @@ def write_v2_research_dashboard(
       </div>
     </section>
 
+    <section class="grid">
+      <div class="viz-card">
+        <h2>基线方案 vs 校准方案</h2>
+        {compare_chart}
+      </div>
+    </section>
+
+    <section class="grid four">
+      {improvement_tiles}
+    </section>
+
     <section class="grid two">
       <div class="card">
         <h2>回测结果</h2>
         <table>
           <thead><tr><th>方案</th><th>开始</th><th>结束</th><th>交易日</th><th>总收益</th><th>年化</th><th>回撤</th><th>换手</th><th>成本</th></tr></thead>
           <tbody>
-            <tr><td>baseline</td><td>{escape(baseline.start_date or 'NA')}</td><td>{escape(baseline.end_date or 'NA')}</td><td>{baseline.n_days}</td><td>{_pct(baseline.total_return)}</td><td>{_pct(baseline.annual_return)}</td><td>{_pct(baseline.max_drawdown)}</td><td>{_pct(baseline.avg_turnover)}</td><td>{_pct(baseline.total_cost)}</td></tr>
-            <tr><td>calibrated</td><td>{escape(calibration.calibrated.start_date or 'NA')}</td><td>{escape(calibration.calibrated.end_date or 'NA')}</td><td>{calibration.calibrated.n_days}</td><td>{_pct(calibration.calibrated.total_return)}</td><td>{_pct(calibration.calibrated.annual_return)}</td><td>{_pct(calibration.calibrated.max_drawdown)}</td><td>{_pct(calibration.calibrated.avg_turnover)}</td><td>{_pct(calibration.calibrated.total_cost)}</td></tr>
+            <tr><td>基线方案</td><td>{escape(baseline.start_date or 'NA')}</td><td>{escape(baseline.end_date or 'NA')}</td><td>{baseline.n_days}</td><td>{_pct(baseline.total_return)}</td><td>{_pct(baseline.annual_return)}</td><td>{_pct(baseline.max_drawdown)}</td><td>{_pct(baseline.avg_turnover)}</td><td>{_pct(baseline.total_cost)}</td></tr>
+            <tr><td>校准方案</td><td>{escape(calibration.calibrated.start_date or 'NA')}</td><td>{escape(calibration.calibrated.end_date or 'NA')}</td><td>{calibration.calibrated.n_days}</td><td>{_pct(calibration.calibrated.total_return)}</td><td>{_pct(calibration.calibrated.annual_return)}</td><td>{_pct(calibration.calibrated.max_drawdown)}</td><td>{_pct(calibration.calibrated.avg_turnover)}</td><td>{_pct(calibration.calibrated.total_cost)}</td></tr>
+            <tr><td>学习方案</td><td>{escape(learning.learned.start_date or 'NA')}</td><td>{escape(learning.learned.end_date or 'NA')}</td><td>{learning.learned.n_days}</td><td>{_pct(learning.learned.total_return)}</td><td>{_pct(learning.learned.annual_return)}</td><td>{_pct(learning.learned.max_drawdown)}</td><td>{_pct(learning.learned.avg_turnover)}</td><td>{_pct(learning.learned.total_cost)}</td></tr>
           </tbody>
         </table>
       </div>
       <div class="card">
         <h2>最优策略参数</h2>
         <table>
-          <tr><th>risk_on_exposure</th><td>{_pct(calibration.best_policy.risk_on_exposure)}</td></tr>
-          <tr><th>cautious_exposure</th><td>{_pct(calibration.best_policy.cautious_exposure)}</td></tr>
-          <tr><th>risk_off_exposure</th><td>{_pct(calibration.best_policy.risk_off_exposure)}</td></tr>
-          <tr><th>risk_on_positions</th><td>{calibration.best_policy.risk_on_positions}</td></tr>
-          <tr><th>cautious_positions</th><td>{calibration.best_policy.cautious_positions}</td></tr>
-          <tr><th>risk_off_positions</th><td>{calibration.best_policy.risk_off_positions}</td></tr>
-          <tr><th>risk_on_turnover_cap</th><td>{_pct(calibration.best_policy.risk_on_turnover_cap)}</td></tr>
-          <tr><th>cautious_turnover_cap</th><td>{_pct(calibration.best_policy.cautious_turnover_cap)}</td></tr>
-          <tr><th>risk_off_turnover_cap</th><td>{_pct(calibration.best_policy.risk_off_turnover_cap)}</td></tr>
+          <tr><th>{escape(_v2_cn_policy_field('risk_on_exposure'))}</th><td>{_pct(calibration.best_policy.risk_on_exposure)}</td></tr>
+          <tr><th>{escape(_v2_cn_policy_field('cautious_exposure'))}</th><td>{_pct(calibration.best_policy.cautious_exposure)}</td></tr>
+          <tr><th>{escape(_v2_cn_policy_field('risk_off_exposure'))}</th><td>{_pct(calibration.best_policy.risk_off_exposure)}</td></tr>
+          <tr><th>{escape(_v2_cn_policy_field('risk_on_positions'))}</th><td>{calibration.best_policy.risk_on_positions}</td></tr>
+          <tr><th>{escape(_v2_cn_policy_field('cautious_positions'))}</th><td>{calibration.best_policy.cautious_positions}</td></tr>
+          <tr><th>{escape(_v2_cn_policy_field('risk_off_positions'))}</th><td>{calibration.best_policy.risk_off_positions}</td></tr>
+          <tr><th>{escape(_v2_cn_policy_field('risk_on_turnover_cap'))}</th><td>{_pct(calibration.best_policy.risk_on_turnover_cap)}</td></tr>
+          <tr><th>{escape(_v2_cn_policy_field('cautious_turnover_cap'))}</th><td>{_pct(calibration.best_policy.cautious_turnover_cap)}</td></tr>
+          <tr><th>{escape(_v2_cn_policy_field('risk_off_turnover_cap'))}</th><td>{_pct(calibration.best_policy.risk_off_turnover_cap)}</td></tr>
+        </table>
+      </div>
+    </section>
+
+    <section class="grid two">
+      <div class="card">
+        <h2>学习型策略诊断</h2>
+        <table>
+          <tr><th>训练样本数</th><td>{learning.model.train_rows}</td></tr>
+          <tr><th>仓位拟合R²</th><td>{_num(learning.model.train_r2_exposure, 4)}</td></tr>
+          <tr><th>持仓数拟合R²</th><td>{_num(learning.model.train_r2_positions, 4)}</td></tr>
+          <tr><th>换手上限拟合R²</th><td>{_num(learning.model.train_r2_turnover, 4)}</td></tr>
+          <tr><th>学习方案平均成交率</th><td>{_pct(learning.learned.avg_fill_ratio)}</td></tr>
+          <tr><th>学习方案平均滑点</th><td>{_num(learning.learned.avg_slippage_bps, 1)}bp</td></tr>
+        </table>
+      </div>
+      <div class="card">
+        <h2>研究产物</h2>
+        <table>
+          <tbody>{artifact_rows or '<tr><td colspan="2">本次未写出产物</td></tr>'}</tbody>
         </table>
       </div>
     </section>
