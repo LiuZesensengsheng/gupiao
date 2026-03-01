@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import json
-from dataclasses import asdict
+from dataclasses import asdict, dataclass
 from datetime import datetime
 from pathlib import Path
 from typing import Iterable
@@ -27,20 +27,18 @@ from src.application.v2_contracts import (
 )
 from src.application.watchlist import load_watchlist
 from src.domain.entities import TradeAction
-from src.domain.policies import decide_market_state
+from src.domain.policies import blend_horizon_score, decide_market_state
 from src.infrastructure.discovery import build_candidate_universe
 from src.infrastructure.cross_section_forecast import forecast_cross_section_state
 from src.infrastructure.features import (
     MARKET_FEATURE_COLUMNS,
     make_market_feature_frame,
-    make_stock_feature_frame,
-    stock_feature_columns,
 )
 from src.infrastructure.forecast_engine import run_quant_pipeline
-from src.infrastructure.margin_features import build_stock_margin_features
 from src.infrastructure.market_context import build_market_context_features
 from src.infrastructure.market_data import load_symbol_daily
-from src.infrastructure.modeling import LogisticBinaryModel
+from src.infrastructure.modeling import LogisticBinaryModel, QuantileLinearModel
+from src.infrastructure.panel_dataset import build_stock_panel_dataset
 from src.infrastructure.sector_data import build_sector_daily_frames
 from src.infrastructure.sector_forecast import run_sector_forecast
 
@@ -142,6 +140,166 @@ def _r2_score(y_true: np.ndarray, y_pred: np.ndarray) -> float:
     if ss_tot <= 1e-12:
         return 0.0
     return float(1.0 - ss_res / ss_tot)
+
+
+@dataclass(frozen=True)
+class _ReturnQuantileProfile:
+    expected_return: float
+    q20: float
+    q50: float
+    q80: float
+
+
+def _fit_quantile_triplet(
+    df: pd.DataFrame,
+    *,
+    feature_cols: list[str],
+    target_col: str,
+    l2: float,
+) -> tuple[QuantileLinearModel, QuantileLinearModel, QuantileLinearModel]:
+    return (
+        QuantileLinearModel(quantile=0.20, l2=l2).fit(df, feature_cols, target_col),
+        QuantileLinearModel(quantile=0.50, l2=l2).fit(df, feature_cols, target_col),
+        QuantileLinearModel(quantile=0.80, l2=l2).fit(df, feature_cols, target_col),
+    )
+
+
+def _predict_quantile_profile(
+    row: pd.DataFrame,
+    *,
+    feature_cols: list[str],
+    q_models: tuple[QuantileLinearModel, QuantileLinearModel, QuantileLinearModel],
+) -> _ReturnQuantileProfile:
+    q20 = float(q_models[0].predict(row, feature_cols)[0])
+    q50 = float(q_models[1].predict(row, feature_cols)[0])
+    q80 = float(q_models[2].predict(row, feature_cols)[0])
+    ordered = sorted([q20, q50, q80])
+    q20, q50, q80 = float(ordered[0]), float(ordered[1]), float(ordered[2])
+    return _ReturnQuantileProfile(
+        expected_return=float(0.25 * q20 + 0.5 * q50 + 0.25 * q80),
+        q20=q20,
+        q50=q50,
+        q80=q80,
+    )
+
+
+def _distributional_score(
+    *,
+    short_prob: float,
+    mid_prob: float,
+    short_expected_ret: float,
+    mid_expected_ret: float,
+) -> float:
+    base_score = blend_horizon_score(float(short_prob), float(mid_prob), short_weight=0.55)
+    short_ret_score = float(np.clip(0.5 + float(short_expected_ret) / 0.06, 0.0, 1.0))
+    mid_ret_score = float(np.clip(0.5 + float(mid_expected_ret) / 0.20, 0.0, 1.0))
+    dist_score = blend_horizon_score(short_ret_score, mid_ret_score, short_weight=0.35)
+    return float(0.4 * base_score + 0.6 * dist_score)
+
+
+def _build_stock_states_from_panel_slice(
+    *,
+    panel_row: pd.DataFrame,
+    feature_cols: list[str],
+    short_model: LogisticBinaryModel,
+    mid_model: LogisticBinaryModel,
+    short_q_models: tuple[QuantileLinearModel, QuantileLinearModel, QuantileLinearModel],
+    mid_q_models: tuple[QuantileLinearModel, QuantileLinearModel, QuantileLinearModel],
+) -> list[StockForecastState]:
+    if panel_row.empty:
+        return []
+
+    short_probs = short_model.predict_proba(panel_row, feature_cols)
+    mid_probs = mid_model.predict_proba(panel_row, feature_cols)
+
+    interim_rows: list[dict[str, float | str]] = []
+    sector_mid_total: dict[str, float] = {}
+    sector_counts: dict[str, int] = {}
+
+    for idx, (_, latest_row) in enumerate(panel_row.iterrows()):
+        latest_df = pd.DataFrame([latest_row])
+        short_profile = _predict_quantile_profile(
+            latest_df,
+            feature_cols=feature_cols,
+            q_models=short_q_models,
+        )
+        mid_profile = _predict_quantile_profile(
+            latest_df,
+            feature_cols=feature_cols,
+            q_models=mid_q_models,
+        )
+        symbol = str(latest_row["symbol"])
+        sector = str(latest_row.get("sector", "其他") or "其他")
+        short_prob = float(short_probs[idx])
+        mid_prob = float(mid_probs[idx])
+        interim_rows.append(
+            {
+                "symbol": symbol,
+                "sector": sector,
+                "short_prob": short_prob,
+                "mid_prob": mid_prob,
+                "short_expected_ret": float(short_profile.expected_return),
+                "mid_expected_ret": float(mid_profile.expected_return),
+                "score": _distributional_score(
+                    short_prob=short_prob,
+                    mid_prob=mid_prob,
+                    short_expected_ret=float(short_profile.expected_return),
+                    mid_expected_ret=float(mid_profile.expected_return),
+                ),
+            }
+        )
+        sector_mid_total[sector] = sector_mid_total.get(sector, 0.0) + mid_prob
+        sector_counts[sector] = sector_counts.get(sector, 0) + 1
+
+    sector_avg_mid = {
+        sector: sector_mid_total[sector] / max(1, sector_counts[sector])
+        for sector in sector_mid_total
+    }
+    out: list[StockForecastState] = []
+    for item in interim_rows:
+        short_prob = float(item["short_prob"])
+        mid_prob = float(item["mid_prob"])
+        short_expected_ret = float(item["short_expected_ret"])
+        mid_expected_ret = float(item["mid_expected_ret"])
+        sector = str(item["sector"])
+        tradeability = _clip(1.0 - abs(short_prob - mid_prob), 0.0, 1.0)
+        expected_anchor = float(np.clip(mid_expected_ret / 0.20, -0.5, 0.5))
+        event_impact = float(_clip(0.5 + short_expected_ret / 0.06, 0.0, 1.0))
+        out.append(
+            StockForecastState(
+                symbol=str(item["symbol"]),
+                sector=sector,
+                up_1d_prob=short_prob,
+                up_5d_prob=float(0.6 * short_prob + 0.4 * mid_prob),
+                up_20d_prob=mid_prob,
+                excess_vs_sector_prob=float(
+                    _clip(
+                        mid_prob
+                        - sector_avg_mid.get(sector, mid_prob)
+                        + 0.5
+                        + 0.1 * expected_anchor,
+                        0.0,
+                        1.0,
+                    )
+                ),
+                event_impact_score=event_impact,
+                tradeability_score=float(tradeability),
+            )
+        )
+    out.sort(
+        key=lambda stock: (
+            _distributional_score(
+                short_prob=stock.up_1d_prob,
+                mid_prob=stock.up_20d_prob,
+                short_expected_ret=float(stock.event_impact_score - 0.5) * 0.06,
+                mid_expected_ret=float(stock.excess_vs_sector_prob - 0.5) * 0.20,
+            ),
+            stock.up_20d_prob,
+            stock.tradeability_score,
+        ),
+        reverse=True,
+    )
+    return out
 
 
 def build_strategy_snapshot(
@@ -907,7 +1065,6 @@ def _run_v2_backtest_core(
             dates=[],
         ), []
 
-    sector_map = {stock.symbol: (stock.sector or "其他") for stock in stocks}
     market_raw = load_symbol_daily(
         symbol=market_security.symbol,
         source=str(settings["source"]),
@@ -939,39 +1096,20 @@ def _run_v2_backtest_core(
             dates=[],
         ), []
 
-    stock_frames: dict[str, pd.DataFrame] = {}
-    stock_cols_map: dict[str, list[str]] = {}
-    for stock in stocks:
-        raw = load_symbol_daily(
-            symbol=stock.symbol,
-            source=str(settings["source"]),
-            data_dir=str(settings["data_dir"]),
-            start=str(settings["start"]),
-            end=str(settings["end"]),
-        )
-        feat = make_stock_feature_frame(raw, market_frame)
-        extra_stock_cols: list[str] = []
-        if bool(settings["use_margin_features"]):
-            margin_frame, margin_cols, _ = build_stock_margin_features(
-                margin_stock_file=str(settings["margin_stock_file"]),
-                symbol=stock.symbol,
-                start=str(settings["start"]),
-                end=str(settings["end"]),
-            )
-            if margin_cols:
-                feat = feat.merge(margin_frame, on="date", how="left", validate="1:1")
-                extra_stock_cols = list(margin_cols)
-        cols = stock_feature_columns(
-            extra_market_cols=market_context.feature_columns,
-            extra_stock_cols=extra_stock_cols,
-        )
-        valid = feat.dropna(subset=cols + ["target_1d_up", "target_20d_up", "fwd_ret_1"]).sort_values("date").copy()
-        if valid.empty:
-            continue
-        stock_frames[stock.symbol] = valid
-        stock_cols_map[stock.symbol] = cols
-
-    if not stock_frames:
+    panel_bundle = build_stock_panel_dataset(
+        stock_securities=stocks,
+        source=str(settings["source"]),
+        data_dir=str(settings["data_dir"]),
+        start=str(settings["start"]),
+        end=str(settings["end"]),
+        market_frame=market_frame,
+        extra_market_cols=list(market_context.feature_columns),
+        use_margin_features=bool(settings["use_margin_features"]),
+        margin_stock_file=str(settings["margin_stock_file"]),
+    )
+    panel = panel_bundle.frame
+    feature_cols = list(panel_bundle.feature_columns)
+    if panel.empty or not feature_cols:
         return _to_v2_backtest_summary(
             returns=[],
             turnovers=[],
@@ -982,9 +1120,11 @@ def _run_v2_backtest_core(
             dates=[],
         ), []
 
-    common_dates = set(pd.to_datetime(market_valid["date"]))
-    for frame in stock_frames.values():
-        common_dates &= set(pd.to_datetime(frame["date"]))
+    stock_frames = {
+        str(symbol): frame.sort_values("date").copy()
+        for symbol, frame in panel.groupby("symbol", observed=True)
+    }
+    common_dates = set(pd.to_datetime(market_valid["date"])) & set(pd.to_datetime(panel["date"]))
     dates = sorted(pd.Timestamp(d) for d in common_dates)
     min_train_days = int(settings["min_train_days"])
     if len(dates) <= min_train_days + 1:
@@ -1026,15 +1166,31 @@ def _run_v2_backtest_core(
             market_feature_cols,
             "mkt_target_20d_up",
         )
-        stock_models: dict[str, tuple[LogisticBinaryModel, LogisticBinaryModel]] = {}
-        for symbol, frame in stock_frames.items():
-            train = frame[frame["date"].isin(train_dates)].copy()
-            cols = stock_cols_map[symbol]
-            if train.empty:
-                continue
-            short_model = LogisticBinaryModel(l2=float(settings["l2"])).fit(train, cols, "target_1d_up")
-            mid_model = LogisticBinaryModel(l2=float(settings["l2"])).fit(train, cols, "target_20d_up")
-            stock_models[symbol] = (short_model, mid_model)
+        panel_train = panel[panel["date"].isin(train_dates)].copy()
+        if panel_train.empty:
+            continue
+        panel_short_model = LogisticBinaryModel(l2=float(settings["l2"])).fit(
+            panel_train,
+            feature_cols,
+            "target_1d_up",
+        )
+        panel_mid_model = LogisticBinaryModel(l2=float(settings["l2"])).fit(
+            panel_train,
+            feature_cols,
+            "target_20d_up",
+        )
+        panel_short_q_models = _fit_quantile_triplet(
+            panel_train,
+            feature_cols=feature_cols,
+            target_col="fwd_ret_1",
+            l2=float(settings["l2"]),
+        )
+        panel_mid_q_models = _fit_quantile_triplet(
+            panel_train,
+            feature_cols=feature_cols,
+            target_col="fwd_ret_20",
+            l2=float(settings["l2"]),
+        )
 
         block_end = min(block_start + max(1, int(retrain_days)), len(dates) - 1)
         for idx in range(block_start, block_end):
@@ -1050,29 +1206,15 @@ def _run_v2_backtest_core(
                 market_short_prob=mkt_short,
                 market_mid_prob=mkt_mid,
             )
-
-            stock_states: list[StockForecastState] = []
-            for symbol, models in stock_models.items():
-                frame = stock_frames[symbol]
-                row = frame[frame["date"] == date].copy()
-                if row.empty:
-                    continue
-                cols = stock_cols_map[symbol]
-                short_prob = float(models[0].predict_proba(row, cols)[0])
-                mid_prob = float(models[1].predict_proba(row, cols)[0])
-                sector = sector_map.get(symbol, "其他")
-                stock_states.append(
-                    StockForecastState(
-                        symbol=symbol,
-                        sector=sector,
-                        up_1d_prob=float(short_prob),
-                        up_5d_prob=float(0.6 * short_prob + 0.4 * mid_prob),
-                        up_20d_prob=float(mid_prob),
-                        excess_vs_sector_prob=0.5,
-                        event_impact_score=0.0,
-                        tradeability_score=float(_clip(1.0 - abs(short_prob - mid_prob), 0.0, 1.0)),
-                    )
-                )
+            panel_row = panel[panel["date"] == date].copy()
+            stock_states = _build_stock_states_from_panel_slice(
+                panel_row=panel_row,
+                feature_cols=feature_cols,
+                short_model=panel_short_model,
+                mid_model=panel_mid_model,
+                short_q_models=panel_short_q_models,
+                mid_q_models=panel_mid_q_models,
+            )
             if not stock_states:
                 continue
 
