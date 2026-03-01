@@ -5,12 +5,10 @@ import json
 from pathlib import Path
 
 from src.application.v2_services import (
-    calibrate_v2_policy,
-    learn_v2_policy_model,
     load_published_v2_policy_model,
     publish_v2_research_artifacts,
     run_daily_v2_live,
-    run_v2_backtest_live,
+    run_v2_research_workflow,
     summarize_daily_run,
     summarize_v2_backtest,
     summarize_v2_calibration,
@@ -50,6 +48,9 @@ def build_parser() -> argparse.ArgumentParser:
     research.add_argument("--report", default="reports/v2_research_report.md", help="Markdown report output path")
     research.add_argument("--dashboard", default="reports/v2_research_dashboard.html", help="HTML dashboard output path")
     research.add_argument("--artifact-root", default="artifacts/v2", help="Artifact output root for research runs")
+    research.add_argument("--light", action="store_true", help="Run baseline-only light research mode")
+    research.add_argument("--skip-calibration", action="store_true", help="Skip policy calibration stage")
+    research.add_argument("--skip-learning", action="store_true", help="Skip learned policy stage")
 
     return parser
 
@@ -106,39 +107,30 @@ def main() -> int:
             str(args.strategy),
             [(stage.name, stage.purpose, stage.produces) for stage in bp.stages],
         )
-        baseline = run_v2_backtest_live(
+        skip_calibration = bool(args.light or args.skip_calibration)
+        skip_learning = bool(args.light or args.skip_learning)
+        baseline, calibration, learning = run_v2_research_workflow(
             strategy_id=str(args.strategy),
             config_path=str(args.config),
             source=args.source,
             universe_file=args.universe_file,
             universe_limit=args.universe_limit,
+            skip_calibration=skip_calibration,
+            skip_learning=skip_learning,
         )
-        calibration = calibrate_v2_policy(
-            strategy_id=str(args.strategy),
-            config_path=str(args.config),
-            source=args.source,
-            universe_file=args.universe_file,
-            universe_limit=args.universe_limit,
-        )
-        learning = learn_v2_policy_model(
-            strategy_id=str(args.strategy),
-            config_path=str(args.config),
-            source=args.source,
-            universe_file=args.universe_file,
-            universe_limit=args.universe_limit,
-            baseline=baseline,
-        )
-        artifacts = publish_v2_research_artifacts(
-            strategy_id=str(args.strategy),
-            artifact_root=str(args.artifact_root),
-            config_path=str(args.config),
-            source=args.source,
-            universe_file=args.universe_file,
-            universe_limit=args.universe_limit,
-            baseline=baseline,
-            calibration=calibration,
-            learning=learning,
-        )
+        artifacts = None
+        if not skip_learning:
+            artifacts = publish_v2_research_artifacts(
+                strategy_id=str(args.strategy),
+                artifact_root=str(args.artifact_root),
+                config_path=str(args.config),
+                source=args.source,
+                universe_file=args.universe_file,
+                universe_limit=args.universe_limit,
+                baseline=baseline,
+                calibration=calibration,
+                learning=learning,
+            )
         report_path = write_v2_research_report(
             str(args.report),
             strategy_id=str(args.strategy),
@@ -157,7 +149,10 @@ def main() -> int:
         )
         print(f"[V2] research report: {Path(report_path).resolve()}")
         print(f"[V2] research dashboard: {Path(dashboard_path).resolve()}")
-        print(f"[V2] research artifacts: {Path(str(artifacts['run_dir'])).resolve()}")
+        if artifacts is not None:
+            print(f"[V2] research artifacts: {Path(str(artifacts['run_dir'])).resolve()}")
+        else:
+            print("[V2] 轻量模式: 已跳过研究产物发布")
         print("[V2] research baseline backtest:")
         print(json.dumps(summarize_v2_backtest(baseline), ensure_ascii=False, indent=2))
         print("[V2] policy calibration:")

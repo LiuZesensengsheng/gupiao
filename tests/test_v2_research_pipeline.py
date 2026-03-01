@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
+
 from src.application.v2_contracts import (
     CompositeState,
     CrossSectionForecastState,
@@ -18,6 +20,7 @@ from src.application.v2_services import (
     _policy_spec_from_model,
     load_published_v2_policy_model,
     publish_v2_research_artifacts,
+    run_v2_research_workflow,
 )
 
 
@@ -198,3 +201,117 @@ def test_backtest_summary_accepts_multi_horizon_metrics_payload() -> None:
 
     assert set(summary.horizon_metrics) == {"1d", "5d", "20d"}
     assert summary.horizon_metrics["5d"]["top_k_hit_rate"] == 0.55
+
+
+def test_research_workflow_light_mode_skips_heavy_stages(monkeypatch: pytest.MonkeyPatch) -> None:
+    baseline = _make_backtest(0.18, 0.16)
+    prepared_sentinel = object()
+    trajectory_sentinel = object()
+    seen: dict[str, object] = {}
+
+    def fake_prepare(**_: object) -> object:
+        return prepared_sentinel
+
+    def fake_build(prepared: object, *, retrain_days: int = 20) -> object:
+        assert prepared is prepared_sentinel
+        assert retrain_days == 20
+        return trajectory_sentinel
+
+    def fake_baseline(**kwargs: object) -> V2BacktestSummary:
+        seen["baseline_trajectory"] = kwargs.get("trajectory")
+        return baseline
+
+    def fail_calibration(**_: object) -> V2CalibrationResult:
+        raise AssertionError("light mode should skip calibration")
+
+    def fail_learning(**_: object) -> V2PolicyLearningResult:
+        raise AssertionError("light mode should skip learning")
+
+    monkeypatch.setattr("src.application.v2_services._prepare_v2_backtest_data", fake_prepare)
+    monkeypatch.setattr("src.application.v2_services._build_v2_backtest_trajectory_from_prepared", fake_build)
+    monkeypatch.setattr("src.application.v2_services.run_v2_backtest_live", fake_baseline)
+    monkeypatch.setattr("src.application.v2_services.calibrate_v2_policy", fail_calibration)
+    monkeypatch.setattr("src.application.v2_services.learn_v2_policy_model", fail_learning)
+
+    got_baseline, calibration, learning = run_v2_research_workflow(
+        strategy_id="swing_v2",
+        skip_calibration=True,
+        skip_learning=True,
+    )
+
+    assert got_baseline == baseline
+    assert seen["baseline_trajectory"] is trajectory_sentinel
+    assert calibration.calibrated == baseline
+    assert calibration.trials
+    assert learning.learned == baseline
+    assert learning.model.train_rows == 0
+
+
+def test_research_workflow_reuses_single_trajectory_for_all_stages(monkeypatch: pytest.MonkeyPatch) -> None:
+    baseline = _make_backtest(0.18, 0.16)
+    calibrated = _make_backtest(0.20, 0.18)
+    learned = _make_backtest(0.19, 0.17)
+    prepared_sentinel = object()
+    trajectory_sentinel = object()
+    seen: dict[str, object] = {}
+
+    def fake_prepare(**_: object) -> object:
+        return prepared_sentinel
+
+    def fake_build(prepared: object, *, retrain_days: int = 20) -> object:
+        assert prepared is prepared_sentinel
+        assert retrain_days == 20
+        return trajectory_sentinel
+
+    def fake_baseline(**kwargs: object) -> V2BacktestSummary:
+        seen["baseline_trajectory"] = kwargs.get("trajectory")
+        return baseline
+
+    def fake_calibration(**kwargs: object) -> V2CalibrationResult:
+        seen["calibration_trajectory"] = kwargs.get("trajectory")
+        seen["calibration_baseline"] = kwargs.get("baseline")
+        return V2CalibrationResult(
+            best_policy=PolicySpec(),
+            best_score=0.11,
+            baseline=baseline,
+            calibrated=calibrated,
+            trials=[],
+        )
+
+    def fake_learning(**kwargs: object) -> V2PolicyLearningResult:
+        seen["learning_trajectory"] = kwargs.get("trajectory")
+        seen["learning_baseline"] = kwargs.get("baseline")
+        return V2PolicyLearningResult(
+            model=LearnedPolicyModel(
+                feature_names=["x1"],
+                exposure_intercept=0.5,
+                exposure_coef=[0.1],
+                position_intercept=3.0,
+                position_coef=[0.0],
+                turnover_intercept=0.2,
+                turnover_coef=[0.0],
+                train_rows=10,
+                train_r2_exposure=0.1,
+                train_r2_positions=0.1,
+                train_r2_turnover=0.1,
+            ),
+            baseline=baseline,
+            learned=learned,
+        )
+
+    monkeypatch.setattr("src.application.v2_services._prepare_v2_backtest_data", fake_prepare)
+    monkeypatch.setattr("src.application.v2_services._build_v2_backtest_trajectory_from_prepared", fake_build)
+    monkeypatch.setattr("src.application.v2_services.run_v2_backtest_live", fake_baseline)
+    monkeypatch.setattr("src.application.v2_services.calibrate_v2_policy", fake_calibration)
+    monkeypatch.setattr("src.application.v2_services.learn_v2_policy_model", fake_learning)
+
+    got_baseline, got_calibration, got_learning = run_v2_research_workflow(strategy_id="swing_v2")
+
+    assert got_baseline == baseline
+    assert got_calibration.calibrated == calibrated
+    assert got_learning.learned == learned
+    assert seen["baseline_trajectory"] is trajectory_sentinel
+    assert seen["calibration_trajectory"] is trajectory_sentinel
+    assert seen["learning_trajectory"] is trajectory_sentinel
+    assert seen["calibration_baseline"] == baseline
+    assert seen["learning_baseline"] == baseline

@@ -1345,20 +1345,54 @@ def _derive_learning_targets(
     return float(exposure), float(positions), float(turnover)
 
 
-def _run_v2_backtest_core(
+@dataclass(frozen=True)
+class _PreparedV2BacktestData:
+    settings: dict[str, object]
+    market_valid: pd.DataFrame
+    market_feature_cols: list[str]
+    panel: pd.DataFrame
+    feature_cols: list[str]
+    stock_frames: dict[str, pd.DataFrame]
+    dates: list[pd.Timestamp]
+
+
+@dataclass(frozen=True)
+class _TrajectoryStep:
+    date: pd.Timestamp
+    next_date: pd.Timestamp
+    composite_state: CompositeState
+    stock_states: list[StockForecastState]
+    horizon_metrics: dict[str, dict[str, float]]
+
+
+@dataclass(frozen=True)
+class _BacktestTrajectory:
+    prepared: _PreparedV2BacktestData
+    steps: list[_TrajectoryStep]
+
+
+def _empty_v2_backtest_result() -> tuple[V2BacktestSummary, list[dict[str, float]]]:
+    return (
+        _to_v2_backtest_summary(
+            returns=[],
+            turnovers=[],
+            costs=[],
+            gross_returns=[],
+            fill_ratios=[],
+            slippage_bps=[],
+            dates=[],
+        ),
+        [],
+    )
+
+
+def _prepare_v2_backtest_data(
     *,
-    strategy_id: str = "swing_v2",
-    config_path: str = "config/api.json",
+    config_path: str,
     source: str | None = None,
     universe_file: str | None = None,
     universe_limit: int | None = None,
-    policy_spec: PolicySpec | None = None,
-    learned_policy: LearnedPolicyModel | None = None,
-    retrain_days: int = 20,
-    commission_bps: float = 1.5,
-    slippage_bps: float = 2.0,
-    capture_learning_rows: bool = False,
-) -> tuple[V2BacktestSummary, list[dict[str, float]]]:
+) -> _PreparedV2BacktestData | None:
     settings = _load_v2_runtime_settings(
         config_path=config_path,
         source=source,
@@ -1375,15 +1409,7 @@ def _run_v2_backtest_core(
     )
     stocks = universe.rows
     if not stocks:
-        return _to_v2_backtest_summary(
-            returns=[],
-            turnovers=[],
-            costs=[],
-            gross_returns=[],
-            fill_ratios=[],
-            slippage_bps=[],
-            dates=[],
-        ), []
+        return None
 
     market_raw = load_symbol_daily(
         symbol=market_security.symbol,
@@ -1404,17 +1430,11 @@ def _run_v2_backtest_core(
     )
     market_frame = market_feat_base.merge(market_context.frame, on="date", how="left", validate="1:1")
     market_feature_cols = list(MARKET_FEATURE_COLUMNS) + list(market_context.feature_columns)
-    market_valid = market_frame.dropna(subset=market_feature_cols + ["mkt_target_1d_up", "mkt_target_20d_up"]).sort_values("date").copy()
+    market_valid = market_frame.dropna(
+        subset=market_feature_cols + ["mkt_target_1d_up", "mkt_target_5d_up", "mkt_target_20d_up"]
+    ).sort_values("date").copy()
     if market_valid.empty:
-        return _to_v2_backtest_summary(
-            returns=[],
-            turnovers=[],
-            costs=[],
-            gross_returns=[],
-            fill_ratios=[],
-            slippage_bps=[],
-            dates=[],
-        ), []
+        return None
 
     panel_bundle = build_stock_panel_dataset(
         stock_securities=stocks,
@@ -1430,15 +1450,7 @@ def _run_v2_backtest_core(
     panel = panel_bundle.frame
     feature_cols = list(panel_bundle.feature_columns)
     if panel.empty or not feature_cols:
-        return _to_v2_backtest_summary(
-            returns=[],
-            turnovers=[],
-            costs=[],
-            gross_returns=[],
-            fill_ratios=[],
-            slippage_bps=[],
-            dates=[],
-        ), []
+        return None
 
     stock_frames = {
         str(symbol): frame.sort_values("date").copy()
@@ -1448,37 +1460,32 @@ def _run_v2_backtest_core(
     dates = sorted(pd.Timestamp(d) for d in common_dates)
     min_train_days = int(settings["min_train_days"])
     if len(dates) <= min_train_days + 1:
-        return _to_v2_backtest_summary(
-            returns=[],
-            turnovers=[],
-            costs=[],
-            gross_returns=[],
-            fill_ratios=[],
-            slippage_bps=[],
-            dates=[],
-        ), []
+        return None
 
-    commission_rate = max(0.0, float(commission_bps)) / 10000.0
-    slippage_rate = max(0.0, float(slippage_bps)) / 10000.0
-    returns: list[float] = []
-    gross_returns: list[float] = []
-    turnovers: list[float] = []
-    costs: list[float] = []
-    fill_ratios: list[float] = []
-    slippage_cost_bps: list[float] = []
-    rank_ics: list[float] = []
-    top_decile_returns: list[float] = []
-    top_bottom_spreads: list[float] = []
-    top_k_hit_rates: list[float] = []
-    horizon_metric_series: dict[str, dict[str, list[float]]] = {
-        "1d": {"rank_ic": [], "top_decile_return": [], "top_bottom_spread": [], "top_k_hit_rate": []},
-        "5d": {"rank_ic": [], "top_decile_return": [], "top_bottom_spread": [], "top_k_hit_rate": []},
-        "20d": {"rank_ic": [], "top_decile_return": [], "top_bottom_spread": [], "top_k_hit_rate": []},
-    }
-    out_dates: list[pd.Timestamp] = []
-    prev_weights: dict[str, float] = {}
-    prev_cash = 1.0
-    learning_rows: list[dict[str, float]] = []
+    return _PreparedV2BacktestData(
+        settings=settings,
+        market_valid=market_valid,
+        market_feature_cols=market_feature_cols,
+        panel=panel,
+        feature_cols=feature_cols,
+        stock_frames=stock_frames,
+        dates=dates,
+    )
+
+
+def _build_v2_backtest_trajectory_from_prepared(
+    prepared: _PreparedV2BacktestData,
+    *,
+    retrain_days: int = 20,
+) -> _BacktestTrajectory:
+    settings = prepared.settings
+    market_valid = prepared.market_valid
+    panel = prepared.panel
+    market_feature_cols = prepared.market_feature_cols
+    feature_cols = prepared.feature_cols
+    dates = prepared.dates
+    min_train_days = int(settings["min_train_days"])
+    steps: list[_TrajectoryStep] = []
 
     for block_start in range(min_train_days, len(dates) - 1, max(1, int(retrain_days))):
         train_dates = set(dates[:block_start])
@@ -1559,19 +1566,6 @@ def _run_v2_backtest_core(
             )
             if not stock_states:
                 continue
-            horizon_metrics = _panel_horizon_metrics(scored_rows)
-            rank_ic = float(horizon_metrics["20d"]["rank_ic"])
-            top_decile_ret = float(horizon_metrics["20d"]["top_decile_return"])
-            top_bottom_spread = float(horizon_metrics["20d"]["top_bottom_spread"])
-            top_k_hit_rate = float(horizon_metrics["20d"]["top_k_hit_rate"])
-            rank_ics.append(float(rank_ic))
-            top_decile_returns.append(float(top_decile_ret))
-            top_bottom_spreads.append(float(top_bottom_spread))
-            top_k_hit_rates.append(float(top_k_hit_rate))
-            for horizon, metric_map in horizon_metrics.items():
-                for name, value in metric_map.items():
-                    horizon_metric_series[horizon][name].append(float(value))
-
             grouped: dict[str, list[StockForecastState]] = {}
             for stock_state in stock_states:
                 grouped.setdefault(stock_state.sector, []).append(stock_state)
@@ -1599,85 +1593,181 @@ def _run_v2_backtest_core(
                 stocks=stock_states,
                 cross_section=cross_section,
             )
-            active_policy_spec = policy_spec
-            if learned_policy is not None:
-                active_policy_spec = _policy_spec_from_model(
-                    state=composite_state,
-                    model=learned_policy,
-                )
-            decision = apply_policy(
-                PolicyInput(
-                    composite_state=composite_state,
-                    current_weights=prev_weights,
-                    current_cash=max(0.0, prev_cash),
-                    total_equity=1.0,
-                ),
-                policy_spec=active_policy_spec,
-            )
-            gross_ret = float(
-                sum(
-                    float(weight) * _safe_float(
-                        stock_frames[symbol][stock_frames[symbol]["date"] == date].iloc[0]["fwd_ret_1"],
-                        0.0,
-                    )
-                    for symbol, weight in decision.symbol_target_weights.items()
-                    if symbol in stock_frames and not stock_frames[symbol][stock_frames[symbol]["date"] == date].empty
-                )
-            )
-            daily_ret, turnover, cost, fill_ratio, slip_bps, next_weights, next_cash = _simulate_execution_day(
-                date=date,
-                next_date=next_date,
-                decision=decision,
-                current_weights=prev_weights,
-                current_cash=prev_cash,
-                stock_states=stock_states,
-                stock_frames=stock_frames,
-                total_commission_rate=commission_rate,
-                base_slippage_rate=slippage_rate,
-            )
-            returns.append(float(daily_ret))
-            gross_returns.append(float(gross_ret))
-            turnovers.append(turnover)
-            costs.append(cost)
-            fill_ratios.append(fill_ratio)
-            slippage_cost_bps.append(slip_bps)
-            out_dates.append(next_date)
-            prev_weights = next_weights
-            prev_cash = next_cash
-
-            if capture_learning_rows:
-                target_exposure, target_positions, target_turnover = _derive_learning_targets(
-                    state=composite_state,
-                    stock_frames=stock_frames,
+            steps.append(
+                _TrajectoryStep(
                     date=date,
+                    next_date=next_date,
+                    composite_state=composite_state,
+                    stock_states=stock_states,
+                    horizon_metrics=_panel_horizon_metrics(scored_rows),
                 )
-                row = {
-                    name: float(value)
-                    for name, value in zip(_policy_feature_names(), _policy_feature_vector(composite_state))
-                }
-                row.update(
-                    {
-                        "target_exposure": float(target_exposure),
-                        "target_positions": float(target_positions),
-                        "target_turnover": float(target_turnover),
-                    }
-                )
-                learning_rows.append(row)
+            )
 
-    return _to_v2_backtest_summary(
-        returns=returns,
-        turnovers=turnovers,
-        costs=costs,
-        gross_returns=gross_returns,
-        fill_ratios=fill_ratios,
-        slippage_bps=slippage_cost_bps,
-        rank_ics=rank_ics,
-        top_decile_returns=top_decile_returns,
-        top_bottom_spreads=top_bottom_spreads,
-        top_k_hit_rates=top_k_hit_rates,
-        horizon_metrics=horizon_metric_series,
-        dates=out_dates,
-    ), learning_rows
+    return _BacktestTrajectory(prepared=prepared, steps=steps)
+
+
+def _execute_v2_backtest_trajectory(
+    trajectory: _BacktestTrajectory,
+    *,
+    policy_spec: PolicySpec | None = None,
+    learned_policy: LearnedPolicyModel | None = None,
+    retrain_days: int = 20,
+    commission_bps: float = 1.5,
+    slippage_bps: float = 2.0,
+    capture_learning_rows: bool = False,
+) -> tuple[V2BacktestSummary, list[dict[str, float]]]:
+    _ = retrain_days
+    commission_rate = max(0.0, float(commission_bps)) / 10000.0
+    slippage_rate = max(0.0, float(slippage_bps)) / 10000.0
+    returns: list[float] = []
+    gross_returns: list[float] = []
+    turnovers: list[float] = []
+    costs: list[float] = []
+    fill_ratios: list[float] = []
+    slippage_cost_bps: list[float] = []
+    rank_ics: list[float] = []
+    top_decile_returns: list[float] = []
+    top_bottom_spreads: list[float] = []
+    top_k_hit_rates: list[float] = []
+    horizon_metric_series: dict[str, dict[str, list[float]]] = {
+        "1d": {"rank_ic": [], "top_decile_return": [], "top_bottom_spread": [], "top_k_hit_rate": []},
+        "5d": {"rank_ic": [], "top_decile_return": [], "top_bottom_spread": [], "top_k_hit_rate": []},
+        "20d": {"rank_ic": [], "top_decile_return": [], "top_bottom_spread": [], "top_k_hit_rate": []},
+    }
+    out_dates: list[pd.Timestamp] = []
+    prev_weights: dict[str, float] = {}
+    prev_cash = 1.0
+    learning_rows: list[dict[str, float]] = []
+
+    for step in trajectory.steps:
+        rank_ics.append(float(step.horizon_metrics["20d"]["rank_ic"]))
+        top_decile_returns.append(float(step.horizon_metrics["20d"]["top_decile_return"]))
+        top_bottom_spreads.append(float(step.horizon_metrics["20d"]["top_bottom_spread"]))
+        top_k_hit_rates.append(float(step.horizon_metrics["20d"]["top_k_hit_rate"]))
+        for horizon, metric_map in step.horizon_metrics.items():
+            for name, value in metric_map.items():
+                horizon_metric_series[horizon][name].append(float(value))
+
+        active_policy_spec = policy_spec
+        if learned_policy is not None:
+            active_policy_spec = _policy_spec_from_model(
+                state=step.composite_state,
+                model=learned_policy,
+            )
+        decision = apply_policy(
+            PolicyInput(
+                composite_state=step.composite_state,
+                current_weights=prev_weights,
+                current_cash=max(0.0, prev_cash),
+                total_equity=1.0,
+            ),
+            policy_spec=active_policy_spec,
+        )
+        gross_ret = float(
+            sum(
+                float(weight) * _safe_float(
+                    trajectory.prepared.stock_frames[symbol][trajectory.prepared.stock_frames[symbol]["date"] == step.date].iloc[0]["fwd_ret_1"],
+                    0.0,
+                )
+                for symbol, weight in decision.symbol_target_weights.items()
+                if symbol in trajectory.prepared.stock_frames
+                and not trajectory.prepared.stock_frames[symbol][trajectory.prepared.stock_frames[symbol]["date"] == step.date].empty
+            )
+        )
+        daily_ret, turnover, cost, fill_ratio, slip_bps, next_weights, next_cash = _simulate_execution_day(
+            date=step.date,
+            next_date=step.next_date,
+            decision=decision,
+            current_weights=prev_weights,
+            current_cash=prev_cash,
+            stock_states=step.stock_states,
+            stock_frames=trajectory.prepared.stock_frames,
+            total_commission_rate=commission_rate,
+            base_slippage_rate=slippage_rate,
+        )
+        returns.append(float(daily_ret))
+        gross_returns.append(float(gross_ret))
+        turnovers.append(turnover)
+        costs.append(cost)
+        fill_ratios.append(fill_ratio)
+        slippage_cost_bps.append(slip_bps)
+        out_dates.append(step.next_date)
+        prev_weights = next_weights
+        prev_cash = next_cash
+
+        if capture_learning_rows:
+            target_exposure, target_positions, target_turnover = _derive_learning_targets(
+                state=step.composite_state,
+                stock_frames=trajectory.prepared.stock_frames,
+                date=step.date,
+            )
+            row = {
+                name: float(value)
+                for name, value in zip(_policy_feature_names(), _policy_feature_vector(step.composite_state))
+            }
+            row.update(
+                {
+                    "target_exposure": float(target_exposure),
+                    "target_positions": float(target_positions),
+                    "target_turnover": float(target_turnover),
+                }
+            )
+            learning_rows.append(row)
+
+    return (
+        _to_v2_backtest_summary(
+            returns=returns,
+            turnovers=turnovers,
+            costs=costs,
+            gross_returns=gross_returns,
+            fill_ratios=fill_ratios,
+            slippage_bps=slippage_cost_bps,
+            rank_ics=rank_ics,
+            top_decile_returns=top_decile_returns,
+            top_bottom_spreads=top_bottom_spreads,
+            top_k_hit_rates=top_k_hit_rates,
+            horizon_metrics=horizon_metric_series,
+            dates=out_dates,
+        ),
+        learning_rows,
+    )
+
+
+def _run_v2_backtest_core(
+    *,
+    strategy_id: str = "swing_v2",
+    config_path: str = "config/api.json",
+    source: str | None = None,
+    universe_file: str | None = None,
+    universe_limit: int | None = None,
+    policy_spec: PolicySpec | None = None,
+    learned_policy: LearnedPolicyModel | None = None,
+    retrain_days: int = 20,
+    commission_bps: float = 1.5,
+    slippage_bps: float = 2.0,
+    capture_learning_rows: bool = False,
+    trajectory: _BacktestTrajectory | None = None,
+) -> tuple[V2BacktestSummary, list[dict[str, float]]]:
+    _ = strategy_id
+    if trajectory is None:
+        prepared = _prepare_v2_backtest_data(
+            config_path=config_path,
+            source=source,
+            universe_file=universe_file,
+            universe_limit=universe_limit,
+        )
+        if prepared is None:
+            return _empty_v2_backtest_result()
+        trajectory = _build_v2_backtest_trajectory_from_prepared(prepared, retrain_days=retrain_days)
+    return _execute_v2_backtest_trajectory(
+        trajectory,
+        policy_spec=policy_spec,
+        learned_policy=learned_policy,
+        retrain_days=retrain_days,
+        commission_bps=commission_bps,
+        slippage_bps=slippage_bps,
+        capture_learning_rows=capture_learning_rows,
+    )
 
 
 def run_v2_backtest_live(
@@ -1692,6 +1782,7 @@ def run_v2_backtest_live(
     retrain_days: int = 20,
     commission_bps: float = 1.5,
     slippage_bps: float = 2.0,
+    trajectory: _BacktestTrajectory | None = None,
 ) -> V2BacktestSummary:
     summary, _ = _run_v2_backtest_core(
         strategy_id=strategy_id,
@@ -1705,6 +1796,7 @@ def run_v2_backtest_live(
         commission_bps=commission_bps,
         slippage_bps=slippage_bps,
         capture_learning_rows=False,
+        trajectory=trajectory,
     )
     return summary
 
@@ -1716,15 +1808,18 @@ def calibrate_v2_policy(
     source: str | None = None,
     universe_file: str | None = None,
     universe_limit: int | None = None,
+    baseline: V2BacktestSummary | None = None,
+    trajectory: _BacktestTrajectory | None = None,
 ) -> V2CalibrationResult:
     baseline_spec = PolicySpec()
-    baseline = run_v2_backtest_live(
+    baseline = baseline or run_v2_backtest_live(
         strategy_id=strategy_id,
         config_path=config_path,
         source=source,
         universe_file=universe_file,
         universe_limit=universe_limit,
         policy_spec=baseline_spec,
+        trajectory=trajectory,
     )
     candidates = [
         baseline_spec,
@@ -1750,6 +1845,7 @@ def calibrate_v2_policy(
             universe_file=universe_file,
             universe_limit=universe_limit,
             policy_spec=spec,
+            trajectory=trajectory,
         )
         score = float(summary.annual_return) - 0.5 * abs(float(summary.max_drawdown))
         trials.append(
@@ -1781,6 +1877,7 @@ def learn_v2_policy_model(
     universe_limit: int | None = None,
     l2: float = 1.0,
     baseline: V2BacktestSummary | None = None,
+    trajectory: _BacktestTrajectory | None = None,
 ) -> V2PolicyLearningResult:
     baseline = baseline or run_v2_backtest_live(
         strategy_id=strategy_id,
@@ -1788,6 +1885,7 @@ def learn_v2_policy_model(
         source=source,
         universe_file=universe_file,
         universe_limit=universe_limit,
+        trajectory=trajectory,
     )
     _, rows = _run_v2_backtest_core(
         strategy_id=strategy_id,
@@ -1796,6 +1894,7 @@ def learn_v2_policy_model(
         universe_file=universe_file,
         universe_limit=universe_limit,
         capture_learning_rows=True,
+        trajectory=trajectory,
     )
     feature_names = _policy_feature_names()
     if not rows:
@@ -1819,6 +1918,7 @@ def learn_v2_policy_model(
             universe_file=universe_file,
             universe_limit=universe_limit,
             learned_policy=model,
+            trajectory=trajectory,
         )
         return V2PolicyLearningResult(model=model, baseline=baseline, learned=learned_summary)
 
@@ -1855,12 +1955,106 @@ def learn_v2_policy_model(
         universe_file=universe_file,
         universe_limit=universe_limit,
         learned_policy=model,
+        trajectory=trajectory,
     )
     return V2PolicyLearningResult(
         model=model,
         baseline=baseline,
         learned=learned_summary,
     )
+
+
+def _baseline_only_calibration(baseline: V2BacktestSummary) -> V2CalibrationResult:
+    baseline_spec = PolicySpec()
+    score = float(baseline.annual_return) - 0.5 * abs(float(baseline.max_drawdown))
+    return V2CalibrationResult(
+        best_policy=baseline_spec,
+        best_score=float(score),
+        baseline=baseline,
+        calibrated=baseline,
+        trials=[
+            {
+                "policy": asdict(baseline_spec),
+                "summary": asdict(baseline),
+                "score": float(score),
+            }
+        ],
+    )
+
+
+def _placeholder_learning_result(baseline: V2BacktestSummary) -> V2PolicyLearningResult:
+    model = LearnedPolicyModel(
+        feature_names=_policy_feature_names(),
+        exposure_intercept=0.60,
+        exposure_coef=[0.0] * len(_policy_feature_names()),
+        position_intercept=3.0,
+        position_coef=[0.0] * len(_policy_feature_names()),
+        turnover_intercept=0.22,
+        turnover_coef=[0.0] * len(_policy_feature_names()),
+        train_rows=0,
+        train_r2_exposure=0.0,
+        train_r2_positions=0.0,
+        train_r2_turnover=0.0,
+    )
+    return V2PolicyLearningResult(
+        model=model,
+        baseline=baseline,
+        learned=baseline,
+    )
+
+
+def run_v2_research_workflow(
+    *,
+    strategy_id: str = "swing_v2",
+    config_path: str = "config/api.json",
+    source: str | None = None,
+    universe_file: str | None = None,
+    universe_limit: int | None = None,
+    skip_calibration: bool = False,
+    skip_learning: bool = False,
+) -> tuple[V2BacktestSummary, V2CalibrationResult, V2PolicyLearningResult]:
+    prepared = _prepare_v2_backtest_data(
+        config_path=config_path,
+        source=source,
+        universe_file=universe_file,
+        universe_limit=universe_limit,
+    )
+    trajectory = None if prepared is None else _build_v2_backtest_trajectory_from_prepared(prepared)
+    baseline = run_v2_backtest_live(
+        strategy_id=strategy_id,
+        config_path=config_path,
+        source=source,
+        universe_file=universe_file,
+        universe_limit=universe_limit,
+        trajectory=trajectory,
+    )
+    calibration = (
+        _baseline_only_calibration(baseline)
+        if skip_calibration
+        else calibrate_v2_policy(
+            strategy_id=strategy_id,
+            config_path=config_path,
+            source=source,
+            universe_file=universe_file,
+            universe_limit=universe_limit,
+            baseline=baseline,
+            trajectory=trajectory,
+        )
+    )
+    learning = (
+        _placeholder_learning_result(baseline)
+        if skip_learning
+        else learn_v2_policy_model(
+            strategy_id=strategy_id,
+            config_path=config_path,
+            source=source,
+            universe_file=universe_file,
+            universe_limit=universe_limit,
+            baseline=baseline,
+            trajectory=trajectory,
+        )
+    )
+    return baseline, calibration, learning
 
 
 def load_published_v2_policy_model(
