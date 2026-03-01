@@ -24,6 +24,18 @@ _BASE_LABELS = {
     "atr_14": "14日真实波幅",
     "gap_1": "隔夜跳空",
     "bear_body_1": "当日阴线实体",
+    "upper_shadow_ratio_1": "上影线占比",
+    "lower_shadow_ratio_1": "下影线占比",
+    "body_ratio_1": "实体占比",
+    "up_streak_3": "近3日连阳强度",
+    "down_streak_3": "近3日连阴强度",
+    "narrow_range_rank_20": "20日窄幅排名",
+    "range_contraction_5": "5日振幅收缩",
+    "breakout_above_20_high": "突破20日前高",
+    "breakdown_below_20_low": "跌破20日前低",
+    "distance_to_20d_high": "距20日前高偏离",
+    "distance_to_20d_low": "距20日前低偏离",
+    "volume_breakout_ratio": "放量突破强度",
     "hvbd_recent_5": "近5日高位巨量阴线",
 }
 
@@ -118,4 +130,3 @@ def format_driver_list(drivers: Sequence[str]) -> str:
     if not drivers:
         return "NA"
     return "；".join(format_driver_text(x) for x in drivers)
-
