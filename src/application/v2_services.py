@@ -1663,6 +1663,64 @@ def _trajectory_cache_path(
     return root / f"{cache_key}.pkl"
 
 
+def _file_mtime_token(path_like: object) -> int:
+    try:
+        path = Path(str(path_like))
+    except Exception:
+        return 0
+    if not path.exists():
+        return 0
+    try:
+        return int(path.stat().st_mtime_ns)
+    except Exception:
+        return 0
+
+
+def _daily_result_cache_key(
+    *,
+    strategy_id: str,
+    settings: dict[str, object],
+    artifact_root: str,
+) -> str:
+    policy_path = Path(str(artifact_root)) / str(strategy_id) / "latest_policy_model.json"
+    payload = {
+        "version": "v2-daily-cache-1",
+        "strategy_id": str(strategy_id),
+        "config_path": str(Path(str(settings.get("config_path", ""))).resolve()),
+        "source": str(settings.get("source", "")),
+        "watchlist": str(Path(str(settings.get("watchlist", ""))).resolve()),
+        "watchlist_mtime": _file_mtime_token(settings.get("watchlist", "")),
+        "universe_file": str(Path(str(settings.get("universe_file", ""))).resolve()),
+        "universe_mtime": _file_mtime_token(settings.get("universe_file", "")),
+        "universe_limit": int(settings.get("universe_limit", 0)),
+        "start": str(settings.get("start", "")),
+        "end": str(settings.get("end", "")),
+        "min_train_days": int(settings.get("min_train_days", 0)),
+        "step_days": int(settings.get("step_days", 0)),
+        "l2": float(settings.get("l2", 0.0)),
+        "max_positions": int(settings.get("max_positions", 0)),
+        "use_margin_features": bool(settings.get("use_margin_features", False)),
+        "margin_market_file": str(settings.get("margin_market_file", "")),
+        "margin_market_mtime": _file_mtime_token(settings.get("margin_market_file", "")),
+        "margin_stock_file": str(settings.get("margin_stock_file", "")),
+        "margin_stock_mtime": _file_mtime_token(settings.get("margin_stock_file", "")),
+        "published_policy_path": str(policy_path.resolve()),
+        "published_policy_mtime": _file_mtime_token(policy_path),
+    }
+    raw = json.dumps(payload, sort_keys=True, ensure_ascii=False)
+    return hashlib.sha256(raw.encode("utf-8")).hexdigest()[:24]
+
+
+def _daily_result_cache_path(
+    *,
+    cache_root: str,
+    cache_key: str,
+) -> Path:
+    root = Path(str(cache_root))
+    root.mkdir(parents=True, exist_ok=True)
+    return root / f"daily_{cache_key}.pkl"
+
+
 def _load_or_build_v2_backtest_trajectory(
     *,
     config_path: str,
@@ -2352,6 +2410,8 @@ def run_daily_v2_live(
     universe_file: str | None = None,
     universe_limit: int | None = None,
     artifact_root: str = "artifacts/v2",
+    cache_root: str = "artifacts/v2/cache",
+    refresh_cache: bool = False,
 ) -> DailyRunResult:
     settings = _load_v2_runtime_settings(
         config_path=config_path,
@@ -2359,6 +2419,23 @@ def run_daily_v2_live(
         universe_file=universe_file,
         universe_limit=universe_limit,
     )
+    cache_key = _daily_result_cache_key(
+        strategy_id=strategy_id,
+        settings=settings,
+        artifact_root=artifact_root,
+    )
+    cache_path = _daily_result_cache_path(
+        cache_root=cache_root,
+        cache_key=cache_key,
+    )
+    if not refresh_cache and cache_path.exists():
+        try:
+            with cache_path.open("rb") as f:
+                cached = pickle.load(f)
+            if isinstance(cached, DailyRunResult):
+                return cached
+        except Exception:
+            pass
     snapshot = build_strategy_snapshot(
         strategy_id=strategy_id,
         universe_id=Path(str(settings["universe_file"])).stem or "v2_universe",
@@ -2476,12 +2553,18 @@ def run_daily_v2_live(
         decision=policy_decision,
         current_weights=current_weights,
     )
-    return DailyRunResult(
+    result = DailyRunResult(
         snapshot=snapshot,
         composite_state=composite_state,
         policy_decision=policy_decision,
         trade_actions=trade_actions,
     )
+    try:
+        with cache_path.open("wb") as f:
+            pickle.dump(result, f, protocol=pickle.HIGHEST_PROTOCOL)
+    except Exception:
+        pass
+    return result
 
 
 def summarize_daily_run(result: DailyRunResult) -> dict[str, object]:

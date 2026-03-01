@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import pandas as pd
+import pytest
 
 from src.application.v2_contracts import DailyRunResult, StrategySnapshot
 from src.application.v2_contracts import PolicyInput
@@ -10,6 +11,7 @@ from src.application.v2_services import (
     build_strategy_snapshot,
     build_trade_actions,
     compose_state,
+    run_daily_v2_live,
     summarize_daily_run,
 )
 from src.application.v2_contracts import (
@@ -18,6 +20,7 @@ from src.application.v2_contracts import (
     SectorForecastState,
     StockForecastState,
 )
+from src.domain.entities import BinaryMetrics, ForecastRow, MarketForecast, Security
 
 
 def _make_demo_state() -> tuple[
@@ -425,3 +428,119 @@ def test_v2_policy_caps_single_stock_weight() -> None:
     )
 
     assert max(decision.symbol_target_weights.values()) <= 0.35 + 1e-9
+
+
+def test_run_daily_v2_live_reuses_cache_without_retraining(monkeypatch: pytest.MonkeyPatch, tmp_path) -> None:
+    market, sectors, stocks, cross_section = _make_demo_state()
+    composite_state = compose_state(
+        market=market,
+        sectors=sectors,
+        stocks=stocks,
+        cross_section=cross_section,
+    )
+    decision = apply_policy(
+        PolicyInput(
+            composite_state=composite_state,
+            current_weights={},
+            current_cash=1.0,
+            total_equity=1.0,
+        )
+    )
+    watchlist_path = tmp_path / "watchlist.json"
+    universe_path = tmp_path / "universe.json"
+    margin_market_path = tmp_path / "margin_market.csv"
+    margin_stock_path = tmp_path / "margin_stock.csv"
+    watchlist_path.write_text("[]", encoding="utf-8")
+    universe_path.write_text("[]", encoding="utf-8")
+    margin_market_path.write_text("", encoding="utf-8")
+    margin_stock_path.write_text("", encoding="utf-8")
+    settings = {
+        "config_path": "config/api.json",
+        "watchlist": str(watchlist_path),
+        "source": "local",
+        "data_dir": "data",
+        "start": "2024-01-01",
+        "end": "2024-12-31",
+        "min_train_days": 240,
+        "step_days": 20,
+        "l2": 0.8,
+        "max_positions": 5,
+        "use_margin_features": False,
+        "margin_market_file": str(margin_market_path),
+        "margin_stock_file": str(margin_stock_path),
+        "universe_file": str(universe_path),
+        "universe_limit": 5,
+    }
+    calls = {"quant": 0}
+
+    def fake_quant(**_: object) -> tuple[MarketForecast, list[ForecastRow]]:
+        calls["quant"] += 1
+        return (
+            MarketForecast(
+                symbol="000001.SH",
+                name="指数",
+                latest_date=pd.Timestamp("2026-02-26"),
+                short_prob=0.55,
+                five_prob=0.56,
+                mid_prob=0.60,
+                short_eval=BinaryMetrics.empty(),
+                mid_eval=BinaryMetrics.empty(),
+            ),
+            [
+                ForecastRow(
+                    symbol="000630.SZ",
+                    name="样例股",
+                    latest_date=pd.Timestamp("2026-02-26"),
+                    short_prob=0.58,
+                    five_prob=0.60,
+                    mid_prob=0.64,
+                    score=0.70,
+                    short_drivers=[],
+                    mid_drivers=[],
+                    short_eval=BinaryMetrics.empty(),
+                    mid_eval=BinaryMetrics.empty(),
+                )
+            ],
+        )
+
+    monkeypatch.setattr("src.application.v2_services._load_v2_runtime_settings", lambda **_: settings)
+    monkeypatch.setattr(
+        "src.application.v2_services.load_watchlist",
+        lambda *_: (Security("000001.SH", "指数"), [], {}),
+    )
+    monkeypatch.setattr(
+        "src.application.v2_services.build_candidate_universe",
+        lambda **_: type("Universe", (), {"rows": [Security("000630.SZ", "样例股", "有色")]})(),
+    )
+    monkeypatch.setattr("src.application.v2_services.run_quant_pipeline", fake_quant)
+    monkeypatch.setattr(
+        "src.application.v2_services.load_symbol_daily",
+        lambda **_: pd.DataFrame({"date": pd.to_datetime(["2026-02-26"]), "close": [1.0]}),
+    )
+    monkeypatch.setattr(
+        "src.application.v2_services._build_market_and_cross_section_states",
+        lambda **_: (market, cross_section),
+    )
+    monkeypatch.setattr("src.application.v2_services.build_sector_daily_frames", lambda **_: {})
+    monkeypatch.setattr("src.application.v2_services.run_sector_forecast", lambda **_: [])
+    monkeypatch.setattr("src.application.v2_services._build_stock_states_from_rows", lambda *_, **__: stocks)
+    monkeypatch.setattr("src.application.v2_services.compose_state", lambda **_: composite_state)
+    monkeypatch.setattr("src.application.v2_services.load_published_v2_policy_model", lambda **_: None)
+    monkeypatch.setattr("src.application.v2_services.apply_policy", lambda *_, **__: decision)
+
+    first = run_daily_v2_live(
+        strategy_id="swing_v2",
+        artifact_root=str(tmp_path / "artifacts"),
+        cache_root=str(tmp_path / "cache"),
+        refresh_cache=True,
+    )
+    second = run_daily_v2_live(
+        strategy_id="swing_v2",
+        artifact_root=str(tmp_path / "artifacts"),
+        cache_root=str(tmp_path / "cache"),
+        refresh_cache=False,
+    )
+
+    assert calls["quant"] == 1
+    assert first.policy_decision.target_exposure == second.policy_decision.target_exposure
+    assert len(second.trade_actions) == len(first.trade_actions)

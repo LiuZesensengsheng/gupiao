@@ -38,6 +38,8 @@ def build_parser() -> argparse.ArgumentParser:
     daily.add_argument("--report", default="reports/v2_daily_report.md", help="Markdown report output path")
     daily.add_argument("--dashboard", default="reports/v2_daily_dashboard.html", help="HTML dashboard output path")
     daily.add_argument("--artifact-root", default="artifacts/v2", help="Published artifact root for learned policy snapshots")
+    daily.add_argument("--cache-root", default="artifacts/v2/cache", help="On-disk cache root for daily-run results")
+    daily.add_argument("--refresh-cache", action="store_true", help="Ignore existing daily-run cache and rebuild")
 
     research = sub.add_parser("research-run", help="Print the V2 research workflow stages")
     research.add_argument("--strategy", default="swing_v2", help="Target strategy id")
@@ -88,6 +90,8 @@ def main() -> int:
             universe_file=args.universe_file,
             universe_limit=args.universe_limit,
             artifact_root=str(args.artifact_root),
+            cache_root=str(args.cache_root),
+            refresh_cache=bool(args.refresh_cache),
         )
         published_model = load_published_v2_policy_model(
             strategy_id=str(args.strategy),
