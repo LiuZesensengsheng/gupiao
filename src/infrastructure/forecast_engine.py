@@ -14,13 +14,11 @@ from src.infrastructure.features import (
     MID_RETURN_BUCKET_EDGES,
     SHORT_RETURN_BUCKET_EDGES,
     make_market_feature_frame,
-    make_stock_feature_frame,
-    stock_feature_columns,
 )
-from src.infrastructure.margin_features import build_stock_margin_features
 from src.infrastructure.market_context import build_market_context_features
 from src.infrastructure.market_data import DataError, load_symbol_daily
 from src.infrastructure.modeling import LogisticBinaryModel, QuantileLinearModel, binary_metrics
+from src.infrastructure.panel_dataset import StockPanelDataset, build_stock_panel_dataset
 
 
 SHORT_BUCKET_LABELS = ["大跌", "小跌", "震荡", "小涨", "大涨"]
@@ -213,6 +211,48 @@ def _distributional_score(
     return float(0.4 * base_score + 0.6 * dist_score)
 
 
+def _fit_quantile_triplet(
+    df: pd.DataFrame,
+    *,
+    feature_cols: list[str],
+    target_col: str,
+    l2: float,
+) -> tuple[QuantileLinearModel, QuantileLinearModel, QuantileLinearModel]:
+    return (
+        QuantileLinearModel(quantile=0.20, l2=l2).fit(df, feature_cols, target_col),
+        QuantileLinearModel(quantile=0.50, l2=l2).fit(df, feature_cols, target_col),
+        QuantileLinearModel(quantile=0.80, l2=l2).fit(df, feature_cols, target_col),
+    )
+
+
+def _predict_quantile_profile_from_models(
+    latest_row: pd.DataFrame,
+    *,
+    feature_cols: list[str],
+    thresholds: Sequence[float],
+    q_models: tuple[QuantileLinearModel, QuantileLinearModel, QuantileLinearModel],
+) -> ReturnBucketProfile:
+    q20 = float(q_models[0].predict(latest_row, feature_cols)[0])
+    q50 = float(q_models[1].predict(latest_row, feature_cols)[0])
+    q80 = float(q_models[2].predict(latest_row, feature_cols)[0])
+    ordered = sorted([q20, q50, q80])
+    q20, q50, q80 = float(ordered[0]), float(ordered[1]), float(ordered[2])
+    bucket_probs = _bucket_probs_from_quantiles(
+        thresholds=thresholds,
+        q20=q20,
+        q50=q50,
+        q80=q80,
+    )
+    expected_return = float(0.25 * q20 + 0.5 * q50 + 0.25 * q80)
+    return ReturnBucketProfile(
+        bucket_probs=bucket_probs,
+        expected_return=expected_return,
+        q20=q20,
+        q50=q50,
+        q80=q80,
+    )
+
+
 def run_quant_pipeline(
     market_security: Security,
     stock_securities: Sequence[Security],
@@ -317,113 +357,122 @@ def run_quant_pipeline(
     market_forecast.short_bucket_probs = list(market_short_bucket.bucket_probs)
     market_forecast.mid_bucket_probs = list(market_mid_bucket.bucket_probs)
 
+    panel_bundle: StockPanelDataset = build_stock_panel_dataset(
+        stock_securities=stock_securities,
+        source=source,
+        data_dir=data_dir,
+        start=start,
+        end=end,
+        market_frame=market_feat,
+        extra_market_cols=market_context.feature_columns,
+        use_margin_features=use_margin_features,
+        margin_stock_file=margin_stock_file,
+    )
+    panel = panel_bundle.frame
+    feature_cols = panel_bundle.feature_columns
+
+    if panel.empty or not feature_cols:
+        raise DataError("No valid stock rows with complete panel features for selected universe.")
+
+    panel_short_model = _fit_latest_model(panel, feature_cols=feature_cols, target_col="target_1d_up", l2=l2)
+    panel_mid_model = _fit_latest_model(panel, feature_cols=feature_cols, target_col="target_20d_up", l2=l2)
+    panel_short_q_models = _fit_quantile_triplet(
+        panel,
+        feature_cols=feature_cols,
+        target_col="fwd_ret_1",
+        l2=l2,
+    )
+    panel_mid_q_models = _fit_quantile_triplet(
+        panel,
+        feature_cols=feature_cols,
+        target_col="fwd_ret_20",
+        l2=l2,
+    )
+
+    panel_short_eval = (
+        _walk_forward_eval(
+            panel,
+            feature_cols=feature_cols,
+            target_col="target_1d_up",
+            l2=l2,
+            min_train_days=min_train_days,
+            step_days=step_days,
+        )
+        if enable_walk_forward_eval
+        else BinaryMetrics.empty()
+    )
+    panel_mid_eval = (
+        _walk_forward_eval(
+            panel,
+            feature_cols=feature_cols,
+            target_col="target_20d_up",
+            l2=l2,
+            min_train_days=min_train_days,
+            step_days=step_days,
+        )
+        if enable_walk_forward_eval
+        else BinaryMetrics.empty()
+    )
+
+    latest_dates = panel.groupby("symbol", observed=True)["date"].max().rename("latest_date")
+    latest_panel = panel.merge(latest_dates, on="symbol", how="inner")
+    latest_panel = latest_panel[latest_panel["date"] == latest_panel["latest_date"]].copy()
+    latest_panel = latest_panel.sort_values(["date", "symbol"]).drop_duplicates(subset=["symbol"], keep="last")
+    latest_panel = latest_panel.drop(columns=["latest_date"])
+    if latest_panel.empty:
+        raise DataError("No latest panel rows available for stock prediction.")
+
+    short_probs = panel_short_model.predict_proba(latest_panel, feature_cols=feature_cols)
+    mid_probs = panel_mid_model.predict_proba(latest_panel, feature_cols=feature_cols)
+
     stock_rows: list[ForecastRow] = []
-    for security in stock_securities:
-        try:
-            stock_raw = load_symbol_daily(
-                symbol=security.symbol,
-                source=source,
-                data_dir=data_dir,
-                start=start,
-                end=end,
-            )
-            stock_feat = make_stock_feature_frame(stock_raw, market_feat)
-            stock_margin_cols: list[str] = []
-            if use_margin_features:
-                margin_frame, margin_cols, _ = build_stock_margin_features(
-                    margin_stock_file=margin_stock_file,
-                    symbol=security.symbol,
-                    start=start,
-                    end=end,
-                )
-                if margin_cols:
-                    stock_feat = stock_feat.merge(margin_frame, on="date", how="left", validate="1:1")
-                    stock_margin_cols = list(margin_cols)
-
-            feature_cols = stock_feature_columns(
-                extra_market_cols=market_context.feature_columns,
-                extra_stock_cols=stock_margin_cols,
-            )
-
-            short_model = _fit_latest_model(stock_feat, feature_cols=feature_cols, target_col="target_1d_up", l2=l2)
-            mid_model = _fit_latest_model(stock_feat, feature_cols=feature_cols, target_col="target_20d_up", l2=l2)
-            latest_row = _latest_row_with_features(stock_feat, feature_cols)
-            latest_df = pd.DataFrame([latest_row])
-
-            short_prob = float(short_model.predict_proba(latest_df, feature_cols=feature_cols)[0])
-            mid_prob = float(mid_model.predict_proba(latest_df, feature_cols=feature_cols)[0])
-            short_bucket = estimate_return_bucket_profile(
-                stock_feat,
-                feature_cols=feature_cols,
-                return_col="fwd_ret_1",
-                thresholds=SHORT_RETURN_BUCKET_EDGES[1:-1],
-                representatives=SHORT_BUCKET_REPRESENTATIVES,
-                l2=l2,
-            )
-            mid_bucket = estimate_return_bucket_profile(
-                stock_feat,
-                feature_cols=feature_cols,
-                return_col="fwd_ret_20",
-                thresholds=MID_RETURN_BUCKET_EDGES[1:-1],
-                representatives=MID_BUCKET_REPRESENTATIVES,
-                l2=l2,
-            )
-            score = _distributional_score(
+    for idx, (_, latest_row) in enumerate(latest_panel.iterrows()):
+        latest_df = pd.DataFrame([latest_row])
+        short_bucket = _predict_quantile_profile_from_models(
+            latest_df,
+            feature_cols=feature_cols,
+            thresholds=SHORT_RETURN_BUCKET_EDGES[1:-1],
+            q_models=panel_short_q_models,
+        )
+        mid_bucket = _predict_quantile_profile_from_models(
+            latest_df,
+            feature_cols=feature_cols,
+            thresholds=MID_RETURN_BUCKET_EDGES[1:-1],
+            q_models=panel_mid_q_models,
+        )
+        short_prob = float(short_probs[idx])
+        mid_prob = float(mid_probs[idx])
+        score = _distributional_score(
+            short_prob=short_prob,
+            mid_prob=mid_prob,
+            short_expected_ret=float(short_bucket.expected_return),
+            mid_expected_ret=float(mid_bucket.expected_return),
+        )
+        symbol = normalize_symbol(str(latest_row["symbol"])).symbol
+        stock_rows.append(
+            ForecastRow(
+                symbol=symbol,
+                name=str(latest_row.get("name", symbol)),
+                latest_date=pd.Timestamp(latest_row["date"]),
                 short_prob=short_prob,
                 mid_prob=mid_prob,
+                score=score,
+                short_drivers=panel_short_model.top_drivers(latest_row, top_n=3),
+                mid_drivers=panel_mid_model.top_drivers(latest_row, top_n=3),
+                short_eval=panel_short_eval,
+                mid_eval=panel_mid_eval,
                 short_expected_ret=float(short_bucket.expected_return),
                 mid_expected_ret=float(mid_bucket.expected_return),
+                short_q20=float(short_bucket.q20),
+                short_q50=float(short_bucket.q50),
+                short_q80=float(short_bucket.q80),
+                mid_q20=float(mid_bucket.q20),
+                mid_q50=float(mid_bucket.q50),
+                mid_q80=float(mid_bucket.q80),
+                short_bucket_probs=list(short_bucket.bucket_probs),
+                mid_bucket_probs=list(mid_bucket.bucket_probs),
             )
-
-            stock_rows.append(
-                ForecastRow(
-                    symbol=normalize_symbol(security.symbol).symbol,
-                    name=security.name,
-                    latest_date=pd.Timestamp(latest_row["date"]),
-                    short_prob=short_prob,
-                    mid_prob=mid_prob,
-                    score=score,
-                    short_drivers=short_model.top_drivers(latest_row, top_n=3),
-                    mid_drivers=mid_model.top_drivers(latest_row, top_n=3),
-                    short_eval=(
-                        _walk_forward_eval(
-                            stock_feat,
-                            feature_cols=feature_cols,
-                            target_col="target_1d_up",
-                            l2=l2,
-                            min_train_days=min_train_days,
-                            step_days=step_days,
-                        )
-                        if enable_walk_forward_eval
-                        else BinaryMetrics.empty()
-                    ),
-                    mid_eval=(
-                        _walk_forward_eval(
-                            stock_feat,
-                            feature_cols=feature_cols,
-                            target_col="target_20d_up",
-                            l2=l2,
-                            min_train_days=min_train_days,
-                            step_days=step_days,
-                        )
-                        if enable_walk_forward_eval
-                        else BinaryMetrics.empty()
-                    ),
-                    short_expected_ret=float(short_bucket.expected_return),
-                    mid_expected_ret=float(mid_bucket.expected_return),
-                    short_q20=float(short_bucket.q20),
-                    short_q50=float(short_bucket.q50),
-                    short_q80=float(short_bucket.q80),
-                    mid_q20=float(mid_bucket.q20),
-                    mid_q50=float(mid_bucket.q50),
-                    mid_q80=float(mid_bucket.q80),
-                    short_bucket_probs=list(short_bucket.bucket_probs),
-                    mid_bucket_probs=list(mid_bucket.bucket_probs),
-                )
-            )
-        except Exception:
-            # Skip symbols with broken/insufficient data so large-universe scans can continue.
-            continue
+        )
 
     if not stock_rows:
         raise DataError("No valid stock rows with complete features for selected universe.")
