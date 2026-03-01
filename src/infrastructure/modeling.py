@@ -132,3 +132,92 @@ class LogisticBinaryModel:
         for idx in order:
             drivers.append(f"{self.feature_names[idx]}({float(contrib[idx]):+.2f})")
         return drivers
+
+
+class QuantileLinearModel:
+    def __init__(self, quantile: float, l2: float = 1.0, max_iter: int = 300) -> None:
+        self.quantile = float(np.clip(float(quantile), 1e-3, 1.0 - 1e-3))
+        self.l2 = float(l2)
+        self.max_iter = int(max_iter)
+        self.feature_names: List[str] = []
+        self.mean_: np.ndarray | None = None
+        self.std_: np.ndarray | None = None
+        self.coef_: np.ndarray | None = None
+        self.intercept_: float = 0.0
+        self.fallback_value_: float | None = None
+
+    def fit(self, df: pd.DataFrame, feature_cols: List[str], target_col: str) -> "QuantileLinearModel":
+        train = df.dropna(subset=feature_cols + [target_col]).copy()
+        if train.empty:
+            raise ValueError("No rows available for quantile training after dropping NaN.")
+
+        y = train[target_col].astype(float).to_numpy()
+        x = _as_float_array(train, feature_cols)
+
+        self.feature_names = list(feature_cols)
+        self.mean_ = np.nanmean(x, axis=0)
+        self.std_ = np.nanstd(x, axis=0)
+        self.std_[self.std_ < 1e-8] = 1.0
+        xs = (x - self.mean_) / self.std_
+
+        q_value = float(np.quantile(y, self.quantile))
+        if len(y) < 25 or float(np.nanstd(y)) < 1e-10:
+            self.fallback_value_ = q_value
+            self.coef_ = np.zeros(xs.shape[1], dtype=float)
+            self.intercept_ = q_value
+            return self
+
+        init = np.zeros(xs.shape[1] + 1, dtype=float)
+        init[-1] = q_value
+
+        def objective(params: np.ndarray) -> tuple[float, np.ndarray]:
+            w = params[:-1]
+            b = params[-1]
+            pred = xs @ w + b
+            residual = y - pred
+            loss = np.where(
+                residual >= 0.0,
+                self.quantile * residual,
+                (self.quantile - 1.0) * residual,
+            ).mean()
+            loss = float(loss) + 0.5 * self.l2 * float(np.sum(w * w))
+
+            grad_pred = np.where(
+                residual > 0.0,
+                -self.quantile,
+                1.0 - self.quantile,
+            )
+            grad_w = xs.T @ grad_pred / len(y) + self.l2 * w
+            grad_b = float(np.mean(grad_pred))
+            grad = np.concatenate([grad_w, [grad_b]])
+            return float(loss), grad
+
+        opt = minimize(
+            fun=lambda p: objective(p)[0],
+            x0=init,
+            jac=lambda p: objective(p)[1],
+            method="L-BFGS-B",
+            options={"maxiter": self.max_iter},
+        )
+
+        if not opt.success:
+            self.fallback_value_ = q_value
+            self.coef_ = np.zeros(xs.shape[1], dtype=float)
+            self.intercept_ = q_value
+            return self
+
+        self.coef_ = opt.x[:-1].astype(float)
+        self.intercept_ = float(opt.x[-1])
+        self.fallback_value_ = None
+        return self
+
+    def predict(self, df: pd.DataFrame, feature_cols: List[str] | None = None) -> np.ndarray:
+        if feature_cols is None:
+            feature_cols = self.feature_names
+        if self.mean_ is None or self.std_ is None or self.coef_ is None:
+            raise ValueError("Quantile model is not trained.")
+        x = _as_float_array(df, feature_cols)
+        xs = (x - self.mean_) / self.std_
+        if self.fallback_value_ is not None:
+            return np.full(xs.shape[0], float(self.fallback_value_), dtype=float)
+        return (xs @ self.coef_ + self.intercept_).astype(float)

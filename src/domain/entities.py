@@ -40,6 +40,12 @@ class ForecastRow:
     mid_eval: BinaryMetrics
     short_expected_ret: float = np.nan
     mid_expected_ret: float = np.nan
+    short_q20: float = np.nan
+    short_q50: float = np.nan
+    short_q80: float = np.nan
+    mid_q20: float = np.nan
+    mid_q50: float = np.nan
+    mid_q80: float = np.nan
     short_bucket_probs: list[float] = field(default_factory=list)
     mid_bucket_probs: list[float] = field(default_factory=list)
     suggested_weight: float = 0.0
@@ -56,6 +62,12 @@ class MarketForecast:
     mid_eval: BinaryMetrics
     short_expected_ret: float = np.nan
     mid_expected_ret: float = np.nan
+    short_q20: float = np.nan
+    short_q50: float = np.nan
+    short_q80: float = np.nan
+    mid_q20: float = np.nan
+    mid_q50: float = np.nan
+    mid_q80: float = np.nan
     short_bucket_probs: list[float] = field(default_factory=list)
     mid_bucket_probs: list[float] = field(default_factory=list)
 

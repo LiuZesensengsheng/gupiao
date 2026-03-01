@@ -20,7 +20,7 @@ from src.infrastructure.features import (
 from src.infrastructure.margin_features import build_stock_margin_features
 from src.infrastructure.market_context import build_market_context_features
 from src.infrastructure.market_data import DataError, load_symbol_daily
-from src.infrastructure.modeling import LogisticBinaryModel, binary_metrics
+from src.infrastructure.modeling import LogisticBinaryModel, QuantileLinearModel, binary_metrics
 
 
 SHORT_BUCKET_LABELS = ["大跌", "小跌", "震荡", "小涨", "大涨"]
@@ -33,6 +33,9 @@ MID_BUCKET_REPRESENTATIVES = [-0.16, -0.06, 0.0, 0.06, 0.16]
 class ReturnBucketProfile:
     bucket_probs: list[float]
     expected_return: float
+    q20: float
+    q50: float
+    q80: float
 
 
 def _fit_latest_model(
@@ -94,16 +97,42 @@ def _latest_row_with_features(df: pd.DataFrame, feature_cols: list[str]) -> pd.S
     return valid.iloc[-1]
 
 
-def _normalize_exceedance_probs(raw: Sequence[float]) -> list[float]:
-    if not raw:
-        return []
-    out = [float(np.clip(raw[0], 0.0, 1.0))]
-    for value in raw[1:]:
-        out.append(float(np.clip(min(out[-1], float(value)), 0.0, 1.0)))
-    return out
+def _bucket_probs_from_quantiles(
+    *,
+    thresholds: Sequence[float],
+    q20: float,
+    q50: float,
+    q80: float,
+) -> list[float]:
+    step_lo = max(1e-6, abs(float(q50) - float(q20)))
+    step_hi = max(1e-6, abs(float(q80) - float(q50)))
+    x_points = np.asarray(
+        [
+            float(q20 - 2.0 * step_lo),
+            float(q20),
+            float(q50),
+            float(q80),
+            float(q80 + 2.0 * step_hi),
+        ],
+        dtype=float,
+    )
+    y_points = np.asarray([0.0, 0.2, 0.5, 0.8, 1.0], dtype=float)
+    finite_edges = [float(edge) for edge in thresholds]
+    cdf_values = [0.0]
+    for edge in finite_edges:
+        cdf_values.append(float(np.clip(np.interp(edge, x_points, y_points), 0.0, 1.0)))
+    cdf_values.append(1.0)
+
+    bucket_probs: list[float] = []
+    for left, right in zip(cdf_values[:-1], cdf_values[1:]):
+        bucket_probs.append(float(np.clip(right - left, 0.0, 1.0)))
+    total = float(sum(bucket_probs))
+    if total <= 1e-9:
+        return [1.0 / max(1, len(bucket_probs))] * max(1, len(bucket_probs))
+    return [float(x) / total for x in bucket_probs]
 
 
-def estimate_return_bucket_profile(
+def estimate_return_quantiles(
     df: pd.DataFrame,
     *,
     feature_cols: list[str],
@@ -115,49 +144,58 @@ def estimate_return_bucket_profile(
     frame = df.dropna(subset=feature_cols + [return_col]).sort_values("date").copy()
     if frame.empty:
         fallback = [1.0 / max(1, len(representatives))] * max(1, len(representatives))
+        mid = float(np.median(np.asarray(representatives, dtype=float))) if representatives else 0.0
         return ReturnBucketProfile(
             bucket_probs=[float(x) for x in fallback],
-            expected_return=float(np.mean(np.asarray(representatives, dtype=float))) if representatives else 0.0,
+            expected_return=mid,
+            q20=mid,
+            q50=mid,
+            q80=mid,
         )
 
     latest = frame.dropna(subset=feature_cols).sort_values("date").iloc[[-1]]
-    exceedance_probs: list[float] = []
-    for threshold in thresholds:
-        target_col = "__bucket_target__"
-        train = frame.copy()
-        train[target_col] = (train[return_col].astype(float) > float(threshold)).astype(float)
-        positives = int((train[target_col] == 1).sum())
-        negatives = int((train[target_col] == 0).sum())
-        if positives == 0 and negatives == 0:
-            prob = 0.5
-        elif positives == 0:
-            prob = 0.0
-        elif negatives == 0:
-            prob = 1.0
-        else:
-            model = _fit_latest_model(train, feature_cols=feature_cols, target_col=target_col, l2=l2)
-            prob = float(model.predict_proba(latest, feature_cols=feature_cols)[0])
-        exceedance_probs.append(prob)
+    q20_model = QuantileLinearModel(quantile=0.20, l2=l2).fit(frame, feature_cols, return_col)
+    q50_model = QuantileLinearModel(quantile=0.50, l2=l2).fit(frame, feature_cols, return_col)
+    q80_model = QuantileLinearModel(quantile=0.80, l2=l2).fit(frame, feature_cols, return_col)
 
-    exceedance_probs = _normalize_exceedance_probs(exceedance_probs)
-    bucket_probs: list[float] = []
-    prev = 1.0
-    for prob in exceedance_probs:
-        bucket_probs.append(float(np.clip(prev - prob, 0.0, 1.0)))
-        prev = prob
-    bucket_probs.append(float(np.clip(prev, 0.0, 1.0)))
+    q20 = float(q20_model.predict(latest, feature_cols)[0])
+    q50 = float(q50_model.predict(latest, feature_cols)[0])
+    q80 = float(q80_model.predict(latest, feature_cols)[0])
+    ordered = sorted([q20, q50, q80])
+    q20, q50, q80 = float(ordered[0]), float(ordered[1]), float(ordered[2])
 
-    total = float(sum(bucket_probs))
-    if total <= 1e-9:
-        bucket_probs = [1.0 / max(1, len(representatives))] * max(1, len(representatives))
-    else:
-        bucket_probs = [float(x) / total for x in bucket_probs]
-
-    reps = np.asarray(list(representatives), dtype=float)
-    expected_return = float(np.dot(np.asarray(bucket_probs, dtype=float), reps)) if reps.size else 0.0
+    bucket_probs = _bucket_probs_from_quantiles(
+        thresholds=thresholds,
+        q20=q20,
+        q50=q50,
+        q80=q80,
+    )
+    expected_return = float(0.25 * q20 + 0.5 * q50 + 0.25 * q80)
     return ReturnBucketProfile(
         bucket_probs=[float(x) for x in bucket_probs],
         expected_return=float(expected_return),
+        q20=float(q20),
+        q50=float(q50),
+        q80=float(q80),
+    )
+
+
+def estimate_return_bucket_profile(
+    df: pd.DataFrame,
+    *,
+    feature_cols: list[str],
+    return_col: str,
+    thresholds: Sequence[float],
+    representatives: Sequence[float],
+    l2: float,
+) -> ReturnBucketProfile:
+    return estimate_return_quantiles(
+        df,
+        feature_cols=feature_cols,
+        return_col=return_col,
+        thresholds=thresholds,
+        representatives=representatives,
+        l2=l2,
     )
 
 
@@ -270,6 +308,12 @@ def run_quant_pipeline(
     )
     market_forecast.short_expected_ret = float(market_short_bucket.expected_return)
     market_forecast.mid_expected_ret = float(market_mid_bucket.expected_return)
+    market_forecast.short_q20 = float(market_short_bucket.q20)
+    market_forecast.short_q50 = float(market_short_bucket.q50)
+    market_forecast.short_q80 = float(market_short_bucket.q80)
+    market_forecast.mid_q20 = float(market_mid_bucket.q20)
+    market_forecast.mid_q50 = float(market_mid_bucket.q50)
+    market_forecast.mid_q80 = float(market_mid_bucket.q80)
     market_forecast.short_bucket_probs = list(market_short_bucket.bucket_probs)
     market_forecast.mid_bucket_probs = list(market_mid_bucket.bucket_probs)
 
@@ -367,6 +411,12 @@ def run_quant_pipeline(
                     ),
                     short_expected_ret=float(short_bucket.expected_return),
                     mid_expected_ret=float(mid_bucket.expected_return),
+                    short_q20=float(short_bucket.q20),
+                    short_q50=float(short_bucket.q50),
+                    short_q80=float(short_bucket.q80),
+                    mid_q20=float(mid_bucket.q20),
+                    mid_q50=float(mid_bucket.q50),
+                    mid_q80=float(mid_bucket.q80),
                     short_bucket_probs=list(short_bucket.bucket_probs),
                     mid_bucket_probs=list(mid_bucket.bucket_probs),
                 )

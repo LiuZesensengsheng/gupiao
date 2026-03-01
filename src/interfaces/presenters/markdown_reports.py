@@ -95,6 +95,18 @@ def write_forecast_report(
     if market_forecast.mid_bucket_probs:
         lines.append(f"| 中期期望收益 | {_to_percent(market_forecast.mid_expected_ret)} | 多档收益桶加权期望 |")
     lines.append("")
+    if not pd.isna(market_forecast.short_q50) or not pd.isna(market_forecast.mid_q50):
+        lines.append("### 大盘分位数")
+        lines.append("")
+        lines.append("| 维度 | Q20 | Q50 | Q80 |")
+        lines.append("|---|---:|---:|---:|")
+        lines.append(
+            f"| 短期(1日) | {_to_percent(market_forecast.short_q20)} | {_to_percent(market_forecast.short_q50)} | {_to_percent(market_forecast.short_q80)} |"
+        )
+        lines.append(
+            f"| 中期(20日) | {_to_percent(market_forecast.mid_q20)} | {_to_percent(market_forecast.mid_q50)} | {_to_percent(market_forecast.mid_q80)} |"
+        )
+        lines.append("")
     if market_forecast.short_bucket_probs or market_forecast.mid_bucket_probs:
         lines.append("### 大盘收益分布")
         lines.append("")
@@ -116,11 +128,11 @@ def write_forecast_report(
     lines.append("")
     lines.append("## 个股预测")
     lines.append("")
-    lines.append("| 个股 | 短期概率 | 中期概率 | 短期期望收益 | 中期期望收益 | 综合分数 | 建议权重 |")
-    lines.append("|---|---:|---:|---:|---:|---:|---:|")
+    lines.append("| 个股 | 短期概率 | 中期概率 | 短期Q50 | 中期Q50 | 短期期望收益 | 中期期望收益 | 综合分数 | 建议权重 |")
+    lines.append("|---|---:|---:|---:|---:|---:|---:|---:|---:|")
     for row in stock_rows:
         lines.append(
-            f"| {row.name} ({row.symbol}) | {_to_percent(row.short_prob)} | {_to_percent(row.mid_prob)} | {_to_percent(row.short_expected_ret)} | {_to_percent(row.mid_expected_ret)} | {row.score:.3f} | {_to_percent(row.suggested_weight)} |"
+            f"| {row.name} ({row.symbol}) | {_to_percent(row.short_prob)} | {_to_percent(row.mid_prob)} | {_to_percent(row.short_q50)} | {_to_percent(row.mid_q50)} | {_to_percent(row.short_expected_ret)} | {_to_percent(row.mid_expected_ret)} | {row.score:.3f} | {_to_percent(row.suggested_weight)} |"
         )
     lines.append("")
     lines.append("## 因子解释 (最新截面)")
