@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 from dataclasses import asdict
+from datetime import datetime
 from pathlib import Path
 from typing import Iterable
 
@@ -13,7 +14,9 @@ from src.application.v2_contracts import (
     CrossSectionForecastState,
     V2BacktestSummary,
     V2CalibrationResult,
+    V2PolicyLearningResult,
     DailyRunResult,
+    LearnedPolicyModel,
     MarketForecastState,
     PolicyDecision,
     PolicyInput,
@@ -52,6 +55,93 @@ def _coalesce(primary: object, secondary: object, default: object) -> object:
     if secondary is not None:
         return secondary
     return default
+
+
+def _safe_float(value: object, default: float = 0.0) -> float:
+    try:
+        out = float(value)
+    except (TypeError, ValueError):
+        return float(default)
+    if out != out:
+        return float(default)
+    return out
+
+
+def _policy_feature_names() -> list[str]:
+    return [
+        "mkt_up_1d",
+        "mkt_up_20d",
+        "mkt_drawdown_risk",
+        "mkt_liquidity_stress",
+        "cross_fund_flow",
+        "cross_margin_risk_on",
+        "cross_breadth",
+        "cross_leader_participation",
+        "cross_weak_ratio",
+        "top_sector_up_20d",
+        "top_sector_relative_strength",
+        "top_stock_up_20d",
+        "top_stock_tradeability",
+        "top_stock_excess_vs_sector",
+    ]
+
+
+def _policy_feature_vector(state: CompositeState) -> np.ndarray:
+    top_sector = state.sectors[0] if state.sectors else None
+    top_stock = state.stocks[0] if state.stocks else None
+    return np.asarray(
+        [
+            float(state.market.up_1d_prob),
+            float(state.market.up_20d_prob),
+            float(state.market.drawdown_risk),
+            float(state.market.liquidity_stress),
+            float(state.cross_section.fund_flow_strength),
+            float(state.cross_section.margin_risk_on_score),
+            float(state.cross_section.breadth_strength),
+            float(state.cross_section.leader_participation),
+            float(state.cross_section.weak_stock_ratio),
+            0.0 if top_sector is None else float(top_sector.up_20d_prob),
+            0.0 if top_sector is None else float(top_sector.relative_strength),
+            0.0 if top_stock is None else float(top_stock.up_20d_prob),
+            0.0 if top_stock is None else float(top_stock.tradeability_score),
+            0.0 if top_stock is None else float(top_stock.excess_vs_sector_prob),
+        ],
+        dtype=float,
+    )
+
+
+def _fit_ridge_regression(
+    X: np.ndarray,
+    y: np.ndarray,
+    *,
+    l2: float,
+) -> tuple[float, np.ndarray]:
+    if X.size == 0 or y.size == 0:
+        return 0.0, np.zeros(X.shape[1] if X.ndim == 2 else 0, dtype=float)
+    X = np.asarray(X, dtype=float)
+    y = np.asarray(y, dtype=float)
+    ones = np.ones((X.shape[0], 1), dtype=float)
+    X_aug = np.hstack([ones, X])
+    reg = np.eye(X_aug.shape[1], dtype=float) * float(max(0.0, l2))
+    reg[0, 0] = 0.0
+    coef = np.linalg.solve(X_aug.T @ X_aug + reg, X_aug.T @ y)
+    return float(coef[0]), np.asarray(coef[1:], dtype=float)
+
+
+def _predict_ridge(features: np.ndarray, intercept: float, coef: np.ndarray) -> float:
+    return float(intercept + np.dot(np.asarray(features, dtype=float), np.asarray(coef, dtype=float)))
+
+
+def _r2_score(y_true: np.ndarray, y_pred: np.ndarray) -> float:
+    y_true = np.asarray(y_true, dtype=float)
+    y_pred = np.asarray(y_pred, dtype=float)
+    if y_true.size == 0:
+        return 0.0
+    ss_res = float(np.sum((y_true - y_pred) ** 2))
+    ss_tot = float(np.sum((y_true - np.mean(y_true)) ** 2))
+    if ss_tot <= 1e-12:
+        return 0.0
+    return float(1.0 - ss_res / ss_tot)
 
 
 def build_strategy_snapshot(
@@ -484,11 +574,158 @@ def build_trade_actions(
     return actions
 
 
+def _policy_spec_from_model(
+    *,
+    state: CompositeState,
+    model: LearnedPolicyModel,
+) -> PolicySpec:
+    features = _policy_feature_vector(state)
+    exposure = _clip(
+        _predict_ridge(features, model.exposure_intercept, np.asarray(model.exposure_coef, dtype=float)),
+        0.20,
+        0.95,
+    )
+    positions = int(
+        round(
+            _clip(
+                _predict_ridge(features, model.position_intercept, np.asarray(model.position_coef, dtype=float)),
+                1.0,
+                6.0,
+            )
+        )
+    )
+    turnover_cap = _clip(
+        _predict_ridge(features, model.turnover_intercept, np.asarray(model.turnover_coef, dtype=float)),
+        0.10,
+        0.45,
+    )
+    cautious_exposure = _clip(0.5 * (exposure + 0.35), 0.30, exposure)
+    risk_off_exposure = _clip(0.5 * cautious_exposure, 0.20, 0.40)
+    cautious_positions = min(positions, max(1, positions - 1))
+    risk_off_positions = max(1, positions - 2)
+    cautious_turnover = _clip(min(turnover_cap, 0.85 * turnover_cap), 0.10, turnover_cap)
+    risk_off_turnover = _clip(min(cautious_turnover, 0.70 * turnover_cap), 0.08, cautious_turnover)
+    return PolicySpec(
+        risk_on_exposure=float(exposure),
+        cautious_exposure=float(cautious_exposure),
+        risk_off_exposure=float(risk_off_exposure),
+        risk_on_positions=int(positions),
+        cautious_positions=int(cautious_positions),
+        risk_off_positions=int(risk_off_positions),
+        risk_on_turnover_cap=float(turnover_cap),
+        cautious_turnover_cap=float(cautious_turnover),
+        risk_off_turnover_cap=float(risk_off_turnover),
+    )
+
+
+def _simulate_execution_day(
+    *,
+    date: pd.Timestamp,
+    next_date: pd.Timestamp,
+    decision: PolicyDecision,
+    current_weights: dict[str, float],
+    current_cash: float,
+    stock_states: list[StockForecastState],
+    stock_frames: dict[str, pd.DataFrame],
+    total_commission_rate: float,
+    base_slippage_rate: float,
+) -> tuple[float, float, float, float, float, dict[str, float], float]:
+    state_map = {item.symbol: item for item in stock_states}
+    symbols = sorted(set(current_weights) | set(decision.symbol_target_weights))
+    raw_deltas = {
+        symbol: float(decision.symbol_target_weights.get(symbol, 0.0)) - float(current_weights.get(symbol, 0.0))
+        for symbol in symbols
+    }
+
+    executed_deltas: dict[str, float] = {}
+    fill_ratios: list[float] = []
+    slippage_rates: list[float] = []
+    total_turnover_budget = float(max(0.0, decision.turnover_cap))
+    used_turnover = 0.0
+
+    ordered_symbols = sorted(symbols, key=lambda sym: abs(raw_deltas.get(sym, 0.0)), reverse=True)
+    for symbol in ordered_symbols:
+        delta = float(raw_deltas.get(symbol, 0.0))
+        if abs(delta) <= 1e-4:
+            continue
+        state = state_map.get(symbol)
+        tradeability = 0.45 if state is None else _clip(float(state.tradeability_score), 0.10, 1.0)
+        liquidity_cap = 0.03 + 0.12 * tradeability
+        remaining_turnover = max(0.0, total_turnover_budget - used_turnover)
+        max_abs_trade = min(abs(delta), liquidity_cap, remaining_turnover)
+        if max_abs_trade <= 1e-6:
+            continue
+        fill_ratio = max_abs_trade / max(abs(delta), 1e-9)
+        executed = float(np.sign(delta) * max_abs_trade)
+        executed_deltas[symbol] = executed
+        fill_ratios.append(float(fill_ratio))
+        impact = max_abs_trade / max(liquidity_cap, 1e-6)
+        slippage_rate = float(base_slippage_rate * (0.65 + 0.7 * impact + 0.35 * (1.0 - tradeability)))
+        slippage_rates.append(slippage_rate)
+        used_turnover += abs(executed)
+
+    executed_weights = {symbol: max(0.0, float(weight)) for symbol, weight in current_weights.items()}
+    for symbol, delta in executed_deltas.items():
+        executed_weights[symbol] = max(0.0, float(executed_weights.get(symbol, 0.0)) + float(delta))
+    executed_weights = {
+        symbol: float(weight)
+        for symbol, weight in executed_weights.items()
+        if float(weight) > 1e-6
+    }
+
+    invested_after_trade = float(sum(executed_weights.values()))
+    if invested_after_trade > 1.0:
+        scale = 1.0 / invested_after_trade
+        executed_weights = {symbol: float(weight) * scale for symbol, weight in executed_weights.items()}
+        invested_after_trade = 1.0
+    cash_after_trade = max(0.0, 1.0 - invested_after_trade)
+
+    gross_end_value = float(cash_after_trade)
+    position_values: dict[str, float] = {}
+    for symbol, weight in executed_weights.items():
+        frame = stock_frames.get(symbol)
+        if frame is None:
+            realized_ret = 0.0
+        else:
+            row = frame[frame["date"] == date]
+            realized_ret = 0.0 if row.empty else float(row.iloc[0]["fwd_ret_1"])
+        value = float(weight) * (1.0 + realized_ret)
+        position_values[symbol] = value
+        gross_end_value += value
+
+    commission_cost = float(used_turnover * total_commission_rate)
+    slippage_cost = float(sum(abs(executed_deltas[s]) * rate for s, rate in zip(executed_deltas, slippage_rates))) if slippage_rates else 0.0
+    total_cost = float(commission_cost + slippage_cost)
+    net_end_value = max(1e-9, gross_end_value - total_cost)
+
+    next_weights = {
+        symbol: float(value) / net_end_value
+        for symbol, value in position_values.items()
+        if float(value) > 1e-9
+    }
+    next_cash = max(0.0, float(cash_after_trade - total_cost) / net_end_value)
+    daily_return = float(net_end_value - 1.0)
+    avg_fill_ratio = float(np.mean(fill_ratios)) if fill_ratios else 0.0
+    avg_slippage_bps = float(np.mean(slippage_rates) * 10000.0) if slippage_rates else 0.0
+    return (
+        daily_return,
+        float(used_turnover),
+        float(total_cost),
+        avg_fill_ratio,
+        avg_slippage_bps,
+        next_weights,
+        next_cash,
+    )
+
+
 def _to_v2_backtest_summary(
     *,
     returns: list[float],
     turnovers: list[float],
     costs: list[float],
+    gross_returns: list[float],
+    fill_ratios: list[float],
+    slippage_bps: list[float],
     dates: list[pd.Timestamp],
 ) -> V2BacktestSummary:
     if not returns or not dates:
@@ -502,12 +739,17 @@ def _to_v2_backtest_summary(
             avg_turnover=0.0,
             total_cost=0.0,
         )
-    nav = np.cumprod(1.0 + np.asarray(returns, dtype=float))
+    ret_arr = np.asarray(returns, dtype=float)
+    nav = np.cumprod(1.0 + ret_arr)
+    gross_nav = np.cumprod(1.0 + np.asarray(gross_returns, dtype=float)) if gross_returns else nav
     peak = np.maximum.accumulate(nav)
     drawdown = nav / np.maximum(peak, 1e-12) - 1.0
     total_return = float(nav[-1] - 1.0)
+    gross_total_return = float(gross_nav[-1] - 1.0)
     n_days = len(returns)
     annual_return = float((1.0 + total_return) ** (252.0 / max(1, n_days)) - 1.0)
+    annual_vol = float(np.std(ret_arr, ddof=0) * np.sqrt(252.0))
+    win_rate = float(np.mean(ret_arr > 0.0))
     return V2BacktestSummary(
         start_date=str(dates[0].date()),
         end_date=str(dates[-1].date()),
@@ -517,6 +759,14 @@ def _to_v2_backtest_summary(
         max_drawdown=float(np.min(drawdown)),
         avg_turnover=float(np.mean(turnovers)) if turnovers else 0.0,
         total_cost=float(np.sum(costs)) if costs else 0.0,
+        gross_total_return=float(gross_total_return),
+        annual_vol=float(annual_vol),
+        win_rate=float(win_rate),
+        trade_days=int(sum(1 for item in turnovers if float(item) > 1e-9)),
+        avg_fill_ratio=float(np.mean(fill_ratios)) if fill_ratios else 0.0,
+        avg_slippage_bps=float(np.mean(slippage_bps)) if slippage_bps else 0.0,
+        nav_curve=[float(x) for x in nav.tolist()],
+        curve_dates=[str(item.date()) for item in dates],
     )
 
 
@@ -570,7 +820,47 @@ def _build_market_and_cross_section_from_prebuilt_frame(
     return market, cross_section
 
 
-def run_v2_backtest_live(
+def _derive_learning_targets(
+    *,
+    state: CompositeState,
+    stock_frames: dict[str, pd.DataFrame],
+    date: pd.Timestamp,
+) -> tuple[float, float, float]:
+    ranked = sorted(state.stocks, key=_stock_policy_score, reverse=True)
+    realized: list[float] = []
+    for stock in ranked[:4]:
+        frame = stock_frames.get(stock.symbol)
+        if frame is None:
+            continue
+        row = frame[frame["date"] == date]
+        if row.empty:
+            continue
+        realized.append(float(row.iloc[0]["fwd_ret_1"]))
+    lead_ret = float(np.mean(realized)) if realized else 0.0
+
+    if lead_ret >= 0.008:
+        exposure = 0.85
+    elif lead_ret >= 0.0:
+        exposure = 0.60
+    else:
+        exposure = 0.35
+
+    breadth_bonus = 1 if float(state.cross_section.breadth_strength) > 0.05 else 0
+    weakness_penalty = 1 if float(state.cross_section.weak_stock_ratio) > 0.55 else 0
+    positions = int(np.clip(3 + breadth_bonus - weakness_penalty + (1 if lead_ret >= 0.012 else 0), 1, 5))
+
+    turnover = 0.18
+    if abs(lead_ret) >= 0.01:
+        turnover = 0.32
+    elif abs(lead_ret) >= 0.004:
+        turnover = 0.25
+    if float(state.market.drawdown_risk) > 0.45:
+        turnover = min(turnover, 0.18)
+
+    return float(exposure), float(positions), float(turnover)
+
+
+def _run_v2_backtest_core(
     *,
     strategy_id: str = "swing_v2",
     config_path: str = "config/api.json",
@@ -578,10 +868,12 @@ def run_v2_backtest_live(
     universe_file: str | None = None,
     universe_limit: int | None = None,
     policy_spec: PolicySpec | None = None,
+    learned_policy: LearnedPolicyModel | None = None,
     retrain_days: int = 20,
     commission_bps: float = 1.5,
     slippage_bps: float = 2.0,
-) -> V2BacktestSummary:
+    capture_learning_rows: bool = False,
+) -> tuple[V2BacktestSummary, list[dict[str, float]]]:
     settings = _load_v2_runtime_settings(
         config_path=config_path,
         source=source,
@@ -598,7 +890,15 @@ def run_v2_backtest_live(
     )
     stocks = universe.rows
     if not stocks:
-        return _to_v2_backtest_summary(returns=[], turnovers=[], costs=[], dates=[])
+        return _to_v2_backtest_summary(
+            returns=[],
+            turnovers=[],
+            costs=[],
+            gross_returns=[],
+            fill_ratios=[],
+            slippage_bps=[],
+            dates=[],
+        ), []
 
     sector_map = {stock.symbol: (stock.sector or "其他") for stock in stocks}
     market_raw = load_symbol_daily(
@@ -622,7 +922,15 @@ def run_v2_backtest_live(
     market_feature_cols = list(MARKET_FEATURE_COLUMNS) + list(market_context.feature_columns)
     market_valid = market_frame.dropna(subset=market_feature_cols + ["mkt_target_1d_up", "mkt_target_20d_up"]).sort_values("date").copy()
     if market_valid.empty:
-        return _to_v2_backtest_summary(returns=[], turnovers=[], costs=[], dates=[])
+        return _to_v2_backtest_summary(
+            returns=[],
+            turnovers=[],
+            costs=[],
+            gross_returns=[],
+            fill_ratios=[],
+            slippage_bps=[],
+            dates=[],
+        ), []
 
     stock_frames: dict[str, pd.DataFrame] = {}
     stock_cols_map: dict[str, list[str]] = {}
@@ -657,7 +965,15 @@ def run_v2_backtest_live(
         stock_cols_map[stock.symbol] = cols
 
     if not stock_frames:
-        return _to_v2_backtest_summary(returns=[], turnovers=[], costs=[], dates=[])
+        return _to_v2_backtest_summary(
+            returns=[],
+            turnovers=[],
+            costs=[],
+            gross_returns=[],
+            fill_ratios=[],
+            slippage_bps=[],
+            dates=[],
+        ), []
 
     common_dates = set(pd.to_datetime(market_valid["date"]))
     for frame in stock_frames.values():
@@ -665,14 +981,28 @@ def run_v2_backtest_live(
     dates = sorted(pd.Timestamp(d) for d in common_dates)
     min_train_days = int(settings["min_train_days"])
     if len(dates) <= min_train_days + 1:
-        return _to_v2_backtest_summary(returns=[], turnovers=[], costs=[], dates=[])
+        return _to_v2_backtest_summary(
+            returns=[],
+            turnovers=[],
+            costs=[],
+            gross_returns=[],
+            fill_ratios=[],
+            slippage_bps=[],
+            dates=[],
+        ), []
 
-    total_cost_rate = max(0.0, float(commission_bps) + float(slippage_bps)) / 10000.0
+    commission_rate = max(0.0, float(commission_bps)) / 10000.0
+    slippage_rate = max(0.0, float(slippage_bps)) / 10000.0
     returns: list[float] = []
+    gross_returns: list[float] = []
     turnovers: list[float] = []
     costs: list[float] = []
+    fill_ratios: list[float] = []
+    slippage_cost_bps: list[float] = []
     out_dates: list[pd.Timestamp] = []
     prev_weights: dict[str, float] = {}
+    prev_cash = 1.0
+    learning_rows: list[dict[str, float]] = []
 
     for block_start in range(min_train_days, len(dates) - 1, max(1, int(retrain_days))):
         train_dates = set(dates[:block_start])
@@ -766,47 +1096,109 @@ def run_v2_backtest_live(
                 stocks=stock_states,
                 cross_section=cross_section,
             )
+            active_policy_spec = policy_spec
+            if learned_policy is not None:
+                active_policy_spec = _policy_spec_from_model(
+                    state=composite_state,
+                    model=learned_policy,
+                )
             decision = apply_policy(
                 PolicyInput(
                     composite_state=composite_state,
                     current_weights=prev_weights,
-                    current_cash=max(0.0, 1.0 - sum(prev_weights.values())),
+                    current_cash=max(0.0, prev_cash),
                     total_equity=1.0,
                 ),
-                policy_spec=policy_spec,
+                policy_spec=active_policy_spec,
             )
-            turnover = float(
+            gross_ret = float(
                 sum(
-                    abs(float(decision.symbol_target_weights.get(symbol, 0.0)) - float(prev_weights.get(symbol, 0.0)))
-                    for symbol in set(prev_weights) | set(decision.symbol_target_weights)
+                    float(weight) * _safe_float(
+                        stock_frames[symbol][stock_frames[symbol]["date"] == date].iloc[0]["fwd_ret_1"],
+                        0.0,
+                    )
+                    for symbol, weight in decision.symbol_target_weights.items()
+                    if symbol in stock_frames and not stock_frames[symbol][stock_frames[symbol]["date"] == date].empty
                 )
             )
-            cost = float(turnover * total_cost_rate)
-            gross_ret = 0.0
-            for symbol, weight in decision.symbol_target_weights.items():
-                frame = stock_frames.get(symbol)
-                if frame is None:
-                    continue
-                row = frame[frame["date"] == date]
-                if row.empty:
-                    continue
-                gross_ret += float(weight) * float(row.iloc[0]["fwd_ret_1"])
-            returns.append(float(gross_ret - cost))
+            daily_ret, turnover, cost, fill_ratio, slip_bps, next_weights, next_cash = _simulate_execution_day(
+                date=date,
+                next_date=next_date,
+                decision=decision,
+                current_weights=prev_weights,
+                current_cash=prev_cash,
+                stock_states=stock_states,
+                stock_frames=stock_frames,
+                total_commission_rate=commission_rate,
+                base_slippage_rate=slippage_rate,
+            )
+            returns.append(float(daily_ret))
+            gross_returns.append(float(gross_ret))
             turnovers.append(turnover)
             costs.append(cost)
+            fill_ratios.append(fill_ratio)
+            slippage_cost_bps.append(slip_bps)
             out_dates.append(next_date)
-            prev_weights = {
-                symbol: float(weight)
-                for symbol, weight in decision.symbol_target_weights.items()
-                if float(weight) > 1e-9
-            }
+            prev_weights = next_weights
+            prev_cash = next_cash
+
+            if capture_learning_rows:
+                target_exposure, target_positions, target_turnover = _derive_learning_targets(
+                    state=composite_state,
+                    stock_frames=stock_frames,
+                    date=date,
+                )
+                row = {
+                    name: float(value)
+                    for name, value in zip(_policy_feature_names(), _policy_feature_vector(composite_state))
+                }
+                row.update(
+                    {
+                        "target_exposure": float(target_exposure),
+                        "target_positions": float(target_positions),
+                        "target_turnover": float(target_turnover),
+                    }
+                )
+                learning_rows.append(row)
 
     return _to_v2_backtest_summary(
         returns=returns,
         turnovers=turnovers,
         costs=costs,
+        gross_returns=gross_returns,
+        fill_ratios=fill_ratios,
+        slippage_bps=slippage_cost_bps,
         dates=out_dates,
+    ), learning_rows
+
+
+def run_v2_backtest_live(
+    *,
+    strategy_id: str = "swing_v2",
+    config_path: str = "config/api.json",
+    source: str | None = None,
+    universe_file: str | None = None,
+    universe_limit: int | None = None,
+    policy_spec: PolicySpec | None = None,
+    learned_policy: LearnedPolicyModel | None = None,
+    retrain_days: int = 20,
+    commission_bps: float = 1.5,
+    slippage_bps: float = 2.0,
+) -> V2BacktestSummary:
+    summary, _ = _run_v2_backtest_core(
+        strategy_id=strategy_id,
+        config_path=config_path,
+        source=source,
+        universe_file=universe_file,
+        universe_limit=universe_limit,
+        policy_spec=policy_spec,
+        learned_policy=learned_policy,
+        retrain_days=retrain_days,
+        commission_bps=commission_bps,
+        slippage_bps=slippage_bps,
+        capture_learning_rows=False,
     )
+    return summary
 
 
 def calibrate_v2_policy(
@@ -835,6 +1227,13 @@ def calibrate_v2_policy(
     best_spec = baseline_spec
     best_summary = baseline
     best_score = float(baseline.annual_return) - 0.5 * abs(float(baseline.max_drawdown))
+    trials: list[dict[str, object]] = [
+        {
+            "policy": asdict(baseline_spec),
+            "summary": asdict(baseline),
+            "score": float(best_score),
+        }
+    ]
     for spec in candidates[1:]:
         summary = run_v2_backtest_live(
             strategy_id=strategy_id,
@@ -845,6 +1244,13 @@ def calibrate_v2_policy(
             policy_spec=spec,
         )
         score = float(summary.annual_return) - 0.5 * abs(float(summary.max_drawdown))
+        trials.append(
+            {
+                "policy": asdict(spec),
+                "summary": asdict(summary),
+                "score": float(score),
+            }
+        )
         if score > best_score:
             best_score = float(score)
             best_spec = spec
@@ -854,7 +1260,207 @@ def calibrate_v2_policy(
         best_score=float(best_score),
         baseline=baseline,
         calibrated=best_summary,
+        trials=trials,
     )
+
+
+def learn_v2_policy_model(
+    *,
+    strategy_id: str = "swing_v2",
+    config_path: str = "config/api.json",
+    source: str | None = None,
+    universe_file: str | None = None,
+    universe_limit: int | None = None,
+    l2: float = 1.0,
+) -> V2PolicyLearningResult:
+    baseline = run_v2_backtest_live(
+        strategy_id=strategy_id,
+        config_path=config_path,
+        source=source,
+        universe_file=universe_file,
+        universe_limit=universe_limit,
+    )
+    _, rows = _run_v2_backtest_core(
+        strategy_id=strategy_id,
+        config_path=config_path,
+        source=source,
+        universe_file=universe_file,
+        universe_limit=universe_limit,
+        capture_learning_rows=True,
+    )
+    feature_names = _policy_feature_names()
+    if not rows:
+        model = LearnedPolicyModel(
+            feature_names=feature_names,
+            exposure_intercept=0.60,
+            exposure_coef=[0.0] * len(feature_names),
+            position_intercept=3.0,
+            position_coef=[0.0] * len(feature_names),
+            turnover_intercept=0.22,
+            turnover_coef=[0.0] * len(feature_names),
+            train_rows=0,
+            train_r2_exposure=0.0,
+            train_r2_positions=0.0,
+            train_r2_turnover=0.0,
+        )
+        learned_summary = run_v2_backtest_live(
+            strategy_id=strategy_id,
+            config_path=config_path,
+            source=source,
+            universe_file=universe_file,
+            universe_limit=universe_limit,
+            learned_policy=model,
+        )
+        return V2PolicyLearningResult(model=model, baseline=baseline, learned=learned_summary)
+
+    X = np.asarray([[float(row[name]) for name in feature_names] for row in rows], dtype=float)
+    y_exposure = np.asarray([float(row["target_exposure"]) for row in rows], dtype=float)
+    y_positions = np.asarray([float(row["target_positions"]) for row in rows], dtype=float)
+    y_turnover = np.asarray([float(row["target_turnover"]) for row in rows], dtype=float)
+
+    exp_b, exp_w = _fit_ridge_regression(X, y_exposure, l2=l2)
+    pos_b, pos_w = _fit_ridge_regression(X, y_positions, l2=l2)
+    turn_b, turn_w = _fit_ridge_regression(X, y_turnover, l2=l2)
+
+    pred_exp = np.asarray([_predict_ridge(row, exp_b, exp_w) for row in X], dtype=float)
+    pred_pos = np.asarray([_predict_ridge(row, pos_b, pos_w) for row in X], dtype=float)
+    pred_turn = np.asarray([_predict_ridge(row, turn_b, turn_w) for row in X], dtype=float)
+
+    model = LearnedPolicyModel(
+        feature_names=feature_names,
+        exposure_intercept=float(exp_b),
+        exposure_coef=[float(x) for x in exp_w.tolist()],
+        position_intercept=float(pos_b),
+        position_coef=[float(x) for x in pos_w.tolist()],
+        turnover_intercept=float(turn_b),
+        turnover_coef=[float(x) for x in turn_w.tolist()],
+        train_rows=int(len(rows)),
+        train_r2_exposure=float(_r2_score(y_exposure, pred_exp)),
+        train_r2_positions=float(_r2_score(y_positions, pred_pos)),
+        train_r2_turnover=float(_r2_score(y_turnover, pred_turn)),
+    )
+    learned_summary = run_v2_backtest_live(
+        strategy_id=strategy_id,
+        config_path=config_path,
+        source=source,
+        universe_file=universe_file,
+        universe_limit=universe_limit,
+        learned_policy=model,
+    )
+    return V2PolicyLearningResult(
+        model=model,
+        baseline=baseline,
+        learned=learned_summary,
+    )
+
+
+def load_published_v2_policy_model(
+    *,
+    strategy_id: str,
+    artifact_root: str = "artifacts/v2",
+) -> LearnedPolicyModel | None:
+    model_path = Path(str(artifact_root)) / str(strategy_id) / "latest_policy_model.json"
+    if not model_path.exists():
+        return None
+    payload = json.loads(model_path.read_text(encoding="utf-8"))
+    if not isinstance(payload, dict):
+        return None
+    return LearnedPolicyModel(
+        feature_names=[str(x) for x in payload.get("feature_names", [])],
+        exposure_intercept=float(payload.get("exposure_intercept", 0.60)),
+        exposure_coef=[float(x) for x in payload.get("exposure_coef", [])],
+        position_intercept=float(payload.get("position_intercept", 3.0)),
+        position_coef=[float(x) for x in payload.get("position_coef", [])],
+        turnover_intercept=float(payload.get("turnover_intercept", 0.22)),
+        turnover_coef=[float(x) for x in payload.get("turnover_coef", [])],
+        train_rows=int(payload.get("train_rows", 0)),
+        train_r2_exposure=float(payload.get("train_r2_exposure", 0.0)),
+        train_r2_positions=float(payload.get("train_r2_positions", 0.0)),
+        train_r2_turnover=float(payload.get("train_r2_turnover", 0.0)),
+    )
+
+
+def publish_v2_research_artifacts(
+    *,
+    strategy_id: str,
+    artifact_root: str = "artifacts/v2",
+    settings: dict[str, object],
+    baseline: V2BacktestSummary,
+    calibration: V2CalibrationResult,
+    learning: V2PolicyLearningResult,
+) -> dict[str, str]:
+    run_id = datetime.now().strftime("%Y%m%d_%H%M%S")
+    base_dir = Path(str(artifact_root)) / str(strategy_id) / run_id
+    base_dir.mkdir(parents=True, exist_ok=True)
+    symbols = []
+    universe_path = Path(str(settings.get("universe_file", "")))
+    if universe_path.exists():
+        try:
+            raw = json.loads(universe_path.read_text(encoding="utf-8"))
+            if isinstance(raw, list):
+                symbols = [str(item) for item in raw]
+        except Exception:
+            symbols = []
+
+    dataset_manifest = {
+        "strategy_id": str(strategy_id),
+        "config_path": str(settings.get("config_path", "")),
+        "source": str(settings.get("source", "")),
+        "watchlist": str(settings.get("watchlist", "")),
+        "universe_file": str(settings.get("universe_file", "")),
+        "universe_limit": int(settings.get("universe_limit", 0)),
+        "start": str(settings.get("start", "")),
+        "end": str(settings.get("end", "")),
+        "symbols": symbols,
+        "symbol_count": len(symbols),
+    }
+    calibration_manifest = {
+        "best_score": float(calibration.best_score),
+        "best_policy": asdict(calibration.best_policy),
+        "trials": calibration.trials,
+    }
+    learning_manifest = asdict(learning.model)
+    backtest_manifest = {
+        "baseline": asdict(baseline),
+        "calibrated": asdict(calibration.calibrated),
+        "learned": asdict(learning.learned),
+    }
+
+    dataset_path = base_dir / "dataset_manifest.json"
+    calibration_path = base_dir / "policy_calibration.json"
+    learning_path = base_dir / "learned_policy_model.json"
+    backtest_path = base_dir / "backtest_summary.json"
+    manifest_path = base_dir / "research_manifest.json"
+    latest_policy_path = Path(str(artifact_root)) / str(strategy_id) / "latest_policy_model.json"
+    latest_manifest_path = Path(str(artifact_root)) / str(strategy_id) / "latest_research_manifest.json"
+    latest_policy_path.parent.mkdir(parents=True, exist_ok=True)
+
+    dataset_path.write_text(json.dumps(dataset_manifest, ensure_ascii=False, indent=2), encoding="utf-8")
+    calibration_path.write_text(json.dumps(calibration_manifest, ensure_ascii=False, indent=2), encoding="utf-8")
+    learning_path.write_text(json.dumps(learning_manifest, ensure_ascii=False, indent=2), encoding="utf-8")
+    backtest_path.write_text(json.dumps(backtest_manifest, ensure_ascii=False, indent=2), encoding="utf-8")
+
+    manifest = {
+        "run_id": run_id,
+        "strategy_id": str(strategy_id),
+        "dataset_manifest": str(dataset_path),
+        "policy_calibration": str(calibration_path),
+        "learned_policy_model": str(learning_path),
+        "backtest_summary": str(backtest_path),
+        "published_policy_model": str(latest_policy_path),
+    }
+    manifest_path.write_text(json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8")
+    latest_policy_path.write_text(json.dumps(learning_manifest, ensure_ascii=False, indent=2), encoding="utf-8")
+    latest_manifest_path.write_text(json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8")
+    return {
+        "run_dir": str(base_dir),
+        "dataset_manifest": str(dataset_path),
+        "policy_calibration": str(calibration_path),
+        "learned_policy_model": str(learning_path),
+        "backtest_summary": str(backtest_path),
+        "research_manifest": str(manifest_path),
+        "published_policy_model": str(latest_policy_path),
+    }
 
 
 def run_daily_v2_live(
@@ -864,6 +1470,7 @@ def run_daily_v2_live(
     source: str | None = None,
     universe_file: str | None = None,
     universe_limit: int | None = None,
+    artifact_root: str = "artifacts/v2",
 ) -> DailyRunResult:
     settings = _load_v2_runtime_settings(
         config_path=config_path,
@@ -963,13 +1570,25 @@ def run_daily_v2_live(
         equal_weight = 1.0 / float(len(current_holdings))
         current_weights = {item.symbol: float(equal_weight) for item in current_holdings}
 
+    learned_policy = load_published_v2_policy_model(
+        strategy_id=strategy_id,
+        artifact_root=artifact_root,
+    )
+    active_policy_spec = None
+    if learned_policy is not None:
+        active_policy_spec = _policy_spec_from_model(
+            state=composite_state,
+            model=learned_policy,
+        )
+
     policy_decision = apply_policy(
         PolicyInput(
             composite_state=composite_state,
             current_weights=current_weights,
             current_cash=max(0.0, 1.0 - sum(current_weights.values())),
             total_equity=1.0,
-        )
+        ),
+        policy_spec=active_policy_spec,
     )
     trade_actions = build_trade_actions(
         decision=policy_decision,
@@ -1005,13 +1624,25 @@ def summarize_daily_run(result: DailyRunResult) -> dict[str, object]:
 
 
 def summarize_v2_backtest(result: V2BacktestSummary) -> dict[str, object]:
-    return asdict(result)
+    payload = asdict(result)
+    payload.pop("nav_curve", None)
+    payload.pop("curve_dates", None)
+    return payload
 
 
 def summarize_v2_calibration(result: V2CalibrationResult) -> dict[str, object]:
     return {
         "best_score": float(result.best_score),
         "best_policy": asdict(result.best_policy),
-        "baseline": asdict(result.baseline),
-        "calibrated": asdict(result.calibrated),
+        "baseline": summarize_v2_backtest(result.baseline),
+        "calibrated": summarize_v2_backtest(result.calibrated),
+        "trial_count": len(result.trials),
+    }
+
+
+def summarize_v2_policy_learning(result: V2PolicyLearningResult) -> dict[str, object]:
+    return {
+        "model": asdict(result.model),
+        "baseline": summarize_v2_backtest(result.baseline),
+        "learned": summarize_v2_backtest(result.learned),
     }

@@ -127,6 +127,14 @@ class V2BacktestSummary:
     max_drawdown: float
     avg_turnover: float
     total_cost: float
+    gross_total_return: float = 0.0
+    annual_vol: float = 0.0
+    win_rate: float = 0.0
+    trade_days: int = 0
+    avg_fill_ratio: float = 0.0
+    avg_slippage_bps: float = 0.0
+    nav_curve: List[float] = field(default_factory=list)
+    curve_dates: List[str] = field(default_factory=list)
 
 
 @dataclass(frozen=True)
@@ -135,3 +143,26 @@ class V2CalibrationResult:
     best_score: float
     baseline: V2BacktestSummary
     calibrated: V2BacktestSummary
+    trials: List[dict[str, object]] = field(default_factory=list)
+
+
+@dataclass(frozen=True)
+class LearnedPolicyModel:
+    feature_names: List[str]
+    exposure_intercept: float
+    exposure_coef: List[float]
+    position_intercept: float
+    position_coef: List[float]
+    turnover_intercept: float
+    turnover_coef: List[float]
+    train_rows: int
+    train_r2_exposure: float
+    train_r2_positions: float
+    train_r2_turnover: float
+
+
+@dataclass(frozen=True)
+class V2PolicyLearningResult:
+    model: LearnedPolicyModel
+    baseline: V2BacktestSummary
+    learned: V2BacktestSummary
