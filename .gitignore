@@ -14,3 +14,8 @@ input/margin_stock.csv
 
 # Auto-generated universe files
 config/universe_auto*.json
+
+# V2 generated artifacts and reports
+artifacts/
+reports/v2_*.md
+reports/v2_*.html
