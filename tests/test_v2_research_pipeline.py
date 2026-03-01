@@ -176,3 +176,4 @@ def test_backtest_summary_carries_cross_section_metrics() -> None:
     assert summary.avg_top_decile_return == 0.0
     assert summary.avg_top_bottom_spread == 0.0
     assert summary.avg_top_k_hit_rate == 0.0
+    assert summary.horizon_metrics == {}

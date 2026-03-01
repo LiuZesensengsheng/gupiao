@@ -296,15 +296,21 @@ def _build_stock_states_from_panel_slice(
                 tradeability_score=float(tradeability),
             )
         )
-        realized_mid = np.nan
+        realized_1d = np.nan
+        realized_5d = np.nan
+        realized_20d = np.nan
         matched = panel_row[panel_row["symbol"] == str(item["symbol"])]
         if not matched.empty:
-            realized_mid = float(matched.iloc[0].get("fwd_ret_20", np.nan))
+            realized_1d = float(matched.iloc[0].get("excess_ret_1_vs_mkt", np.nan))
+            realized_5d = float(matched.iloc[0].get("excess_ret_5_vs_mkt", np.nan))
+            realized_20d = float(matched.iloc[0].get("excess_ret_20_vs_sector", np.nan))
         scored_rows.append(
             {
                 "symbol": str(item["symbol"]),
                 "score": float(item["score"]),
-                "realized_ret": float(realized_mid),
+                "realized_ret_1d": float(realized_1d),
+                "realized_ret_5d": float(realized_5d),
+                "realized_ret_20d": float(realized_20d),
             }
         )
     out.sort(
@@ -326,26 +332,48 @@ def _build_stock_states_from_panel_slice(
 def _panel_slice_metrics(
     scored_rows: pd.DataFrame,
     *,
+    realized_col: str = "realized_ret_20d",
     top_k: int = 3,
 ) -> tuple[float, float, float, float]:
     if scored_rows.empty:
         return 0.0, 0.0, 0.0, 0.0
-    frame = scored_rows.dropna(subset=["score", "realized_ret"]).copy()
+    frame = scored_rows.dropna(subset=["score", realized_col]).copy()
     if len(frame) < 2:
         return 0.0, 0.0, 0.0, 0.0
-    rank_ic = float(frame["score"].corr(frame["realized_ret"], method="spearman"))
+    rank_ic = float(frame["score"].corr(frame[realized_col], method="spearman"))
     if rank_ic != rank_ic:
         rank_ic = 0.0
     bucket_n = max(1, int(np.ceil(len(frame) * 0.1)))
     ranked = frame.sort_values("score", ascending=False).reset_index(drop=True)
     top_bucket = ranked.head(bucket_n)
     bottom_bucket = ranked.tail(bucket_n)
-    top_decile_return = float(top_bucket["realized_ret"].mean()) if not top_bucket.empty else 0.0
-    bottom_return = float(bottom_bucket["realized_ret"].mean()) if not bottom_bucket.empty else 0.0
+    top_decile_return = float(top_bucket[realized_col].mean()) if not top_bucket.empty else 0.0
+    bottom_return = float(bottom_bucket[realized_col].mean()) if not bottom_bucket.empty else 0.0
     top_bottom_spread = float(top_decile_return - bottom_return)
     top_k_n = max(1, min(int(top_k), len(ranked)))
-    top_k_hit_rate = float((ranked.head(top_k_n)["realized_ret"] > 0.0).mean())
+    top_k_hit_rate = float((ranked.head(top_k_n)[realized_col] > 0.0).mean())
     return rank_ic, top_decile_return, top_bottom_spread, top_k_hit_rate
+
+
+def _panel_horizon_metrics(scored_rows: pd.DataFrame) -> dict[str, dict[str, float]]:
+    mapping = {
+        "1d": "realized_ret_1d",
+        "5d": "realized_ret_5d",
+        "20d": "realized_ret_20d",
+    }
+    out: dict[str, dict[str, float]] = {}
+    for horizon, realized_col in mapping.items():
+        rank_ic, top_decile_ret, top_bottom_spread, top_k_hit_rate = _panel_slice_metrics(
+            scored_rows,
+            realized_col=realized_col,
+        )
+        out[horizon] = {
+            "rank_ic": float(rank_ic),
+            "top_decile_return": float(top_decile_ret),
+            "top_bottom_spread": float(top_bottom_spread),
+            "top_k_hit_rate": float(top_k_hit_rate),
+        }
+    return out
 
 
 def build_strategy_snapshot(
@@ -941,6 +969,7 @@ def _to_v2_backtest_summary(
     top_decile_returns: list[float] | None = None,
     top_bottom_spreads: list[float] | None = None,
     top_k_hit_rates: list[float] | None = None,
+    horizon_metrics: dict[str, dict[str, list[float]]] | None = None,
     dates: list[pd.Timestamp],
 ) -> V2BacktestSummary:
     if not returns or not dates:
@@ -957,6 +986,7 @@ def _to_v2_backtest_summary(
             avg_top_decile_return=0.0,
             avg_top_bottom_spread=0.0,
             avg_top_k_hit_rate=0.0,
+            horizon_metrics={},
         )
     ret_arr = np.asarray(returns, dtype=float)
     nav = np.cumprod(1.0 + ret_arr)
@@ -969,6 +999,13 @@ def _to_v2_backtest_summary(
     annual_return = float((1.0 + total_return) ** (252.0 / max(1, n_days)) - 1.0)
     annual_vol = float(np.std(ret_arr, ddof=0) * np.sqrt(252.0))
     win_rate = float(np.mean(ret_arr > 0.0))
+    horizon_summary: dict[str, dict[str, float]] = {}
+    if horizon_metrics:
+        for horizon, metric_map in horizon_metrics.items():
+            horizon_summary[horizon] = {
+                key: float(np.mean(values)) if values else 0.0
+                for key, values in metric_map.items()
+            }
     return V2BacktestSummary(
         start_date=str(dates[0].date()),
         end_date=str(dates[-1].date()),
@@ -988,6 +1025,7 @@ def _to_v2_backtest_summary(
         avg_top_decile_return=float(np.mean(top_decile_returns)) if top_decile_returns else 0.0,
         avg_top_bottom_spread=float(np.mean(top_bottom_spreads)) if top_bottom_spreads else 0.0,
         avg_top_k_hit_rate=float(np.mean(top_k_hit_rates)) if top_k_hit_rates else 0.0,
+        horizon_metrics=horizon_summary,
         nav_curve=[float(x) for x in nav.tolist()],
         curve_dates=[str(item.date()) for item in dates],
     )
@@ -1208,6 +1246,11 @@ def _run_v2_backtest_core(
     top_decile_returns: list[float] = []
     top_bottom_spreads: list[float] = []
     top_k_hit_rates: list[float] = []
+    horizon_metric_series: dict[str, dict[str, list[float]]] = {
+        "1d": {"rank_ic": [], "top_decile_return": [], "top_bottom_spread": [], "top_k_hit_rate": []},
+        "5d": {"rank_ic": [], "top_decile_return": [], "top_bottom_spread": [], "top_k_hit_rate": []},
+        "20d": {"rank_ic": [], "top_decile_return": [], "top_bottom_spread": [], "top_k_hit_rate": []},
+    }
     out_dates: list[pd.Timestamp] = []
     prev_weights: dict[str, float] = {}
     prev_cash = 1.0
@@ -1234,23 +1277,23 @@ def _run_v2_backtest_core(
         panel_short_model = LogisticBinaryModel(l2=float(settings["l2"])).fit(
             panel_train,
             feature_cols,
-            "target_1d_up",
+            "target_1d_excess_mkt_up",
         )
         panel_mid_model = LogisticBinaryModel(l2=float(settings["l2"])).fit(
             panel_train,
             feature_cols,
-            "target_20d_up",
+            "target_20d_excess_sector_up",
         )
         panel_short_q_models = _fit_quantile_quintet(
             panel_train,
             feature_cols=feature_cols,
-            target_col="fwd_ret_1",
+            target_col="excess_ret_1_vs_mkt",
             l2=float(settings["l2"]),
         )
         panel_mid_q_models = _fit_quantile_quintet(
             panel_train,
             feature_cols=feature_cols,
-            target_col="fwd_ret_20",
+            target_col="excess_ret_20_vs_sector",
             l2=float(settings["l2"]),
         )
 
@@ -1279,11 +1322,18 @@ def _run_v2_backtest_core(
             )
             if not stock_states:
                 continue
-            rank_ic, top_decile_ret, top_bottom_spread, top_k_hit_rate = _panel_slice_metrics(scored_rows)
+            horizon_metrics = _panel_horizon_metrics(scored_rows)
+            rank_ic = float(horizon_metrics["20d"]["rank_ic"])
+            top_decile_ret = float(horizon_metrics["20d"]["top_decile_return"])
+            top_bottom_spread = float(horizon_metrics["20d"]["top_bottom_spread"])
+            top_k_hit_rate = float(horizon_metrics["20d"]["top_k_hit_rate"])
             rank_ics.append(float(rank_ic))
             top_decile_returns.append(float(top_decile_ret))
             top_bottom_spreads.append(float(top_bottom_spread))
             top_k_hit_rates.append(float(top_k_hit_rate))
+            for horizon, metric_map in horizon_metrics.items():
+                for name, value in metric_map.items():
+                    horizon_metric_series[horizon][name].append(float(value))
 
             grouped: dict[str, list[StockForecastState]] = {}
             for stock_state in stock_states:
@@ -1388,6 +1438,7 @@ def _run_v2_backtest_core(
         top_decile_returns=top_decile_returns,
         top_bottom_spreads=top_bottom_spreads,
         top_k_hit_rates=top_k_hit_rates,
+        horizon_metrics=horizon_metric_series,
         dates=out_dates,
     ), learning_rows
 

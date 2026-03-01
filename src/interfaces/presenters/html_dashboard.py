@@ -1409,6 +1409,23 @@ def write_v2_research_dashboard(
         f"<tr><th>{escape(str(label))}</th><td>{escape(str(path_value))}</td></tr>"
         for label, path_value in (artifacts or {}).items()
     )
+    horizon_rows = ""
+    for label, summary in [
+        ("基线", baseline),
+        ("校准", calibration.calibrated),
+        ("学习", learning.learned),
+    ]:
+        for horizon in ["1d", "5d", "20d"]:
+            metrics = summary.horizon_metrics.get(horizon, {})
+            if not metrics:
+                continue
+            horizon_rows += (
+                f"<tr><td>{escape(label)}</td><td>{escape(horizon)}</td>"
+                f"<td>{_num(float(metrics.get('rank_ic', 0.0)), 3)}</td>"
+                f"<td>{_pct(float(metrics.get('top_decile_return', 0.0)))}</td>"
+                f"<td>{_pct(float(metrics.get('top_bottom_spread', 0.0)))}</td>"
+                f"<td>{_pct(float(metrics.get('top_k_hit_rate', 0.0)))}</td></tr>"
+            )
 
     html = f"""<!doctype html>
 <html lang="zh-CN">
@@ -1537,6 +1554,16 @@ def write_v2_research_dashboard(
         <h2>研究产物</h2>
         <table>
           <tbody>{artifact_rows or '<tr><td colspan="2">本次未写出产物</td></tr>'}</tbody>
+        </table>
+      </div>
+    </section>
+
+    <section class="grid">
+      <div class="card">
+        <h2>多周期横截面分层指标</h2>
+        <table>
+          <thead><tr><th>方案</th><th>周期</th><th>RankIC</th><th>头部分层收益</th><th>头尾价差</th><th>TopK命中率</th></tr></thead>
+          <tbody>{horizon_rows or '<tr><td colspan="6">暂无多周期指标</td></tr>'}</tbody>
         </table>
       </div>
     </section>

@@ -404,18 +404,18 @@ def run_quant_pipeline(
     if panel.empty or not feature_cols:
         raise DataError("No valid stock rows with complete panel features for selected universe.")
 
-    panel_short_model = _fit_latest_model(panel, feature_cols=feature_cols, target_col="target_1d_up", l2=l2)
-    panel_mid_model = _fit_latest_model(panel, feature_cols=feature_cols, target_col="target_20d_up", l2=l2)
+    panel_short_model = _fit_latest_model(panel, feature_cols=feature_cols, target_col="target_1d_excess_mkt_up", l2=l2)
+    panel_mid_model = _fit_latest_model(panel, feature_cols=feature_cols, target_col="target_20d_excess_sector_up", l2=l2)
     panel_short_q_models = _fit_quantile_quintet(
         panel,
         feature_cols=feature_cols,
-        target_col="fwd_ret_1",
+        target_col="excess_ret_1_vs_mkt",
         l2=l2,
     )
     panel_mid_q_models = _fit_quantile_quintet(
         panel,
         feature_cols=feature_cols,
-        target_col="fwd_ret_20",
+        target_col="excess_ret_20_vs_sector",
         l2=l2,
     )
 
@@ -423,7 +423,7 @@ def run_quant_pipeline(
         _walk_forward_eval(
             panel,
             feature_cols=feature_cols,
-            target_col="target_1d_up",
+            target_col="target_1d_excess_mkt_up",
             l2=l2,
             min_train_days=min_train_days,
             step_days=step_days,
@@ -435,7 +435,7 @@ def run_quant_pipeline(
         _walk_forward_eval(
             panel,
             feature_cols=feature_cols,
-            target_col="target_20d_up",
+            target_col="target_20d_excess_sector_up",
             l2=l2,
             min_train_days=min_train_days,
             step_days=step_days,

@@ -92,4 +92,10 @@ def test_build_stock_panel_dataset_adds_cross_section_features(monkeypatch) -> N
     assert "xs_ret_20_rank_pct" in bundle.feature_columns
     assert "sec_ret_20_rank_pct" in bundle.feature_columns
     assert "sector_ret_20_minus_mkt" in bundle.feature_columns
+    assert "target_1d_excess_mkt_up" in bundle.frame.columns
+    assert "target_5d_excess_mkt_up" in bundle.frame.columns
+    assert "target_20d_excess_sector_up" in bundle.frame.columns
+    assert "excess_ret_1_vs_mkt" in bundle.frame.columns
+    assert "excess_ret_5_vs_mkt" in bundle.frame.columns
+    assert "excess_ret_20_vs_sector" in bundle.frame.columns
     assert set(bundle.frame["symbol"].unique()) == {"AAA.SZ", "BBB.SZ", "CCC.SZ"}

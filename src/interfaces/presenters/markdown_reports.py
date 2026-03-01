@@ -47,6 +47,34 @@ def _to_int(v: float) -> str:
     return str(int(round(float(v))))
 
 
+def _append_horizon_metrics_table(
+    lines: list[str],
+    *,
+    title: str,
+    summaries: Sequence[tuple[str, V2BacktestSummary]],
+) -> None:
+    lines.append(title)
+    lines.append("")
+    lines.append("| 方案 | 周期 | RankIC | 头部分层收益 | 头尾价差 | TopK命中率 |")
+    lines.append("|---|---|---:|---:|---:|---:|")
+    wrote = False
+    for label, summary in summaries:
+        for horizon in ["1d", "5d", "20d"]:
+            metrics = summary.horizon_metrics.get(horizon, {})
+            if not metrics:
+                continue
+            wrote = True
+            lines.append(
+                f"| {label} | {horizon} | {_to_float(float(metrics.get('rank_ic', 0.0)), 3)} | "
+                f"{_to_percent(float(metrics.get('top_decile_return', 0.0)))} | "
+                f"{_to_percent(float(metrics.get('top_bottom_spread', 0.0)))} | "
+                f"{_to_percent(float(metrics.get('top_k_hit_rate', 0.0)))} |"
+            )
+    if not wrote:
+        lines.append("| 无 | 无 | NA | NA | NA | NA |")
+    lines.append("")
+
+
 def _metrics_line(metrics: BinaryMetrics) -> str:
     auc_text = f"{metrics.auc:.3f}" if not pd.isna(metrics.auc) else "NA"
     brier_text = f"{metrics.brier:.3f}" if not pd.isna(metrics.brier) else "NA"
@@ -579,6 +607,15 @@ def write_v2_research_report(
         f"{_to_percent(learning.learned.annual_return)} | {_to_percent(learning.learned.max_drawdown)} | {_to_percent(learning.learned.avg_turnover)} | "
         f"{_to_percent(learning.learned.avg_fill_ratio)} | {_to_bp(learning.learned.avg_slippage_bps / 10000.0)} | {_to_float(learning.learned.avg_rank_ic, 3)} | "
         f"{_to_percent(learning.learned.avg_top_decile_return)} | {_to_percent(learning.learned.avg_top_bottom_spread)} | {_to_percent(learning.learned.avg_top_k_hit_rate)} | {_to_percent(learning.learned.total_cost)} |"
+    )
+    _append_horizon_metrics_table(
+        lines,
+        title="## 多周期横截面分层指标",
+        summaries=[
+            ("基线", baseline),
+            ("校准", calibration.calibrated),
+            ("学习", learning.learned),
+        ],
     )
     if artifacts:
         lines.append("")

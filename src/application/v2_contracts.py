@@ -137,6 +137,7 @@ class V2BacktestSummary:
     avg_top_decile_return: float = 0.0
     avg_top_bottom_spread: float = 0.0
     avg_top_k_hit_rate: float = 0.0
+    horizon_metrics: Dict[str, Dict[str, float]] = field(default_factory=dict)
     nav_curve: List[float] = field(default_factory=list)
     curve_dates: List[str] = field(default_factory=list)
 

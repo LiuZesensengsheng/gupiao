@@ -101,6 +101,58 @@ def _attach_cross_section_features(frame: pd.DataFrame) -> tuple[pd.DataFrame, l
     return out, extra_cols
 
 
+def _attach_relative_targets(frame: pd.DataFrame) -> pd.DataFrame:
+    out = frame.copy()
+    out["excess_ret_1_vs_mkt"] = out["fwd_ret_1"] - out["mkt_fwd_ret_1"]
+    out["excess_ret_5_vs_mkt"] = out["fwd_ret_5"] - out["mkt_fwd_ret_5"]
+    out["excess_ret_20_vs_mkt"] = out["fwd_ret_20"] - out["mkt_fwd_ret_20"]
+
+    sector_forward = (
+        out.groupby(["date", "sector"], as_index=False, observed=True)
+        .agg(
+            sector_fwd_ret_1_mean=("fwd_ret_1", "mean"),
+            sector_fwd_ret_5_mean=("fwd_ret_5", "mean"),
+            sector_fwd_ret_20_mean=("fwd_ret_20", "mean"),
+        )
+    )
+    out = out.merge(sector_forward, on=["date", "sector"], how="left", validate="m:1")
+    out["excess_ret_1_vs_sector"] = out["fwd_ret_1"] - out["sector_fwd_ret_1_mean"]
+    out["excess_ret_5_vs_sector"] = out["fwd_ret_5"] - out["sector_fwd_ret_5_mean"]
+    out["excess_ret_20_vs_sector"] = out["fwd_ret_20"] - out["sector_fwd_ret_20_mean"]
+
+    out["target_1d_excess_mkt_up"] = np.where(
+        out["excess_ret_1_vs_mkt"].notna(),
+        (out["excess_ret_1_vs_mkt"] > 0).astype(float),
+        np.nan,
+    )
+    out["target_5d_excess_mkt_up"] = np.where(
+        out["excess_ret_5_vs_mkt"].notna(),
+        (out["excess_ret_5_vs_mkt"] > 0).astype(float),
+        np.nan,
+    )
+    out["target_20d_excess_mkt_up"] = np.where(
+        out["excess_ret_20_vs_mkt"].notna(),
+        (out["excess_ret_20_vs_mkt"] > 0).astype(float),
+        np.nan,
+    )
+    out["target_1d_excess_sector_up"] = np.where(
+        out["excess_ret_1_vs_sector"].notna(),
+        (out["excess_ret_1_vs_sector"] > 0).astype(float),
+        np.nan,
+    )
+    out["target_5d_excess_sector_up"] = np.where(
+        out["excess_ret_5_vs_sector"].notna(),
+        (out["excess_ret_5_vs_sector"] > 0).astype(float),
+        np.nan,
+    )
+    out["target_20d_excess_sector_up"] = np.where(
+        out["excess_ret_20_vs_sector"].notna(),
+        (out["excess_ret_20_vs_sector"] > 0).astype(float),
+        np.nan,
+    )
+    return out
+
+
 def build_stock_panel_dataset(
     *,
     stock_securities: Sequence[Security],
@@ -159,6 +211,7 @@ def build_stock_panel_dataset(
     panel["date"] = pd.to_datetime(panel["date"], errors="coerce")
     panel = panel.dropna(subset=["date"]).sort_values(["date", "symbol"]).reset_index(drop=True)
     panel, panel_extra_cols = _attach_cross_section_features(panel)
+    panel = _attach_relative_targets(panel)
 
     feature_cols = stock_feature_columns(
         extra_market_cols=extra_market_cols,
@@ -166,7 +219,14 @@ def build_stock_panel_dataset(
     )
     feature_cols = [col for col in feature_cols if col in panel.columns]
 
-    required_cols = feature_cols + ["target_1d_up", "target_20d_up", "fwd_ret_1", "fwd_ret_20"]
+    required_cols = feature_cols + [
+        "target_1d_excess_mkt_up",
+        "target_5d_excess_mkt_up",
+        "target_20d_excess_sector_up",
+        "excess_ret_1_vs_mkt",
+        "excess_ret_5_vs_mkt",
+        "excess_ret_20_vs_sector",
+    ]
     panel = panel.dropna(subset=[col for col in required_cols if col in panel.columns]).copy()
     panel = panel.sort_values(["date", "symbol"]).reset_index(drop=True)
     return StockPanelDataset(
