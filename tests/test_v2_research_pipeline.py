@@ -17,6 +17,8 @@ from src.application.v2_contracts import (
     V2PolicyLearningResult,
 )
 from src.application.v2_services import (
+    _load_or_build_v2_backtest_trajectory,
+    _make_forecast_backend,
     _policy_spec_from_model,
     load_published_v2_policy_model,
     publish_v2_research_artifacts,
@@ -203,7 +205,7 @@ def test_backtest_summary_accepts_multi_horizon_metrics_payload() -> None:
     assert summary.horizon_metrics["5d"]["top_k_hit_rate"] == 0.55
 
 
-def test_research_workflow_light_mode_skips_heavy_stages(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_research_workflow_light_mode_skips_heavy_stages(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     baseline = _make_backtest(0.18, 0.16)
     prepared_sentinel = object()
     trajectory_sentinel = object()
@@ -212,9 +214,10 @@ def test_research_workflow_light_mode_skips_heavy_stages(monkeypatch: pytest.Mon
     def fake_prepare(**_: object) -> object:
         return prepared_sentinel
 
-    def fake_build(prepared: object, *, retrain_days: int = 20) -> object:
+    def fake_build(prepared: object, *, retrain_days: int = 20, forecast_backend: str = "linear") -> object:
         assert prepared is prepared_sentinel
         assert retrain_days == 20
+        assert forecast_backend == "linear"
         return trajectory_sentinel
 
     def fake_baseline(**kwargs: object) -> V2BacktestSummary:
@@ -237,6 +240,7 @@ def test_research_workflow_light_mode_skips_heavy_stages(monkeypatch: pytest.Mon
         strategy_id="swing_v2",
         skip_calibration=True,
         skip_learning=True,
+        cache_root=str(tmp_path),
     )
 
     assert got_baseline == baseline
@@ -247,7 +251,7 @@ def test_research_workflow_light_mode_skips_heavy_stages(monkeypatch: pytest.Mon
     assert learning.model.train_rows == 0
 
 
-def test_research_workflow_reuses_single_trajectory_for_all_stages(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_research_workflow_reuses_single_trajectory_for_all_stages(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     baseline = _make_backtest(0.18, 0.16)
     calibrated = _make_backtest(0.20, 0.18)
     learned = _make_backtest(0.19, 0.17)
@@ -258,9 +262,10 @@ def test_research_workflow_reuses_single_trajectory_for_all_stages(monkeypatch: 
     def fake_prepare(**_: object) -> object:
         return prepared_sentinel
 
-    def fake_build(prepared: object, *, retrain_days: int = 20) -> object:
+    def fake_build(prepared: object, *, retrain_days: int = 20, forecast_backend: str = "linear") -> object:
         assert prepared is prepared_sentinel
         assert retrain_days == 20
+        assert forecast_backend == "linear"
         return trajectory_sentinel
 
     def fake_baseline(**kwargs: object) -> V2BacktestSummary:
@@ -305,7 +310,10 @@ def test_research_workflow_reuses_single_trajectory_for_all_stages(monkeypatch: 
     monkeypatch.setattr("src.application.v2_services.calibrate_v2_policy", fake_calibration)
     monkeypatch.setattr("src.application.v2_services.learn_v2_policy_model", fake_learning)
 
-    got_baseline, got_calibration, got_learning = run_v2_research_workflow(strategy_id="swing_v2")
+    got_baseline, got_calibration, got_learning = run_v2_research_workflow(
+        strategy_id="swing_v2",
+        cache_root=str(tmp_path),
+    )
 
     assert got_baseline == baseline
     assert got_calibration.calibrated == calibrated
@@ -315,3 +323,42 @@ def test_research_workflow_reuses_single_trajectory_for_all_stages(monkeypatch: 
     assert seen["learning_trajectory"] is trajectory_sentinel
     assert seen["calibration_baseline"] == baseline
     assert seen["learning_baseline"] == baseline
+
+
+def test_load_or_build_v2_backtest_trajectory_uses_disk_cache(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    built_trajectory = {"steps": 3}
+    seen = {"build_calls": 0}
+
+    def fake_prepare(**_: object) -> object:
+        return {"prepared": True}
+
+    def fake_build(prepared: object, *, retrain_days: int = 20, forecast_backend: str = "linear") -> object:
+        assert prepared == {"prepared": True}
+        assert retrain_days == 20
+        assert forecast_backend == "linear"
+        seen["build_calls"] += 1
+        return built_trajectory
+
+    monkeypatch.setattr("src.application.v2_services._prepare_v2_backtest_data", fake_prepare)
+    monkeypatch.setattr("src.application.v2_services._build_v2_backtest_trajectory_from_prepared", fake_build)
+
+    first = _load_or_build_v2_backtest_trajectory(
+        config_path="config/api.json",
+        cache_root=str(tmp_path),
+        forecast_backend="linear",
+    )
+    second = _load_or_build_v2_backtest_trajectory(
+        config_path="config/api.json",
+        cache_root=str(tmp_path),
+        forecast_backend="linear",
+    )
+
+    assert first == built_trajectory
+    assert second == built_trajectory
+    assert seen["build_calls"] == 1
+
+
+def test_make_forecast_backend_accepts_linear() -> None:
+    backend = _make_forecast_backend("linear")
+
+    assert backend.name == "linear"

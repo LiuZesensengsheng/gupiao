@@ -1,10 +1,12 @@
 from __future__ import annotations
 
+import hashlib
 import json
+import pickle
 from dataclasses import asdict, dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import Iterable
+from typing import Iterable, Protocol
 
 import numpy as np
 import pandas as pd
@@ -1371,6 +1373,18 @@ class _BacktestTrajectory:
     steps: list[_TrajectoryStep]
 
 
+class ForecastBackend(Protocol):
+    name: str
+
+    def build_trajectory(
+        self,
+        prepared: _PreparedV2BacktestData,
+        *,
+        retrain_days: int = 20,
+    ) -> _BacktestTrajectory:
+        ...
+
+
 def _empty_v2_backtest_result() -> tuple[V2BacktestSummary, list[dict[str, float]]]:
     return (
         _to_v2_backtest_summary(
@@ -1473,137 +1487,241 @@ def _prepare_v2_backtest_data(
     )
 
 
+class LinearForecastBackend:
+    name = "linear"
+
+    def build_trajectory(
+        self,
+        prepared: _PreparedV2BacktestData,
+        *,
+        retrain_days: int = 20,
+    ) -> _BacktestTrajectory:
+        settings = prepared.settings
+        market_valid = prepared.market_valid
+        panel = prepared.panel
+        market_feature_cols = prepared.market_feature_cols
+        feature_cols = prepared.feature_cols
+        dates = prepared.dates
+        min_train_days = int(settings["min_train_days"])
+        steps: list[_TrajectoryStep] = []
+
+        for block_start in range(min_train_days, len(dates) - 1, max(1, int(retrain_days))):
+            train_dates = set(dates[:block_start])
+            market_train = market_valid[market_valid["date"].isin(train_dates)].copy()
+            if market_train.empty:
+                continue
+            market_short_model = LogisticBinaryModel(l2=float(settings["l2"])).fit(
+                market_train,
+                market_feature_cols,
+                "mkt_target_1d_up",
+            )
+            market_five_model = LogisticBinaryModel(l2=float(settings["l2"])).fit(
+                market_train,
+                market_feature_cols,
+                "mkt_target_5d_up",
+            )
+            market_mid_model = LogisticBinaryModel(l2=float(settings["l2"])).fit(
+                market_train,
+                market_feature_cols,
+                "mkt_target_20d_up",
+            )
+            panel_train = panel[panel["date"].isin(train_dates)].copy()
+            if panel_train.empty:
+                continue
+            panel_short_model = LogisticBinaryModel(l2=float(settings["l2"])).fit(
+                panel_train,
+                feature_cols,
+                "target_1d_excess_mkt_up",
+            )
+            panel_five_model = LogisticBinaryModel(l2=float(settings["l2"])).fit(
+                panel_train,
+                feature_cols,
+                "target_5d_excess_mkt_up",
+            )
+            panel_mid_model = LogisticBinaryModel(l2=float(settings["l2"])).fit(
+                panel_train,
+                feature_cols,
+                "target_20d_excess_sector_up",
+            )
+            panel_short_q_models = _fit_quantile_quintet(
+                panel_train,
+                feature_cols=feature_cols,
+                target_col="excess_ret_1_vs_mkt",
+                l2=float(settings["l2"]),
+            )
+            panel_mid_q_models = _fit_quantile_quintet(
+                panel_train,
+                feature_cols=feature_cols,
+                target_col="excess_ret_20_vs_sector",
+                l2=float(settings["l2"]),
+            )
+
+            block_end = min(block_start + max(1, int(retrain_days)), len(dates) - 1)
+            for idx in range(block_start, block_end):
+                date = dates[idx]
+                next_date = dates[idx + 1]
+                market_row = market_valid[market_valid["date"] == date].copy()
+                if market_row.empty:
+                    continue
+                mkt_short = float(market_short_model.predict_proba(market_row, market_feature_cols)[0])
+                mkt_five = float(market_five_model.predict_proba(market_row, market_feature_cols)[0])
+                mkt_mid = float(market_mid_model.predict_proba(market_row, market_feature_cols)[0])
+                market_state, cross_section = _build_market_and_cross_section_from_prebuilt_frame(
+                    market_frame=market_valid[market_valid["date"] <= date].copy(),
+                    market_short_prob=mkt_short,
+                    market_five_prob=mkt_five,
+                    market_mid_prob=mkt_mid,
+                )
+                panel_row = panel[panel["date"] == date].copy()
+                stock_states, scored_rows = _build_stock_states_from_panel_slice(
+                    panel_row=panel_row,
+                    feature_cols=feature_cols,
+                    short_model=panel_short_model,
+                    five_model=panel_five_model,
+                    mid_model=panel_mid_model,
+                    short_q_models=panel_short_q_models,
+                    mid_q_models=panel_mid_q_models,
+                )
+                if not stock_states:
+                    continue
+                grouped: dict[str, list[StockForecastState]] = {}
+                for stock_state in stock_states:
+                    grouped.setdefault(stock_state.sector, []).append(stock_state)
+                sector_states: list[SectorForecastState] = []
+                for sector, items in grouped.items():
+                    n = max(1, len(items))
+                    up5 = sum(item.up_5d_prob for item in items) / n
+                    up20 = sum(item.up_20d_prob for item in items) / n
+                    rel = sum(item.up_20d_prob - 0.5 for item in items) / n
+                    rotation = sum(abs(item.up_5d_prob - item.up_20d_prob) for item in items) / n
+                    crowding = sum(max(0.0, item.up_20d_prob - 0.5) for item in items) / n
+                    sector_states.append(
+                        SectorForecastState(
+                            sector=sector,
+                            up_5d_prob=float(up5),
+                            up_20d_prob=float(up20),
+                            relative_strength=float(rel),
+                            rotation_speed=float(_clip(rotation, 0.0, 1.0)),
+                            crowding_score=float(_clip(crowding, 0.0, 1.0)),
+                        )
+                    )
+                composite_state = compose_state(
+                    market=market_state,
+                    sectors=sector_states,
+                    stocks=stock_states,
+                    cross_section=cross_section,
+                )
+                steps.append(
+                    _TrajectoryStep(
+                        date=date,
+                        next_date=next_date,
+                        composite_state=composite_state,
+                        stock_states=stock_states,
+                        horizon_metrics=_panel_horizon_metrics(scored_rows),
+                    )
+                )
+
+        return _BacktestTrajectory(prepared=prepared, steps=steps)
+
+
+def _make_forecast_backend(name: str | None) -> ForecastBackend:
+    backend = (str(name).strip().lower() if name is not None else "linear") or "linear"
+    if backend == "linear":
+        return LinearForecastBackend()
+    raise ValueError(f"Unsupported forecast backend: {backend}")
+
+
+def _trajectory_cache_key(
+    *,
+    config_path: str,
+    source: str | None,
+    universe_file: str | None,
+    universe_limit: int | None,
+    retrain_days: int,
+    forecast_backend: str,
+) -> str:
+    payload = {
+        "version": "v2-trajectory-cache-1",
+        "config_path": str(Path(config_path).resolve()),
+        "source": "" if source is None else str(source),
+        "universe_file": "" if universe_file is None else str(Path(universe_file).resolve()),
+        "universe_limit": -1 if universe_limit is None else int(universe_limit),
+        "retrain_days": int(retrain_days),
+        "forecast_backend": str(forecast_backend),
+    }
+    raw = json.dumps(payload, sort_keys=True, ensure_ascii=False)
+    return hashlib.sha256(raw.encode("utf-8")).hexdigest()[:24]
+
+
+def _trajectory_cache_path(
+    *,
+    cache_root: str,
+    cache_key: str,
+) -> Path:
+    root = Path(str(cache_root))
+    root.mkdir(parents=True, exist_ok=True)
+    return root / f"{cache_key}.pkl"
+
+
+def _load_or_build_v2_backtest_trajectory(
+    *,
+    config_path: str,
+    source: str | None = None,
+    universe_file: str | None = None,
+    universe_limit: int | None = None,
+    retrain_days: int = 20,
+    cache_root: str = "artifacts/v2/cache",
+    refresh_cache: bool = False,
+    forecast_backend: str = "linear",
+) -> _BacktestTrajectory | None:
+    backend = _make_forecast_backend(forecast_backend)
+    cache_key = _trajectory_cache_key(
+        config_path=config_path,
+        source=source,
+        universe_file=universe_file,
+        universe_limit=universe_limit,
+        retrain_days=retrain_days,
+        forecast_backend=backend.name,
+    )
+    cache_path = _trajectory_cache_path(cache_root=cache_root, cache_key=cache_key)
+    if not refresh_cache and cache_path.exists():
+        try:
+            with cache_path.open("rb") as f:
+                cached = pickle.load(f)
+            if cached is not None:
+                return cached
+        except Exception:
+            pass
+
+    prepared = _prepare_v2_backtest_data(
+        config_path=config_path,
+        source=source,
+        universe_file=universe_file,
+        universe_limit=universe_limit,
+    )
+    if prepared is None:
+        return None
+    trajectory = _build_v2_backtest_trajectory_from_prepared(
+        prepared,
+        retrain_days=retrain_days,
+        forecast_backend=backend.name,
+    )
+    try:
+        with cache_path.open("wb") as f:
+            pickle.dump(trajectory, f, protocol=pickle.HIGHEST_PROTOCOL)
+    except Exception:
+        pass
+    return trajectory
+
+
 def _build_v2_backtest_trajectory_from_prepared(
     prepared: _PreparedV2BacktestData,
     *,
     retrain_days: int = 20,
+    forecast_backend: str = "linear",
 ) -> _BacktestTrajectory:
-    settings = prepared.settings
-    market_valid = prepared.market_valid
-    panel = prepared.panel
-    market_feature_cols = prepared.market_feature_cols
-    feature_cols = prepared.feature_cols
-    dates = prepared.dates
-    min_train_days = int(settings["min_train_days"])
-    steps: list[_TrajectoryStep] = []
-
-    for block_start in range(min_train_days, len(dates) - 1, max(1, int(retrain_days))):
-        train_dates = set(dates[:block_start])
-        market_train = market_valid[market_valid["date"].isin(train_dates)].copy()
-        if market_train.empty:
-            continue
-        market_short_model = LogisticBinaryModel(l2=float(settings["l2"])).fit(
-            market_train,
-            market_feature_cols,
-            "mkt_target_1d_up",
-        )
-        market_five_model = LogisticBinaryModel(l2=float(settings["l2"])).fit(
-            market_train,
-            market_feature_cols,
-            "mkt_target_5d_up",
-        )
-        market_mid_model = LogisticBinaryModel(l2=float(settings["l2"])).fit(
-            market_train,
-            market_feature_cols,
-            "mkt_target_20d_up",
-        )
-        panel_train = panel[panel["date"].isin(train_dates)].copy()
-        if panel_train.empty:
-            continue
-        panel_short_model = LogisticBinaryModel(l2=float(settings["l2"])).fit(
-            panel_train,
-            feature_cols,
-            "target_1d_excess_mkt_up",
-        )
-        panel_five_model = LogisticBinaryModel(l2=float(settings["l2"])).fit(
-            panel_train,
-            feature_cols,
-            "target_5d_excess_mkt_up",
-        )
-        panel_mid_model = LogisticBinaryModel(l2=float(settings["l2"])).fit(
-            panel_train,
-            feature_cols,
-            "target_20d_excess_sector_up",
-        )
-        panel_short_q_models = _fit_quantile_quintet(
-            panel_train,
-            feature_cols=feature_cols,
-            target_col="excess_ret_1_vs_mkt",
-            l2=float(settings["l2"]),
-        )
-        panel_mid_q_models = _fit_quantile_quintet(
-            panel_train,
-            feature_cols=feature_cols,
-            target_col="excess_ret_20_vs_sector",
-            l2=float(settings["l2"]),
-        )
-
-        block_end = min(block_start + max(1, int(retrain_days)), len(dates) - 1)
-        for idx in range(block_start, block_end):
-            date = dates[idx]
-            next_date = dates[idx + 1]
-            market_row = market_valid[market_valid["date"] == date].copy()
-            if market_row.empty:
-                continue
-            mkt_short = float(market_short_model.predict_proba(market_row, market_feature_cols)[0])
-            mkt_five = float(market_five_model.predict_proba(market_row, market_feature_cols)[0])
-            mkt_mid = float(market_mid_model.predict_proba(market_row, market_feature_cols)[0])
-            market_state, cross_section = _build_market_and_cross_section_from_prebuilt_frame(
-                market_frame=market_valid[market_valid["date"] <= date].copy(),
-                market_short_prob=mkt_short,
-                market_five_prob=mkt_five,
-                market_mid_prob=mkt_mid,
-            )
-            panel_row = panel[panel["date"] == date].copy()
-            stock_states, scored_rows = _build_stock_states_from_panel_slice(
-                panel_row=panel_row,
-                feature_cols=feature_cols,
-                short_model=panel_short_model,
-                five_model=panel_five_model,
-                mid_model=panel_mid_model,
-                short_q_models=panel_short_q_models,
-                mid_q_models=panel_mid_q_models,
-            )
-            if not stock_states:
-                continue
-            grouped: dict[str, list[StockForecastState]] = {}
-            for stock_state in stock_states:
-                grouped.setdefault(stock_state.sector, []).append(stock_state)
-            sector_states: list[SectorForecastState] = []
-            for sector, items in grouped.items():
-                n = max(1, len(items))
-                up5 = sum(item.up_5d_prob for item in items) / n
-                up20 = sum(item.up_20d_prob for item in items) / n
-                rel = sum(item.up_20d_prob - 0.5 for item in items) / n
-                rotation = sum(abs(item.up_5d_prob - item.up_20d_prob) for item in items) / n
-                crowding = sum(max(0.0, item.up_20d_prob - 0.5) for item in items) / n
-                sector_states.append(
-                    SectorForecastState(
-                        sector=sector,
-                        up_5d_prob=float(up5),
-                        up_20d_prob=float(up20),
-                        relative_strength=float(rel),
-                        rotation_speed=float(_clip(rotation, 0.0, 1.0)),
-                        crowding_score=float(_clip(crowding, 0.0, 1.0)),
-                    )
-                )
-            composite_state = compose_state(
-                market=market_state,
-                sectors=sector_states,
-                stocks=stock_states,
-                cross_section=cross_section,
-            )
-            steps.append(
-                _TrajectoryStep(
-                    date=date,
-                    next_date=next_date,
-                    composite_state=composite_state,
-                    stock_states=stock_states,
-                    horizon_metrics=_panel_horizon_metrics(scored_rows),
-                )
-            )
-
-    return _BacktestTrajectory(prepared=prepared, steps=steps)
+    backend = _make_forecast_backend(forecast_backend)
+    return backend.build_trajectory(prepared, retrain_days=retrain_days)
 
 
 def _execute_v2_backtest_trajectory(
@@ -1747,18 +1865,24 @@ def _run_v2_backtest_core(
     slippage_bps: float = 2.0,
     capture_learning_rows: bool = False,
     trajectory: _BacktestTrajectory | None = None,
+    cache_root: str = "artifacts/v2/cache",
+    refresh_cache: bool = False,
+    forecast_backend: str = "linear",
 ) -> tuple[V2BacktestSummary, list[dict[str, float]]]:
     _ = strategy_id
     if trajectory is None:
-        prepared = _prepare_v2_backtest_data(
+        trajectory = _load_or_build_v2_backtest_trajectory(
             config_path=config_path,
             source=source,
             universe_file=universe_file,
             universe_limit=universe_limit,
+            retrain_days=retrain_days,
+            cache_root=cache_root,
+            refresh_cache=refresh_cache,
+            forecast_backend=forecast_backend,
         )
-        if prepared is None:
+        if trajectory is None:
             return _empty_v2_backtest_result()
-        trajectory = _build_v2_backtest_trajectory_from_prepared(prepared, retrain_days=retrain_days)
     return _execute_v2_backtest_trajectory(
         trajectory,
         policy_spec=policy_spec,
@@ -1783,6 +1907,9 @@ def run_v2_backtest_live(
     commission_bps: float = 1.5,
     slippage_bps: float = 2.0,
     trajectory: _BacktestTrajectory | None = None,
+    cache_root: str = "artifacts/v2/cache",
+    refresh_cache: bool = False,
+    forecast_backend: str = "linear",
 ) -> V2BacktestSummary:
     summary, _ = _run_v2_backtest_core(
         strategy_id=strategy_id,
@@ -1797,6 +1924,9 @@ def run_v2_backtest_live(
         slippage_bps=slippage_bps,
         capture_learning_rows=False,
         trajectory=trajectory,
+        cache_root=cache_root,
+        refresh_cache=refresh_cache,
+        forecast_backend=forecast_backend,
     )
     return summary
 
@@ -1810,6 +1940,9 @@ def calibrate_v2_policy(
     universe_limit: int | None = None,
     baseline: V2BacktestSummary | None = None,
     trajectory: _BacktestTrajectory | None = None,
+    cache_root: str = "artifacts/v2/cache",
+    refresh_cache: bool = False,
+    forecast_backend: str = "linear",
 ) -> V2CalibrationResult:
     baseline_spec = PolicySpec()
     baseline = baseline or run_v2_backtest_live(
@@ -1820,6 +1953,9 @@ def calibrate_v2_policy(
         universe_limit=universe_limit,
         policy_spec=baseline_spec,
         trajectory=trajectory,
+        cache_root=cache_root,
+        refresh_cache=refresh_cache,
+        forecast_backend=forecast_backend,
     )
     candidates = [
         baseline_spec,
@@ -1846,6 +1982,9 @@ def calibrate_v2_policy(
             universe_limit=universe_limit,
             policy_spec=spec,
             trajectory=trajectory,
+            cache_root=cache_root,
+            refresh_cache=refresh_cache,
+            forecast_backend=forecast_backend,
         )
         score = float(summary.annual_return) - 0.5 * abs(float(summary.max_drawdown))
         trials.append(
@@ -1878,6 +2017,9 @@ def learn_v2_policy_model(
     l2: float = 1.0,
     baseline: V2BacktestSummary | None = None,
     trajectory: _BacktestTrajectory | None = None,
+    cache_root: str = "artifacts/v2/cache",
+    refresh_cache: bool = False,
+    forecast_backend: str = "linear",
 ) -> V2PolicyLearningResult:
     baseline = baseline or run_v2_backtest_live(
         strategy_id=strategy_id,
@@ -1886,6 +2028,9 @@ def learn_v2_policy_model(
         universe_file=universe_file,
         universe_limit=universe_limit,
         trajectory=trajectory,
+        cache_root=cache_root,
+        refresh_cache=refresh_cache,
+        forecast_backend=forecast_backend,
     )
     _, rows = _run_v2_backtest_core(
         strategy_id=strategy_id,
@@ -1895,6 +2040,9 @@ def learn_v2_policy_model(
         universe_limit=universe_limit,
         capture_learning_rows=True,
         trajectory=trajectory,
+        cache_root=cache_root,
+        refresh_cache=refresh_cache,
+        forecast_backend=forecast_backend,
     )
     feature_names = _policy_feature_names()
     if not rows:
@@ -1919,6 +2067,9 @@ def learn_v2_policy_model(
             universe_limit=universe_limit,
             learned_policy=model,
             trajectory=trajectory,
+            cache_root=cache_root,
+            refresh_cache=refresh_cache,
+            forecast_backend=forecast_backend,
         )
         return V2PolicyLearningResult(model=model, baseline=baseline, learned=learned_summary)
 
@@ -1956,6 +2107,9 @@ def learn_v2_policy_model(
         universe_limit=universe_limit,
         learned_policy=model,
         trajectory=trajectory,
+        cache_root=cache_root,
+        refresh_cache=refresh_cache,
+        forecast_backend=forecast_backend,
     )
     return V2PolicyLearningResult(
         model=model,
@@ -2012,14 +2166,19 @@ def run_v2_research_workflow(
     universe_limit: int | None = None,
     skip_calibration: bool = False,
     skip_learning: bool = False,
+    cache_root: str = "artifacts/v2/cache",
+    refresh_cache: bool = False,
+    forecast_backend: str = "linear",
 ) -> tuple[V2BacktestSummary, V2CalibrationResult, V2PolicyLearningResult]:
-    prepared = _prepare_v2_backtest_data(
+    trajectory = _load_or_build_v2_backtest_trajectory(
         config_path=config_path,
         source=source,
         universe_file=universe_file,
         universe_limit=universe_limit,
+        cache_root=cache_root,
+        refresh_cache=refresh_cache,
+        forecast_backend=forecast_backend,
     )
-    trajectory = None if prepared is None else _build_v2_backtest_trajectory_from_prepared(prepared)
     baseline = run_v2_backtest_live(
         strategy_id=strategy_id,
         config_path=config_path,
@@ -2027,6 +2186,9 @@ def run_v2_research_workflow(
         universe_file=universe_file,
         universe_limit=universe_limit,
         trajectory=trajectory,
+        cache_root=cache_root,
+        refresh_cache=refresh_cache,
+        forecast_backend=forecast_backend,
     )
     calibration = (
         _baseline_only_calibration(baseline)
@@ -2039,6 +2201,9 @@ def run_v2_research_workflow(
             universe_limit=universe_limit,
             baseline=baseline,
             trajectory=trajectory,
+            cache_root=cache_root,
+            refresh_cache=refresh_cache,
+            forecast_backend=forecast_backend,
         )
     )
     learning = (
@@ -2052,6 +2217,9 @@ def run_v2_research_workflow(
             universe_limit=universe_limit,
             baseline=baseline,
             trajectory=trajectory,
+            cache_root=cache_root,
+            refresh_cache=refresh_cache,
+            forecast_backend=forecast_backend,
         )
     )
     return baseline, calibration, learning

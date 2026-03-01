@@ -48,6 +48,9 @@ def build_parser() -> argparse.ArgumentParser:
     research.add_argument("--report", default="reports/v2_research_report.md", help="Markdown report output path")
     research.add_argument("--dashboard", default="reports/v2_research_dashboard.html", help="HTML dashboard output path")
     research.add_argument("--artifact-root", default="artifacts/v2", help="Artifact output root for research runs")
+    research.add_argument("--cache-root", default="artifacts/v2/cache", help="On-disk cache root for prepared data and trajectories")
+    research.add_argument("--refresh-cache", action="store_true", help="Ignore existing cached trajectory and rebuild it")
+    research.add_argument("--forecast-backend", default="linear", help="Forecast backend id for research backtests")
     research.add_argument("--light", action="store_true", help="Run baseline-only light research mode")
     research.add_argument("--skip-calibration", action="store_true", help="Skip policy calibration stage")
     research.add_argument("--skip-learning", action="store_true", help="Skip learned policy stage")
@@ -117,6 +120,9 @@ def main() -> int:
             universe_limit=args.universe_limit,
             skip_calibration=skip_calibration,
             skip_learning=skip_learning,
+            cache_root=str(args.cache_root),
+            refresh_cache=bool(args.refresh_cache),
+            forecast_backend=str(args.forecast_backend),
         )
         artifacts = None
         if not skip_learning:
