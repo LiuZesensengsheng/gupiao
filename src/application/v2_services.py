@@ -350,6 +350,7 @@ def _build_stock_states_from_panel_slice(
                 ),
                 event_impact_score=event_impact,
                 tradeability_score=float(tradeability),
+                alpha_score=float(item["score"]),
                 tradability_status=status,
             )
         )
@@ -629,6 +630,15 @@ def _build_stock_states_from_rows(
                 ),
                 event_impact_score=event_impact,
                 tradeability_score=float(tradeability),
+                alpha_score=float(
+                    _distributional_score(
+                        short_prob=float(row.short_prob),
+                        five_prob=float(five_prob),
+                        mid_prob=float(row.mid_prob),
+                        short_expected_ret=float(short_expected_ret),
+                        mid_expected_ret=float(mid_expected_ret),
+                    )
+                ),
                 tradability_status=status,
             )
         )
@@ -694,6 +704,10 @@ def _ranked_sector_budgets(sectors: Iterable[SectorForecastState], *, target_exp
 
 
 def _stock_policy_score(stock: StockForecastState) -> float:
+    alpha_score = float(getattr(stock, "alpha_score", 0.0))
+    if abs(alpha_score) > 1e-12:
+        penalty = float(_status_score_penalty(getattr(stock, "tradability_status", "normal")))
+        return float(alpha_score - penalty)
     return float(_alpha_score_components(stock)["alpha_score"])
 
 
@@ -961,7 +975,10 @@ def apply_policy(
         intraday_t_allowed=bool(intraday_t_allowed),
         turnover_cap=float(turnover_cap),
         sector_budgets=sector_budgets,
+        desired_sector_budgets=desired_sector_budgets,
         symbol_target_weights=symbol_target_weights,
+        desired_symbol_target_weights=desired_symbol_target_weights,
+        execution_notes=execution_notes,
         risk_notes=risk_notes,
     )
 

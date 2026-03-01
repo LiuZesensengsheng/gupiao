@@ -38,6 +38,7 @@ class StockForecastState:
     excess_vs_sector_prob: float
     event_impact_score: float
     tradeability_score: float
+    alpha_score: float = 0.0
     tradability_status: str = "normal"
 
 
@@ -93,7 +94,10 @@ class PolicyDecision:
     intraday_t_allowed: bool
     turnover_cap: float
     sector_budgets: Dict[str, float] = field(default_factory=dict)
+    desired_sector_budgets: Dict[str, float] = field(default_factory=dict)
     symbol_target_weights: Dict[str, float] = field(default_factory=dict)
+    desired_symbol_target_weights: Dict[str, float] = field(default_factory=dict)
+    execution_notes: List[str] = field(default_factory=list)
     risk_notes: List[str] = field(default_factory=list)
 
 

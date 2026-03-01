@@ -359,8 +359,11 @@ def test_v2_policy_blocks_new_entry_when_data_is_insufficient() -> None:
         )
     )
 
+    assert decision.desired_symbol_target_weights.get("AAA", 0.0) > 0.0
     assert "AAA" not in decision.symbol_target_weights
+    assert "AAA" not in decision.sector_budgets
     assert any("new entry blocked" in note for note in decision.risk_notes)
+    assert any("new entry blocked" in note for note in decision.execution_notes)
 
 
 def test_v2_policy_suppresses_small_rebalance_gap() -> None:
