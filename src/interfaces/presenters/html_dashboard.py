@@ -1495,11 +1495,11 @@ def write_v2_research_dashboard(
       <div class="card">
         <h2>回测结果</h2>
         <table>
-          <thead><tr><th>方案</th><th>开始</th><th>结束</th><th>交易日</th><th>总收益</th><th>年化</th><th>回撤</th><th>换手</th><th>成本</th></tr></thead>
+          <thead><tr><th>方案</th><th>开始</th><th>结束</th><th>交易日</th><th>总收益</th><th>年化</th><th>回撤</th><th>换手</th><th>平均RankIC</th><th>头尾价差</th><th>TopK命中率</th><th>成本</th></tr></thead>
           <tbody>
-            <tr><td>基线方案</td><td>{escape(baseline.start_date or 'NA')}</td><td>{escape(baseline.end_date or 'NA')}</td><td>{baseline.n_days}</td><td>{_pct(baseline.total_return)}</td><td>{_pct(baseline.annual_return)}</td><td>{_pct(baseline.max_drawdown)}</td><td>{_pct(baseline.avg_turnover)}</td><td>{_pct(baseline.total_cost)}</td></tr>
-            <tr><td>校准方案</td><td>{escape(calibration.calibrated.start_date or 'NA')}</td><td>{escape(calibration.calibrated.end_date or 'NA')}</td><td>{calibration.calibrated.n_days}</td><td>{_pct(calibration.calibrated.total_return)}</td><td>{_pct(calibration.calibrated.annual_return)}</td><td>{_pct(calibration.calibrated.max_drawdown)}</td><td>{_pct(calibration.calibrated.avg_turnover)}</td><td>{_pct(calibration.calibrated.total_cost)}</td></tr>
-            <tr><td>学习方案</td><td>{escape(learning.learned.start_date or 'NA')}</td><td>{escape(learning.learned.end_date or 'NA')}</td><td>{learning.learned.n_days}</td><td>{_pct(learning.learned.total_return)}</td><td>{_pct(learning.learned.annual_return)}</td><td>{_pct(learning.learned.max_drawdown)}</td><td>{_pct(learning.learned.avg_turnover)}</td><td>{_pct(learning.learned.total_cost)}</td></tr>
+            <tr><td>基线方案</td><td>{escape(baseline.start_date or 'NA')}</td><td>{escape(baseline.end_date or 'NA')}</td><td>{baseline.n_days}</td><td>{_pct(baseline.total_return)}</td><td>{_pct(baseline.annual_return)}</td><td>{_pct(baseline.max_drawdown)}</td><td>{_pct(baseline.avg_turnover)}</td><td>{_num(baseline.avg_rank_ic, 3)}</td><td>{_pct(baseline.avg_top_bottom_spread)}</td><td>{_pct(baseline.avg_top_k_hit_rate)}</td><td>{_pct(baseline.total_cost)}</td></tr>
+            <tr><td>校准方案</td><td>{escape(calibration.calibrated.start_date or 'NA')}</td><td>{escape(calibration.calibrated.end_date or 'NA')}</td><td>{calibration.calibrated.n_days}</td><td>{_pct(calibration.calibrated.total_return)}</td><td>{_pct(calibration.calibrated.annual_return)}</td><td>{_pct(calibration.calibrated.max_drawdown)}</td><td>{_pct(calibration.calibrated.avg_turnover)}</td><td>{_num(calibration.calibrated.avg_rank_ic, 3)}</td><td>{_pct(calibration.calibrated.avg_top_bottom_spread)}</td><td>{_pct(calibration.calibrated.avg_top_k_hit_rate)}</td><td>{_pct(calibration.calibrated.total_cost)}</td></tr>
+            <tr><td>学习方案</td><td>{escape(learning.learned.start_date or 'NA')}</td><td>{escape(learning.learned.end_date or 'NA')}</td><td>{learning.learned.n_days}</td><td>{_pct(learning.learned.total_return)}</td><td>{_pct(learning.learned.annual_return)}</td><td>{_pct(learning.learned.max_drawdown)}</td><td>{_pct(learning.learned.avg_turnover)}</td><td>{_num(learning.learned.avg_rank_ic, 3)}</td><td>{_pct(learning.learned.avg_top_bottom_spread)}</td><td>{_pct(learning.learned.avg_top_k_hit_rate)}</td><td>{_pct(learning.learned.total_cost)}</td></tr>
           </tbody>
         </table>
       </div>
@@ -1529,6 +1529,8 @@ def write_v2_research_dashboard(
           <tr><th>换手上限拟合R²</th><td>{_num(learning.model.train_r2_turnover, 4)}</td></tr>
           <tr><th>学习方案平均成交率</th><td>{_pct(learning.learned.avg_fill_ratio)}</td></tr>
           <tr><th>学习方案平均滑点</th><td>{_num(learning.learned.avg_slippage_bps, 1)}bp</td></tr>
+          <tr><th>学习方案平均RankIC</th><td>{_num(learning.learned.avg_rank_ic, 3)}</td></tr>
+          <tr><th>学习方案TopK命中率</th><td>{_pct(learning.learned.avg_top_k_hit_rate)}</td></tr>
         </table>
       </div>
       <div class="card">

@@ -167,3 +167,12 @@ def test_publish_artifacts_writes_and_loads_latest_policy(tmp_path: Path) -> Non
     assert loaded is not None
     assert loaded.train_rows == 88
     assert loaded.exposure_coef == [0.1, 0.2]
+
+
+def test_backtest_summary_carries_cross_section_metrics() -> None:
+    summary = _make_backtest(0.18, 0.16)
+
+    assert summary.avg_rank_ic == 0.0
+    assert summary.avg_top_decile_return == 0.0
+    assert summary.avg_top_bottom_spread == 0.0
+    assert summary.avg_top_k_hit_rate == 0.0

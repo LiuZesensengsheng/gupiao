@@ -145,22 +145,28 @@ def _r2_score(y_true: np.ndarray, y_pred: np.ndarray) -> float:
 @dataclass(frozen=True)
 class _ReturnQuantileProfile:
     expected_return: float
+    q10: float
+    q30: float
     q20: float
     q50: float
+    q70: float
     q80: float
+    q90: float
 
 
-def _fit_quantile_triplet(
+def _fit_quantile_quintet(
     df: pd.DataFrame,
     *,
     feature_cols: list[str],
     target_col: str,
     l2: float,
-) -> tuple[QuantileLinearModel, QuantileLinearModel, QuantileLinearModel]:
+) -> tuple[QuantileLinearModel, QuantileLinearModel, QuantileLinearModel, QuantileLinearModel, QuantileLinearModel]:
     return (
-        QuantileLinearModel(quantile=0.20, l2=l2).fit(df, feature_cols, target_col),
+        QuantileLinearModel(quantile=0.10, l2=l2).fit(df, feature_cols, target_col),
+        QuantileLinearModel(quantile=0.30, l2=l2).fit(df, feature_cols, target_col),
         QuantileLinearModel(quantile=0.50, l2=l2).fit(df, feature_cols, target_col),
-        QuantileLinearModel(quantile=0.80, l2=l2).fit(df, feature_cols, target_col),
+        QuantileLinearModel(quantile=0.70, l2=l2).fit(df, feature_cols, target_col),
+        QuantileLinearModel(quantile=0.90, l2=l2).fit(df, feature_cols, target_col),
     )
 
 
@@ -168,18 +174,21 @@ def _predict_quantile_profile(
     row: pd.DataFrame,
     *,
     feature_cols: list[str],
-    q_models: tuple[QuantileLinearModel, QuantileLinearModel, QuantileLinearModel],
+    q_models: tuple[QuantileLinearModel, QuantileLinearModel, QuantileLinearModel, QuantileLinearModel, QuantileLinearModel],
 ) -> _ReturnQuantileProfile:
-    q20 = float(q_models[0].predict(row, feature_cols)[0])
-    q50 = float(q_models[1].predict(row, feature_cols)[0])
-    q80 = float(q_models[2].predict(row, feature_cols)[0])
-    ordered = sorted([q20, q50, q80])
-    q20, q50, q80 = float(ordered[0]), float(ordered[1]), float(ordered[2])
+    raw = [float(model.predict(row, feature_cols)[0]) for model in q_models]
+    q10, q30, q50, q70, q90 = [float(x) for x in np.maximum.accumulate(np.asarray(raw, dtype=float))]
+    q20 = float(0.5 * (q10 + q30))
+    q80 = float(0.5 * (q70 + q90))
     return _ReturnQuantileProfile(
-        expected_return=float(0.25 * q20 + 0.5 * q50 + 0.25 * q80),
+        expected_return=float(0.10 * q10 + 0.20 * q30 + 0.40 * q50 + 0.20 * q70 + 0.10 * q90),
+        q10=q10,
+        q30=q30,
         q20=q20,
         q50=q50,
+        q70=q70,
         q80=q80,
+        q90=q90,
     )
 
 
@@ -203,11 +212,11 @@ def _build_stock_states_from_panel_slice(
     feature_cols: list[str],
     short_model: LogisticBinaryModel,
     mid_model: LogisticBinaryModel,
-    short_q_models: tuple[QuantileLinearModel, QuantileLinearModel, QuantileLinearModel],
-    mid_q_models: tuple[QuantileLinearModel, QuantileLinearModel, QuantileLinearModel],
-) -> list[StockForecastState]:
+    short_q_models: tuple[QuantileLinearModel, QuantileLinearModel, QuantileLinearModel, QuantileLinearModel, QuantileLinearModel],
+    mid_q_models: tuple[QuantileLinearModel, QuantileLinearModel, QuantileLinearModel, QuantileLinearModel, QuantileLinearModel],
+) -> tuple[list[StockForecastState], pd.DataFrame]:
     if panel_row.empty:
-        return []
+        return [], pd.DataFrame()
 
     short_probs = short_model.predict_proba(panel_row, feature_cols)
     mid_probs = mid_model.predict_proba(panel_row, feature_cols)
@@ -255,6 +264,7 @@ def _build_stock_states_from_panel_slice(
         sector: sector_mid_total[sector] / max(1, sector_counts[sector])
         for sector in sector_mid_total
     }
+    scored_rows: list[dict[str, float | str]] = []
     out: list[StockForecastState] = []
     for item in interim_rows:
         short_prob = float(item["short_prob"])
@@ -286,6 +296,17 @@ def _build_stock_states_from_panel_slice(
                 tradeability_score=float(tradeability),
             )
         )
+        realized_mid = np.nan
+        matched = panel_row[panel_row["symbol"] == str(item["symbol"])]
+        if not matched.empty:
+            realized_mid = float(matched.iloc[0].get("fwd_ret_20", np.nan))
+        scored_rows.append(
+            {
+                "symbol": str(item["symbol"]),
+                "score": float(item["score"]),
+                "realized_ret": float(realized_mid),
+            }
+        )
     out.sort(
         key=lambda stock: (
             _distributional_score(
@@ -299,7 +320,32 @@ def _build_stock_states_from_panel_slice(
         ),
         reverse=True,
     )
-    return out
+    return out, pd.DataFrame(scored_rows)
+
+
+def _panel_slice_metrics(
+    scored_rows: pd.DataFrame,
+    *,
+    top_k: int = 3,
+) -> tuple[float, float, float, float]:
+    if scored_rows.empty:
+        return 0.0, 0.0, 0.0, 0.0
+    frame = scored_rows.dropna(subset=["score", "realized_ret"]).copy()
+    if len(frame) < 2:
+        return 0.0, 0.0, 0.0, 0.0
+    rank_ic = float(frame["score"].corr(frame["realized_ret"], method="spearman"))
+    if rank_ic != rank_ic:
+        rank_ic = 0.0
+    bucket_n = max(1, int(np.ceil(len(frame) * 0.1)))
+    ranked = frame.sort_values("score", ascending=False).reset_index(drop=True)
+    top_bucket = ranked.head(bucket_n)
+    bottom_bucket = ranked.tail(bucket_n)
+    top_decile_return = float(top_bucket["realized_ret"].mean()) if not top_bucket.empty else 0.0
+    bottom_return = float(bottom_bucket["realized_ret"].mean()) if not bottom_bucket.empty else 0.0
+    top_bottom_spread = float(top_decile_return - bottom_return)
+    top_k_n = max(1, min(int(top_k), len(ranked)))
+    top_k_hit_rate = float((ranked.head(top_k_n)["realized_ret"] > 0.0).mean())
+    return rank_ic, top_decile_return, top_bottom_spread, top_k_hit_rate
 
 
 def build_strategy_snapshot(
@@ -891,6 +937,10 @@ def _to_v2_backtest_summary(
     gross_returns: list[float],
     fill_ratios: list[float],
     slippage_bps: list[float],
+    rank_ics: list[float] | None = None,
+    top_decile_returns: list[float] | None = None,
+    top_bottom_spreads: list[float] | None = None,
+    top_k_hit_rates: list[float] | None = None,
     dates: list[pd.Timestamp],
 ) -> V2BacktestSummary:
     if not returns or not dates:
@@ -903,6 +953,10 @@ def _to_v2_backtest_summary(
             max_drawdown=0.0,
             avg_turnover=0.0,
             total_cost=0.0,
+            avg_rank_ic=0.0,
+            avg_top_decile_return=0.0,
+            avg_top_bottom_spread=0.0,
+            avg_top_k_hit_rate=0.0,
         )
     ret_arr = np.asarray(returns, dtype=float)
     nav = np.cumprod(1.0 + ret_arr)
@@ -930,6 +984,10 @@ def _to_v2_backtest_summary(
         trade_days=int(sum(1 for item in turnovers if float(item) > 1e-9)),
         avg_fill_ratio=float(np.mean(fill_ratios)) if fill_ratios else 0.0,
         avg_slippage_bps=float(np.mean(slippage_bps)) if slippage_bps else 0.0,
+        avg_rank_ic=float(np.mean(rank_ics)) if rank_ics else 0.0,
+        avg_top_decile_return=float(np.mean(top_decile_returns)) if top_decile_returns else 0.0,
+        avg_top_bottom_spread=float(np.mean(top_bottom_spreads)) if top_bottom_spreads else 0.0,
+        avg_top_k_hit_rate=float(np.mean(top_k_hit_rates)) if top_k_hit_rates else 0.0,
         nav_curve=[float(x) for x in nav.tolist()],
         curve_dates=[str(item.date()) for item in dates],
     )
@@ -1146,6 +1204,10 @@ def _run_v2_backtest_core(
     costs: list[float] = []
     fill_ratios: list[float] = []
     slippage_cost_bps: list[float] = []
+    rank_ics: list[float] = []
+    top_decile_returns: list[float] = []
+    top_bottom_spreads: list[float] = []
+    top_k_hit_rates: list[float] = []
     out_dates: list[pd.Timestamp] = []
     prev_weights: dict[str, float] = {}
     prev_cash = 1.0
@@ -1179,13 +1241,13 @@ def _run_v2_backtest_core(
             feature_cols,
             "target_20d_up",
         )
-        panel_short_q_models = _fit_quantile_triplet(
+        panel_short_q_models = _fit_quantile_quintet(
             panel_train,
             feature_cols=feature_cols,
             target_col="fwd_ret_1",
             l2=float(settings["l2"]),
         )
-        panel_mid_q_models = _fit_quantile_triplet(
+        panel_mid_q_models = _fit_quantile_quintet(
             panel_train,
             feature_cols=feature_cols,
             target_col="fwd_ret_20",
@@ -1207,7 +1269,7 @@ def _run_v2_backtest_core(
                 market_mid_prob=mkt_mid,
             )
             panel_row = panel[panel["date"] == date].copy()
-            stock_states = _build_stock_states_from_panel_slice(
+            stock_states, scored_rows = _build_stock_states_from_panel_slice(
                 panel_row=panel_row,
                 feature_cols=feature_cols,
                 short_model=panel_short_model,
@@ -1217,6 +1279,11 @@ def _run_v2_backtest_core(
             )
             if not stock_states:
                 continue
+            rank_ic, top_decile_ret, top_bottom_spread, top_k_hit_rate = _panel_slice_metrics(scored_rows)
+            rank_ics.append(float(rank_ic))
+            top_decile_returns.append(float(top_decile_ret))
+            top_bottom_spreads.append(float(top_bottom_spread))
+            top_k_hit_rates.append(float(top_k_hit_rate))
 
             grouped: dict[str, list[StockForecastState]] = {}
             for stock_state in stock_states:
@@ -1317,6 +1384,10 @@ def _run_v2_backtest_core(
         gross_returns=gross_returns,
         fill_ratios=fill_ratios,
         slippage_bps=slippage_cost_bps,
+        rank_ics=rank_ics,
+        top_decile_returns=top_decile_returns,
+        top_bottom_spreads=top_bottom_spreads,
+        top_k_hit_rates=top_k_hit_rates,
         dates=out_dates,
     ), learning_rows
 

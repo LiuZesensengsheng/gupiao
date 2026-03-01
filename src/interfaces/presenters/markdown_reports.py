@@ -98,13 +98,13 @@ def write_forecast_report(
     if not pd.isna(market_forecast.short_q50) or not pd.isna(market_forecast.mid_q50):
         lines.append("### 大盘分位数")
         lines.append("")
-        lines.append("| 维度 | Q20 | Q50 | Q80 |")
-        lines.append("|---|---:|---:|---:|")
+        lines.append("| 维度 | Q10 | Q30 | Q50 | Q70 | Q90 |")
+        lines.append("|---|---:|---:|---:|---:|---:|")
         lines.append(
-            f"| 短期(1日) | {_to_percent(market_forecast.short_q20)} | {_to_percent(market_forecast.short_q50)} | {_to_percent(market_forecast.short_q80)} |"
+            f"| 短期(1日) | {_to_percent(market_forecast.short_q10)} | {_to_percent(market_forecast.short_q30)} | {_to_percent(market_forecast.short_q50)} | {_to_percent(market_forecast.short_q70)} | {_to_percent(market_forecast.short_q90)} |"
         )
         lines.append(
-            f"| 中期(20日) | {_to_percent(market_forecast.mid_q20)} | {_to_percent(market_forecast.mid_q50)} | {_to_percent(market_forecast.mid_q80)} |"
+            f"| 中期(20日) | {_to_percent(market_forecast.mid_q10)} | {_to_percent(market_forecast.mid_q30)} | {_to_percent(market_forecast.mid_q50)} | {_to_percent(market_forecast.mid_q70)} | {_to_percent(market_forecast.mid_q90)} |"
         )
         lines.append("")
     if market_forecast.short_bucket_probs or market_forecast.mid_bucket_probs:
@@ -522,12 +522,13 @@ def write_v2_research_report(
     lines.append("")
     lines.append("## 基线回测")
     lines.append("")
-    lines.append("| 开始 | 结束 | 交易日 | 总收益 | 毛收益 | 年化收益 | 年化波动 | 胜率 | 最大回撤 | 平均换手 | 平均成交率 | 平均滑点 | 总成本 |")
-    lines.append("|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|")
+    lines.append("| 开始 | 结束 | 交易日 | 总收益 | 毛收益 | 年化收益 | 年化波动 | 胜率 | 最大回撤 | 平均换手 | 平均成交率 | 平均滑点 | 平均RankIC | 头部分层收益 | 头尾价差 | TopK命中率 | 总成本 |")
+    lines.append("|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|")
     lines.append(
         f"| {baseline.start_date or 'NA'} | {baseline.end_date or 'NA'} | {baseline.n_days} | {_to_percent(baseline.total_return)} | {_to_percent(baseline.gross_total_return)} | "
         f"{_to_percent(baseline.annual_return)} | {_to_percent(baseline.annual_vol)} | {_to_percent(baseline.win_rate)} | {_to_percent(baseline.max_drawdown)} | "
-        f"{_to_percent(baseline.avg_turnover)} | {_to_percent(baseline.avg_fill_ratio)} | {_to_bp(baseline.avg_slippage_bps / 10000.0)} | {_to_percent(baseline.total_cost)} |"
+        f"{_to_percent(baseline.avg_turnover)} | {_to_percent(baseline.avg_fill_ratio)} | {_to_bp(baseline.avg_slippage_bps / 10000.0)} | "
+        f"{_to_float(baseline.avg_rank_ic, 3)} | {_to_percent(baseline.avg_top_decile_return)} | {_to_percent(baseline.avg_top_bottom_spread)} | {_to_percent(baseline.avg_top_k_hit_rate)} | {_to_percent(baseline.total_cost)} |"
     )
     lines.append("")
     lines.append("## 策略校准")
@@ -549,17 +550,19 @@ def write_v2_research_report(
         f"收缩={_to_percent(calibration.best_policy.risk_off_turnover_cap)}"
     )
     lines.append("")
-    lines.append("| 方案 | 开始 | 结束 | 交易日 | 总收益 | 年化收益 | 最大回撤 | 平均换手 | 平均成交率 | 平均滑点 | 总成本 |")
-    lines.append("|---|---|---|---:|---:|---:|---:|---:|---:|---:|---:|")
+    lines.append("| 方案 | 开始 | 结束 | 交易日 | 总收益 | 年化收益 | 最大回撤 | 平均换手 | 平均成交率 | 平均滑点 | 平均RankIC | 头部分层收益 | 头尾价差 | TopK命中率 | 总成本 |")
+    lines.append("|---|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|")
     lines.append(
         f"| 基线参数 | {calibration.baseline.start_date or 'NA'} | {calibration.baseline.end_date or 'NA'} | {calibration.baseline.n_days} | {_to_percent(calibration.baseline.total_return)} | "
         f"{_to_percent(calibration.baseline.annual_return)} | {_to_percent(calibration.baseline.max_drawdown)} | {_to_percent(calibration.baseline.avg_turnover)} | "
-        f"{_to_percent(calibration.baseline.avg_fill_ratio)} | {_to_bp(calibration.baseline.avg_slippage_bps / 10000.0)} | {_to_percent(calibration.baseline.total_cost)} |"
+        f"{_to_percent(calibration.baseline.avg_fill_ratio)} | {_to_bp(calibration.baseline.avg_slippage_bps / 10000.0)} | {_to_float(calibration.baseline.avg_rank_ic, 3)} | "
+        f"{_to_percent(calibration.baseline.avg_top_decile_return)} | {_to_percent(calibration.baseline.avg_top_bottom_spread)} | {_to_percent(calibration.baseline.avg_top_k_hit_rate)} | {_to_percent(calibration.baseline.total_cost)} |"
     )
     lines.append(
         f"| 校准参数 | {calibration.calibrated.start_date or 'NA'} | {calibration.calibrated.end_date or 'NA'} | {calibration.calibrated.n_days} | {_to_percent(calibration.calibrated.total_return)} | "
         f"{_to_percent(calibration.calibrated.annual_return)} | {_to_percent(calibration.calibrated.max_drawdown)} | {_to_percent(calibration.calibrated.avg_turnover)} | "
-        f"{_to_percent(calibration.calibrated.avg_fill_ratio)} | {_to_bp(calibration.calibrated.avg_slippage_bps / 10000.0)} | {_to_percent(calibration.calibrated.total_cost)} |"
+        f"{_to_percent(calibration.calibrated.avg_fill_ratio)} | {_to_bp(calibration.calibrated.avg_slippage_bps / 10000.0)} | {_to_float(calibration.calibrated.avg_rank_ic, 3)} | "
+        f"{_to_percent(calibration.calibrated.avg_top_decile_return)} | {_to_percent(calibration.calibrated.avg_top_bottom_spread)} | {_to_percent(calibration.calibrated.avg_top_k_hit_rate)} | {_to_percent(calibration.calibrated.total_cost)} |"
     )
     lines.append("")
     lines.append("## 学习型策略层")
@@ -569,12 +572,13 @@ def write_v2_research_report(
     lines.append(f"- 持仓数拟合R²: {_to_float(learning.model.train_r2_positions, 4)}")
     lines.append(f"- 换手上限拟合R²: {_to_float(learning.model.train_r2_turnover, 4)}")
     lines.append("")
-    lines.append("| 方案 | 开始 | 结束 | 交易日 | 总收益 | 年化收益 | 最大回撤 | 平均换手 | 平均成交率 | 平均滑点 | 总成本 |")
-    lines.append("|---|---|---|---:|---:|---:|---:|---:|---:|---:|---:|")
+    lines.append("| 方案 | 开始 | 结束 | 交易日 | 总收益 | 年化收益 | 最大回撤 | 平均换手 | 平均成交率 | 平均滑点 | 平均RankIC | 头部分层收益 | 头尾价差 | TopK命中率 | 总成本 |")
+    lines.append("|---|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|")
     lines.append(
         f"| 学习型策略 | {learning.learned.start_date or 'NA'} | {learning.learned.end_date or 'NA'} | {learning.learned.n_days} | {_to_percent(learning.learned.total_return)} | "
         f"{_to_percent(learning.learned.annual_return)} | {_to_percent(learning.learned.max_drawdown)} | {_to_percent(learning.learned.avg_turnover)} | "
-        f"{_to_percent(learning.learned.avg_fill_ratio)} | {_to_bp(learning.learned.avg_slippage_bps / 10000.0)} | {_to_percent(learning.learned.total_cost)} |"
+        f"{_to_percent(learning.learned.avg_fill_ratio)} | {_to_bp(learning.learned.avg_slippage_bps / 10000.0)} | {_to_float(learning.learned.avg_rank_ic, 3)} | "
+        f"{_to_percent(learning.learned.avg_top_decile_return)} | {_to_percent(learning.learned.avg_top_bottom_spread)} | {_to_percent(learning.learned.avg_top_k_hit_rate)} | {_to_percent(learning.learned.total_cost)} |"
     )
     if artifacts:
         lines.append("")

@@ -133,6 +133,10 @@ class V2BacktestSummary:
     trade_days: int = 0
     avg_fill_ratio: float = 0.0
     avg_slippage_bps: float = 0.0
+    avg_rank_ic: float = 0.0
+    avg_top_decile_return: float = 0.0
+    avg_top_bottom_spread: float = 0.0
+    avg_top_k_hit_rate: float = 0.0
     nav_curve: List[float] = field(default_factory=list)
     curve_dates: List[str] = field(default_factory=list)
 

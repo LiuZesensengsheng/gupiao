@@ -25,15 +25,20 @@ SHORT_BUCKET_LABELS = ["大跌", "小跌", "震荡", "小涨", "大涨"]
 MID_BUCKET_LABELS = ["大跌", "小跌", "震荡", "小涨", "大涨"]
 SHORT_BUCKET_REPRESENTATIVES = [-0.04, -0.0125, 0.0, 0.0125, 0.04]
 MID_BUCKET_REPRESENTATIVES = [-0.16, -0.06, 0.0, 0.06, 0.16]
+QUANTILE_LEVELS = (0.10, 0.30, 0.50, 0.70, 0.90)
 
 
 @dataclass(frozen=True)
 class ReturnBucketProfile:
     bucket_probs: list[float]
     expected_return: float
+    q10: float
+    q30: float
     q20: float
     q50: float
+    q70: float
     q80: float
+    q90: float
 
 
 def _fit_latest_model(
@@ -98,23 +103,27 @@ def _latest_row_with_features(df: pd.DataFrame, feature_cols: list[str]) -> pd.S
 def _bucket_probs_from_quantiles(
     *,
     thresholds: Sequence[float],
-    q20: float,
+    q10: float,
+    q30: float,
     q50: float,
-    q80: float,
+    q70: float,
+    q90: float,
 ) -> list[float]:
-    step_lo = max(1e-6, abs(float(q50) - float(q20)))
-    step_hi = max(1e-6, abs(float(q80) - float(q50)))
+    step_lo = max(1e-6, abs(float(q30) - float(q10)))
+    step_hi = max(1e-6, abs(float(q90) - float(q70)))
     x_points = np.asarray(
         [
-            float(q20 - 2.0 * step_lo),
-            float(q20),
+            float(q10 - 1.5 * step_lo),
+            float(q10),
+            float(q30),
             float(q50),
-            float(q80),
-            float(q80 + 2.0 * step_hi),
+            float(q70),
+            float(q90),
+            float(q90 + 1.5 * step_hi),
         ],
         dtype=float,
     )
-    y_points = np.asarray([0.0, 0.2, 0.5, 0.8, 1.0], dtype=float)
+    y_points = np.asarray([0.0, 0.1, 0.3, 0.5, 0.7, 0.9, 1.0], dtype=float)
     finite_edges = [float(edge) for edge in thresholds]
     cdf_values = [0.0]
     for edge in finite_edges:
@@ -146,35 +155,44 @@ def estimate_return_quantiles(
         return ReturnBucketProfile(
             bucket_probs=[float(x) for x in fallback],
             expected_return=mid,
+            q10=mid,
+            q30=mid,
             q20=mid,
             q50=mid,
+            q70=mid,
             q80=mid,
+            q90=mid,
         )
 
     latest = frame.dropna(subset=feature_cols).sort_values("date").iloc[[-1]]
-    q20_model = QuantileLinearModel(quantile=0.20, l2=l2).fit(frame, feature_cols, return_col)
-    q50_model = QuantileLinearModel(quantile=0.50, l2=l2).fit(frame, feature_cols, return_col)
-    q80_model = QuantileLinearModel(quantile=0.80, l2=l2).fit(frame, feature_cols, return_col)
-
-    q20 = float(q20_model.predict(latest, feature_cols)[0])
-    q50 = float(q50_model.predict(latest, feature_cols)[0])
-    q80 = float(q80_model.predict(latest, feature_cols)[0])
-    ordered = sorted([q20, q50, q80])
-    q20, q50, q80 = float(ordered[0]), float(ordered[1]), float(ordered[2])
+    q_models = [
+        QuantileLinearModel(quantile=quantile, l2=l2).fit(frame, feature_cols, return_col)
+        for quantile in QUANTILE_LEVELS
+    ]
+    quantiles = [float(model.predict(latest, feature_cols)[0]) for model in q_models]
+    q10, q30, q50, q70, q90 = [float(x) for x in np.maximum.accumulate(np.asarray(quantiles, dtype=float))]
+    q20 = float(0.5 * (q10 + q30))
+    q80 = float(0.5 * (q70 + q90))
 
     bucket_probs = _bucket_probs_from_quantiles(
         thresholds=thresholds,
-        q20=q20,
+        q10=q10,
+        q30=q30,
         q50=q50,
-        q80=q80,
+        q70=q70,
+        q90=q90,
     )
-    expected_return = float(0.25 * q20 + 0.5 * q50 + 0.25 * q80)
+    expected_return = float(0.10 * q10 + 0.20 * q30 + 0.40 * q50 + 0.20 * q70 + 0.10 * q90)
     return ReturnBucketProfile(
         bucket_probs=[float(x) for x in bucket_probs],
         expected_return=float(expected_return),
+        q10=float(q10),
+        q30=float(q30),
         q20=float(q20),
         q50=float(q50),
+        q70=float(q70),
         q80=float(q80),
+        q90=float(q90),
     )
 
 
@@ -211,17 +229,16 @@ def _distributional_score(
     return float(0.4 * base_score + 0.6 * dist_score)
 
 
-def _fit_quantile_triplet(
+def _fit_quantile_quintet(
     df: pd.DataFrame,
     *,
     feature_cols: list[str],
     target_col: str,
     l2: float,
-) -> tuple[QuantileLinearModel, QuantileLinearModel, QuantileLinearModel]:
-    return (
-        QuantileLinearModel(quantile=0.20, l2=l2).fit(df, feature_cols, target_col),
-        QuantileLinearModel(quantile=0.50, l2=l2).fit(df, feature_cols, target_col),
-        QuantileLinearModel(quantile=0.80, l2=l2).fit(df, feature_cols, target_col),
+) -> tuple[QuantileLinearModel, QuantileLinearModel, QuantileLinearModel, QuantileLinearModel, QuantileLinearModel]:
+    return tuple(
+        QuantileLinearModel(quantile=quantile, l2=l2).fit(df, feature_cols, target_col)
+        for quantile in QUANTILE_LEVELS
     )
 
 
@@ -230,26 +247,31 @@ def _predict_quantile_profile_from_models(
     *,
     feature_cols: list[str],
     thresholds: Sequence[float],
-    q_models: tuple[QuantileLinearModel, QuantileLinearModel, QuantileLinearModel],
+    q_models: tuple[QuantileLinearModel, QuantileLinearModel, QuantileLinearModel, QuantileLinearModel, QuantileLinearModel],
 ) -> ReturnBucketProfile:
-    q20 = float(q_models[0].predict(latest_row, feature_cols)[0])
-    q50 = float(q_models[1].predict(latest_row, feature_cols)[0])
-    q80 = float(q_models[2].predict(latest_row, feature_cols)[0])
-    ordered = sorted([q20, q50, q80])
-    q20, q50, q80 = float(ordered[0]), float(ordered[1]), float(ordered[2])
+    quantiles = [float(model.predict(latest_row, feature_cols)[0]) for model in q_models]
+    q10, q30, q50, q70, q90 = [float(x) for x in np.maximum.accumulate(np.asarray(quantiles, dtype=float))]
+    q20 = float(0.5 * (q10 + q30))
+    q80 = float(0.5 * (q70 + q90))
     bucket_probs = _bucket_probs_from_quantiles(
         thresholds=thresholds,
-        q20=q20,
+        q10=q10,
+        q30=q30,
         q50=q50,
-        q80=q80,
+        q70=q70,
+        q90=q90,
     )
-    expected_return = float(0.25 * q20 + 0.5 * q50 + 0.25 * q80)
+    expected_return = float(0.10 * q10 + 0.20 * q30 + 0.40 * q50 + 0.20 * q70 + 0.10 * q90)
     return ReturnBucketProfile(
         bucket_probs=bucket_probs,
         expected_return=expected_return,
+        q10=q10,
+        q30=q30,
         q20=q20,
         q50=q50,
+        q70=q70,
         q80=q80,
+        q90=q90,
     )
 
 
@@ -348,12 +370,20 @@ def run_quant_pipeline(
     )
     market_forecast.short_expected_ret = float(market_short_bucket.expected_return)
     market_forecast.mid_expected_ret = float(market_mid_bucket.expected_return)
+    market_forecast.short_q10 = float(market_short_bucket.q10)
+    market_forecast.short_q30 = float(market_short_bucket.q30)
     market_forecast.short_q20 = float(market_short_bucket.q20)
     market_forecast.short_q50 = float(market_short_bucket.q50)
+    market_forecast.short_q70 = float(market_short_bucket.q70)
     market_forecast.short_q80 = float(market_short_bucket.q80)
+    market_forecast.short_q90 = float(market_short_bucket.q90)
+    market_forecast.mid_q10 = float(market_mid_bucket.q10)
+    market_forecast.mid_q30 = float(market_mid_bucket.q30)
     market_forecast.mid_q20 = float(market_mid_bucket.q20)
     market_forecast.mid_q50 = float(market_mid_bucket.q50)
+    market_forecast.mid_q70 = float(market_mid_bucket.q70)
     market_forecast.mid_q80 = float(market_mid_bucket.q80)
+    market_forecast.mid_q90 = float(market_mid_bucket.q90)
     market_forecast.short_bucket_probs = list(market_short_bucket.bucket_probs)
     market_forecast.mid_bucket_probs = list(market_mid_bucket.bucket_probs)
 
@@ -376,13 +406,13 @@ def run_quant_pipeline(
 
     panel_short_model = _fit_latest_model(panel, feature_cols=feature_cols, target_col="target_1d_up", l2=l2)
     panel_mid_model = _fit_latest_model(panel, feature_cols=feature_cols, target_col="target_20d_up", l2=l2)
-    panel_short_q_models = _fit_quantile_triplet(
+    panel_short_q_models = _fit_quantile_quintet(
         panel,
         feature_cols=feature_cols,
         target_col="fwd_ret_1",
         l2=l2,
     )
-    panel_mid_q_models = _fit_quantile_triplet(
+    panel_mid_q_models = _fit_quantile_quintet(
         panel,
         feature_cols=feature_cols,
         target_col="fwd_ret_20",
@@ -463,12 +493,20 @@ def run_quant_pipeline(
                 mid_eval=panel_mid_eval,
                 short_expected_ret=float(short_bucket.expected_return),
                 mid_expected_ret=float(mid_bucket.expected_return),
+                short_q10=float(short_bucket.q10),
+                short_q30=float(short_bucket.q30),
                 short_q20=float(short_bucket.q20),
                 short_q50=float(short_bucket.q50),
+                short_q70=float(short_bucket.q70),
                 short_q80=float(short_bucket.q80),
+                short_q90=float(short_bucket.q90),
+                mid_q10=float(mid_bucket.q10),
+                mid_q30=float(mid_bucket.q30),
                 mid_q20=float(mid_bucket.q20),
                 mid_q50=float(mid_bucket.q50),
+                mid_q70=float(mid_bucket.q70),
                 mid_q80=float(mid_bucket.q80),
+                mid_q90=float(mid_bucket.q90),
                 short_bucket_probs=list(short_bucket.bucket_probs),
                 mid_bucket_probs=list(mid_bucket.bucket_probs),
             )

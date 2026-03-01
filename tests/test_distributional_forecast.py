@@ -75,6 +75,8 @@ def test_estimate_return_bucket_profile_produces_valid_distribution() -> None:
     assert len(profile_20d.bucket_probs) == 5
     assert abs(sum(profile_1d.bucket_probs) - 1.0) < 1e-6
     assert abs(sum(profile_20d.bucket_probs) - 1.0) < 1e-6
+    assert profile_1d.q10 <= profile_1d.q30 <= profile_1d.q50 <= profile_1d.q70 <= profile_1d.q90
+    assert profile_20d.q10 <= profile_20d.q30 <= profile_20d.q50 <= profile_20d.q70 <= profile_20d.q90
     assert profile_1d.q20 <= profile_1d.q50 <= profile_1d.q80
     assert profile_20d.q20 <= profile_20d.q50 <= profile_20d.q80
     assert all(prob >= 0.0 for prob in profile_1d.bucket_probs)
