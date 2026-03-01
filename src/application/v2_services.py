@@ -302,7 +302,11 @@ def _build_stock_states_from_rows(
     for row in rows:
         sector = sector_map.get(row.symbol, "其他")
         tradeability = _clip(1.0 - abs(float(row.short_prob) - float(row.mid_prob)), 0.0, 1.0)
+        short_expected_ret = _safe_float(getattr(row, "short_expected_ret", 0.0), 0.0)
+        mid_expected_ret = _safe_float(getattr(row, "mid_expected_ret", 0.0), 0.0)
         sector_excess_anchor = 0.0 if sector_strength_map is None else float(sector_strength_map.get(sector, 0.0))
+        expected_anchor = float(np.clip(mid_expected_ret / 0.20, -0.5, 0.5))
+        event_impact = float(_clip(0.5 + short_expected_ret / 0.06, 0.0, 1.0))
         out.append(
             StockForecastState(
                 symbol=row.symbol,
@@ -315,12 +319,13 @@ def _build_stock_states_from_rows(
                         float(row.mid_prob)
                         - sector_avg_mid.get(sector, float(row.mid_prob))
                         + 0.5
-                        + 0.2 * sector_excess_anchor,
+                        + 0.2 * sector_excess_anchor
+                        + 0.1 * expected_anchor,
                         0.0,
                         1.0,
                     )
                 ),
-                event_impact_score=0.0,
+                event_impact_score=event_impact,
                 tradeability_score=float(tradeability),
             )
         )

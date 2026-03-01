@@ -28,6 +28,9 @@ BASE_FEATURE_COLUMNS = [
 
 MARKET_FEATURE_COLUMNS = [f"mkt_{c}" for c in BASE_FEATURE_COLUMNS]
 
+SHORT_RETURN_BUCKET_EDGES = [-float("inf"), -0.02, -0.005, 0.005, 0.02, float("inf")]
+MID_RETURN_BUCKET_EDGES = [-float("inf"), -0.10, -0.03, 0.03, 0.10, float("inf")]
+
 
 def _safe_std(series: pd.Series, window: int) -> pd.Series:
     return series.rolling(window).std().replace(0, np.nan)
@@ -90,6 +93,18 @@ def build_features(df: pd.DataFrame) -> pd.DataFrame:
     out["fwd_ret_20"] = close.shift(-20) / close - 1.0
     out["target_1d_up"] = np.where(out["fwd_ret_1"].notna(), (out["fwd_ret_1"] > 0).astype(float), np.nan)
     out["target_20d_up"] = np.where(out["fwd_ret_20"].notna(), (out["fwd_ret_20"] > 0).astype(float), np.nan)
+    out["target_1d_bucket"] = pd.cut(
+        out["fwd_ret_1"],
+        bins=SHORT_RETURN_BUCKET_EDGES,
+        labels=False,
+        include_lowest=True,
+    ).astype("Float64")
+    out["target_20d_bucket"] = pd.cut(
+        out["fwd_ret_20"],
+        bins=MID_RETURN_BUCKET_EDGES,
+        labels=False,
+        include_lowest=True,
+    ).astype("Float64")
 
     out.replace([np.inf, -np.inf], np.nan, inplace=True)
     return out
@@ -97,10 +112,28 @@ def build_features(df: pd.DataFrame) -> pd.DataFrame:
 
 def make_market_feature_frame(df: pd.DataFrame) -> pd.DataFrame:
     feat = build_features(df)
-    keep_cols = ["date"] + BASE_FEATURE_COLUMNS + ["target_1d_up", "target_20d_up"]
+    keep_cols = [
+        "date",
+        *BASE_FEATURE_COLUMNS,
+        "fwd_ret_1",
+        "fwd_ret_20",
+        "target_1d_up",
+        "target_20d_up",
+        "target_1d_bucket",
+        "target_20d_bucket",
+    ]
     mkt = feat[keep_cols].copy()
     rename_map = {c: f"mkt_{c}" for c in BASE_FEATURE_COLUMNS}
-    rename_map.update({"target_1d_up": "mkt_target_1d_up", "target_20d_up": "mkt_target_20d_up"})
+    rename_map.update(
+        {
+            "fwd_ret_1": "mkt_fwd_ret_1",
+            "fwd_ret_20": "mkt_fwd_ret_20",
+            "target_1d_up": "mkt_target_1d_up",
+            "target_20d_up": "mkt_target_20d_up",
+            "target_1d_bucket": "mkt_target_1d_bucket",
+            "target_20d_bucket": "mkt_target_20d_bucket",
+        }
+    )
     return mkt.rename(columns=rename_map)
 
 
