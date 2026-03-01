@@ -6,6 +6,7 @@ from typing import Sequence
 import pandas as pd
 
 from src.application.use_cases import DailyFusionResult, DiscoveryResult
+from src.application.v2_contracts import DailyRunResult as V2DailyRunResult, V2BacktestSummary, V2CalibrationResult
 from src.domain.entities import BacktestMetrics, BinaryMetrics, DiscoveryRow, ForecastRow, MarketForecast
 from src.domain.policies import market_regime, target_exposure
 from src.interfaces.presenters.driver_explainer import format_driver_list
@@ -367,6 +368,157 @@ def write_discovery_report(out_path: str | Path, result: DiscoveryResult) -> Pat
     lines.append("- 你来选股、系统来择时是可行模式：把选股 alpha 与仓位/节奏 beta 分离。")
     lines.append("- 若出现 `高位巨量阴线风险`，建议降低单票仓位或等待二次确认。")
     lines.append("- 本结果为研究支持，不构成投资建议。")
+
+    report_path.write_text("\n".join(lines), encoding="utf-8")
+    return report_path
+
+
+def write_v2_daily_report(out_path: str | Path, result: V2DailyRunResult) -> Path:
+    report_path = Path(out_path)
+    report_path.parent.mkdir(parents=True, exist_ok=True)
+
+    lines: list[str] = []
+    lines.append("# V2 每日策略报告")
+    lines.append("")
+    lines.append(f"- 策略ID: {result.snapshot.strategy_id}")
+    lines.append(f"- 股票池: {result.snapshot.universe_id}")
+    lines.append(f"- 数据日期: {result.composite_state.market.as_of_date}")
+    lines.append(f"- 策略模式: {result.composite_state.strategy_mode}")
+    lines.append(f"- 风险状态: {result.composite_state.risk_regime}")
+    lines.append("")
+    lines.append("## 大盘状态")
+    lines.append("")
+    lines.append("| 指标 | 数值 |")
+    lines.append("|---|---:|")
+    lines.append(f"| 1日上涨概率 | {_to_percent(result.composite_state.market.up_1d_prob)} |")
+    lines.append(f"| 5日上涨概率 | {_to_percent(result.composite_state.market.up_5d_prob)} |")
+    lines.append(f"| 20日上涨概率 | {_to_percent(result.composite_state.market.up_20d_prob)} |")
+    lines.append(f"| 趋势状态 | {result.composite_state.market.trend_state} |")
+    lines.append(f"| 回撤风险 | {_to_percent(result.composite_state.market.drawdown_risk)} |")
+    lines.append(f"| 波动状态 | {result.composite_state.market.volatility_regime} |")
+    lines.append(f"| 流动性压力 | {_to_percent(result.composite_state.market.liquidity_stress)} |")
+    lines.append("")
+    lines.append("## 横截面状态")
+    lines.append("")
+    lines.append("| 指标 | 数值 |")
+    lines.append("|---|---:|")
+    lines.append(f"| 大小盘偏好 | {_to_float(result.composite_state.cross_section.large_vs_small_bias, 3)} |")
+    lines.append(f"| 成长价值偏好 | {_to_float(result.composite_state.cross_section.growth_vs_value_bias, 3)} |")
+    lines.append(f"| 资金强度 | {_to_float(result.composite_state.cross_section.fund_flow_strength, 3)} |")
+    lines.append(f"| 两融风险偏好 | {_to_float(result.composite_state.cross_section.margin_risk_on_score, 3)} |")
+    lines.append(f"| 宽度强度 | {_to_float(result.composite_state.cross_section.breadth_strength, 3)} |")
+    lines.append(f"| 龙头参与率 | {_to_percent(result.composite_state.cross_section.leader_participation)} |")
+    lines.append(f"| 弱势股比例 | {_to_percent(result.composite_state.cross_section.weak_stock_ratio)} |")
+    lines.append("")
+    lines.append("## 板块预算")
+    lines.append("")
+    lines.append("| 板块 | 5日概率 | 20日概率 | 相对强度 | 轮动速度 | 拥挤度 | 预算 |")
+    lines.append("|---|---:|---:|---:|---:|---:|---:|")
+    if not result.composite_state.sectors:
+        lines.append("| 无数据 | NA | NA | NA | NA | NA | NA |")
+    else:
+        for sector in result.composite_state.sectors:
+            lines.append(
+                f"| {sector.sector} | {_to_percent(sector.up_5d_prob)} | {_to_percent(sector.up_20d_prob)} | "
+                f"{_to_float(sector.relative_strength, 3)} | {_to_float(sector.rotation_speed, 3)} | "
+                f"{_to_float(sector.crowding_score, 3)} | {_to_percent(result.policy_decision.sector_budgets.get(sector.sector, 0.0))} |"
+            )
+    lines.append("")
+    lines.append("## 个股目标仓位")
+    lines.append("")
+    lines.append("| 股票 | 板块 | 1日概率 | 5日概率 | 20日概率 | 板块内超额 | 交易性 | 目标权重 |")
+    lines.append("|---|---|---:|---:|---:|---:|---:|---:|")
+    if not result.composite_state.stocks:
+        lines.append("| 无数据 | NA | NA | NA | NA | NA | NA | NA |")
+    else:
+        for stock in result.composite_state.stocks:
+            lines.append(
+                f"| {stock.symbol} | {stock.sector} | {_to_percent(stock.up_1d_prob)} | {_to_percent(stock.up_5d_prob)} | "
+                f"{_to_percent(stock.up_20d_prob)} | {_to_percent(stock.excess_vs_sector_prob)} | "
+                f"{_to_percent(stock.tradeability_score)} | {_to_percent(result.policy_decision.symbol_target_weights.get(stock.symbol, 0.0))} |"
+            )
+    lines.append("")
+    lines.append("## 策略决策")
+    lines.append("")
+    lines.append(f"- 目标总仓位: {_to_percent(result.policy_decision.target_exposure)}")
+    lines.append(f"- 目标持仓数: {result.policy_decision.target_position_count}")
+    lines.append(f"- 是否调仓: {'是' if result.policy_decision.rebalance_now else '否'}")
+    lines.append(f"- 调仓强度: {_to_percent(result.policy_decision.rebalance_intensity)}")
+    lines.append(f"- 日内T: {'允许' if result.policy_decision.intraday_t_allowed else '不允许'}")
+    lines.append(f"- 换手上限: {_to_percent(result.policy_decision.turnover_cap)}")
+    if result.policy_decision.risk_notes:
+        lines.append(f"- 风险备注: {'; '.join(result.policy_decision.risk_notes)}")
+    lines.append("")
+    lines.append("## 交易计划")
+    lines.append("")
+    lines.append("| 股票 | 动作 | 当前权重 | 目标权重 | 权重变化 | 备注 |")
+    lines.append("|---|---|---:|---:|---:|---|")
+    if not result.trade_actions:
+        lines.append("| 无数据 | NA | NA | NA | NA | NA |")
+    else:
+        for action in result.trade_actions:
+            lines.append(
+                f"| {action.symbol} | {action.action} | {_to_percent(action.current_weight)} | {_to_percent(action.target_weight)} | "
+                f"{_to_percent(action.delta_weight)} | {action.note or 'NA'} |"
+            )
+
+    report_path.write_text("\n".join(lines), encoding="utf-8")
+    return report_path
+
+
+def write_v2_research_report(
+    out_path: str | Path,
+    *,
+    strategy_id: str,
+    baseline: V2BacktestSummary,
+    calibration: V2CalibrationResult,
+) -> Path:
+    report_path = Path(out_path)
+    report_path.parent.mkdir(parents=True, exist_ok=True)
+
+    lines: list[str] = []
+    lines.append("# V2 研究回测报告")
+    lines.append("")
+    lines.append(f"- 策略ID: {strategy_id}")
+    lines.append("")
+    lines.append("## 基线回测")
+    lines.append("")
+    lines.append("| 开始 | 结束 | 交易日 | 总收益 | 年化收益 | 最大回撤 | 平均换手 | 总成本 |")
+    lines.append("|---|---|---:|---:|---:|---:|---:|---:|")
+    lines.append(
+        f"| {baseline.start_date or 'NA'} | {baseline.end_date or 'NA'} | {baseline.n_days} | {_to_percent(baseline.total_return)} | "
+        f"{_to_percent(baseline.annual_return)} | {_to_percent(baseline.max_drawdown)} | {_to_percent(baseline.avg_turnover)} | {_to_percent(baseline.total_cost)} |"
+    )
+    lines.append("")
+    lines.append("## 策略校准")
+    lines.append("")
+    lines.append(f"- 最优评分: {_to_float(calibration.best_score, 4)}")
+    lines.append(
+        f"- 风险偏好仓位: risk_on={_to_percent(calibration.best_policy.risk_on_exposure)}, "
+        f"cautious={_to_percent(calibration.best_policy.cautious_exposure)}, "
+        f"risk_off={_to_percent(calibration.best_policy.risk_off_exposure)}"
+    )
+    lines.append(
+        f"- 持仓数: risk_on={calibration.best_policy.risk_on_positions}, "
+        f"cautious={calibration.best_policy.cautious_positions}, "
+        f"risk_off={calibration.best_policy.risk_off_positions}"
+    )
+    lines.append(
+        f"- 换手上限: risk_on={_to_percent(calibration.best_policy.risk_on_turnover_cap)}, "
+        f"cautious={_to_percent(calibration.best_policy.cautious_turnover_cap)}, "
+        f"risk_off={_to_percent(calibration.best_policy.risk_off_turnover_cap)}"
+    )
+    lines.append("")
+    lines.append("| 方案 | 开始 | 结束 | 交易日 | 总收益 | 年化收益 | 最大回撤 | 平均换手 | 总成本 |")
+    lines.append("|---|---|---|---:|---:|---:|---:|---:|---:|")
+    lines.append(
+        f"| baseline | {calibration.baseline.start_date or 'NA'} | {calibration.baseline.end_date or 'NA'} | {calibration.baseline.n_days} | {_to_percent(calibration.baseline.total_return)} | "
+        f"{_to_percent(calibration.baseline.annual_return)} | {_to_percent(calibration.baseline.max_drawdown)} | {_to_percent(calibration.baseline.avg_turnover)} | {_to_percent(calibration.baseline.total_cost)} |"
+    )
+    lines.append(
+        f"| calibrated | {calibration.calibrated.start_date or 'NA'} | {calibration.calibrated.end_date or 'NA'} | {calibration.calibrated.n_days} | {_to_percent(calibration.calibrated.total_return)} | "
+        f"{_to_percent(calibration.calibrated.annual_return)} | {_to_percent(calibration.calibrated.max_drawdown)} | {_to_percent(calibration.calibrated.avg_turnover)} | {_to_percent(calibration.calibrated.total_cost)} |"
+    )
 
     report_path.write_text("\n".join(lines), encoding="utf-8")
     return report_path

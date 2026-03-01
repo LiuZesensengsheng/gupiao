@@ -1,20 +1,66 @@
 from __future__ import annotations
 
+import pandas as pd
+
 from src.application.v2_contracts import DailyRunResult, StrategySnapshot
 from src.application.v2_contracts import PolicyInput
 from src.application.v2_services import (
     apply_policy,
+    build_strategy_snapshot,
     build_trade_actions,
-    build_demo_forecast_states,
-    build_demo_snapshot,
     compose_state,
-    run_daily_v2,
     summarize_daily_run,
+)
+from src.application.v2_contracts import (
+    CrossSectionForecastState,
+    MarketForecastState,
+    SectorForecastState,
+    StockForecastState,
 )
 
 
+def _make_demo_state() -> tuple[
+    MarketForecastState,
+    list[SectorForecastState],
+    list[StockForecastState],
+    CrossSectionForecastState,
+]:
+    market = MarketForecastState(
+        as_of_date="2026-03-01",
+        up_1d_prob=0.57,
+        up_5d_prob=0.59,
+        up_20d_prob=0.61,
+        trend_state="trend",
+        drawdown_risk=0.28,
+        volatility_regime="normal",
+        liquidity_stress=0.22,
+    )
+    sectors = [
+        SectorForecastState("有色", 0.58, 0.62, 0.18, 0.42, 0.31),
+        SectorForecastState("化工", 0.55, 0.60, 0.12, 0.36, 0.27),
+        SectorForecastState("科技", 0.49, 0.53, -0.03, 0.51, 0.48),
+    ]
+    stocks = [
+        StockForecastState("000630.SZ", "有色", 0.58, 0.60, 0.64, 0.55, 0.10, 0.88),
+        StockForecastState("600160.SH", "化工", 0.56, 0.58, 0.62, 0.51, 0.07, 0.84),
+        StockForecastState("603619.SH", "化工", 0.52, 0.56, 0.57, 0.49, 0.05, 0.79),
+        StockForecastState("603516.SH", "科技", 0.47, 0.50, 0.54, 0.44, 0.03, 0.76),
+    ]
+    cross_section = CrossSectionForecastState(
+        as_of_date="2026-03-01",
+        large_vs_small_bias=0.08,
+        growth_vs_value_bias=-0.04,
+        fund_flow_strength=0.16,
+        margin_risk_on_score=0.14,
+        breadth_strength=0.21,
+        leader_participation=0.63,
+        weak_stock_ratio=0.29,
+    )
+    return market, sectors, stocks, cross_section
+
+
 def test_v2_policy_returns_bounded_exposure_and_weights() -> None:
-    market, sectors, stocks, cross_section = build_demo_forecast_states()
+    market, sectors, stocks, cross_section = _make_demo_state()
     composite_state = compose_state(
         market=market,
         sectors=sectors,
@@ -37,7 +83,7 @@ def test_v2_policy_returns_bounded_exposure_and_weights() -> None:
 
 
 def test_v2_policy_reduces_exposure_under_risk_off_inputs() -> None:
-    market, sectors, stocks, cross_section = build_demo_forecast_states()
+    market, sectors, stocks, cross_section = _make_demo_state()
     stressed_market = market.__class__(
         as_of_date=market.as_of_date,
         up_1d_prob=0.42,
@@ -79,7 +125,7 @@ def test_v2_policy_reduces_exposure_under_risk_off_inputs() -> None:
 
 
 def test_compose_state_sorts_best_sector_and_stock_first() -> None:
-    market, sectors, stocks, cross_section = build_demo_forecast_states()
+    market, sectors, stocks, cross_section = _make_demo_state()
     composite_state = compose_state(
         market=market,
         sectors=sectors,
@@ -94,7 +140,7 @@ def test_compose_state_sorts_best_sector_and_stock_first() -> None:
 
 
 def test_v2_policy_sector_budgets_are_bounded_by_target_exposure() -> None:
-    market, sectors, stocks, cross_section = build_demo_forecast_states()
+    market, sectors, stocks, cross_section = _make_demo_state()
     composite_state = compose_state(
         market=market,
         sectors=sectors,
@@ -114,14 +160,41 @@ def test_v2_policy_sector_budgets_are_bounded_by_target_exposure() -> None:
     assert set(decision.symbol_target_weights).issubset(
         {stock.symbol for stock in composite_state.stocks}
     )
+    by_sector = {}
+    for stock in composite_state.stocks:
+        if stock.symbol not in decision.symbol_target_weights:
+            continue
+        by_sector[stock.sector] = by_sector.get(stock.sector, 0.0) + decision.symbol_target_weights[stock.symbol]
+    for sector, total in by_sector.items():
+        assert total <= decision.sector_budgets.get(sector, 0.0) + 1e-9
 
 
-def test_run_daily_v2_returns_structured_summary() -> None:
-    result = run_daily_v2("swing_v2")
+def test_summarize_daily_run_returns_structured_summary() -> None:
+    market, sectors, stocks, cross_section = _make_demo_state()
+    composite_state = compose_state(
+        market=market,
+        sectors=sectors,
+        stocks=stocks,
+        cross_section=cross_section,
+    )
+    decision = apply_policy(
+        PolicyInput(
+            composite_state=composite_state,
+            current_weights={"000630.SZ": 0.20},
+            current_cash=0.80,
+            total_equity=1.0,
+        )
+    )
+    result = DailyRunResult(
+        snapshot=build_strategy_snapshot(strategy_id="swing_v2", universe_id="demo_universe"),
+        composite_state=composite_state,
+        policy_decision=decision,
+        trade_actions=build_trade_actions(decision=decision, current_weights={"000630.SZ": 0.20}),
+    )
 
     assert isinstance(result, DailyRunResult)
     assert isinstance(result.snapshot, StrategySnapshot)
-    assert result.snapshot == build_demo_snapshot("swing_v2")
+    assert result.snapshot == build_strategy_snapshot(strategy_id="swing_v2", universe_id="demo_universe")
 
     summary = summarize_daily_run(result)
     assert summary["strategy_id"] == "swing_v2"
@@ -159,3 +232,36 @@ def test_build_trade_actions_marks_buy_sell_and_hold() -> None:
     assert action_map["BBB"].action == "SELL"
     assert action_map["CCC"].action == "HOLD"
     assert action_map["DDD"].action == "HOLD"
+
+
+def test_v2_policy_allocates_within_sector_budgets_only() -> None:
+    market, _, _, cross_section = _make_demo_state()
+    sectors = [
+        type("Sector", (), {"sector": "强", "up_5d_prob": 0.60, "up_20d_prob": 0.66, "relative_strength": 0.20, "rotation_speed": 0.2, "crowding_score": 0.3})(),
+        type("Sector", (), {"sector": "弱", "up_5d_prob": 0.45, "up_20d_prob": 0.48, "relative_strength": -0.05, "rotation_speed": 0.4, "crowding_score": 0.2})(),
+    ]
+    stocks = [
+        type("Stock", (), {"symbol": "A1", "sector": "强", "up_1d_prob": 0.55, "up_5d_prob": 0.60, "up_20d_prob": 0.68, "excess_vs_sector_prob": 0.62, "event_impact_score": 0.0, "tradeability_score": 0.9})(),
+        type("Stock", (), {"symbol": "A2", "sector": "强", "up_1d_prob": 0.53, "up_5d_prob": 0.57, "up_20d_prob": 0.63, "excess_vs_sector_prob": 0.56, "event_impact_score": 0.0, "tradeability_score": 0.85})(),
+        type("Stock", (), {"symbol": "B1", "sector": "弱", "up_1d_prob": 0.61, "up_5d_prob": 0.64, "up_20d_prob": 0.70, "excess_vs_sector_prob": 0.65, "event_impact_score": 0.0, "tradeability_score": 0.95})(),
+    ]
+    composite_state = compose_state(
+        market=market,
+        sectors=sectors,
+        stocks=stocks,
+        cross_section=cross_section,
+    )
+    decision = apply_policy(
+        PolicyInput(
+            composite_state=composite_state,
+            current_weights={},
+            current_cash=1.0,
+            total_equity=1.0,
+        )
+    )
+
+    weak_total = sum(
+        weight for symbol, weight in decision.symbol_target_weights.items()
+        if symbol.startswith("B")
+    )
+    assert weak_total <= decision.sector_budgets.get("弱", 0.0) + 1e-9

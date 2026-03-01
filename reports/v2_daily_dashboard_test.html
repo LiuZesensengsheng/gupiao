@@ -1,0 +1,137 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>V2 每日策略 Dashboard</title>
+  <style>
+    :root {
+      --bg: #f6f1e8;
+      --paper: #fffaf2;
+      --ink: #1e2a2f;
+      --muted: #6c756f;
+      --line: #d8cdbd;
+      --accent: #b4472f;
+      --accent-2: #1f6b72;
+      --good: #b13232;
+      --bad: #2f66c8;
+    }
+    * { box-sizing: border-box; }
+    body { margin: 0; font-family: "Avenir Next", "PingFang SC", sans-serif; color: var(--ink); background:
+      radial-gradient(circle at top right, rgba(180,71,47,0.10), transparent 30%),
+      radial-gradient(circle at 20% 20%, rgba(31,107,114,0.08), transparent 25%),
+      var(--bg); }
+    .wrap { max-width: 1280px; margin: 0 auto; padding: 24px; }
+    .hero { background: linear-gradient(135deg, #fff9f1, #f8efe1); border: 1px solid var(--line); border-radius: 24px; padding: 24px; box-shadow: 0 18px 40px rgba(78,55,24,0.08); }
+    h1, h2 { margin: 0; }
+    h1 { font-size: 34px; letter-spacing: -0.02em; }
+    h2 { font-size: 18px; margin-bottom: 14px; }
+    .sub { margin-top: 8px; color: var(--muted); }
+    .grid { display: grid; gap: 18px; margin-top: 18px; }
+    .grid.two { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    .grid.three { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+    .card { background: var(--paper); border: 1px solid var(--line); border-radius: 22px; padding: 18px; box-shadow: 0 10px 24px rgba(40,30,10,0.05); }
+    .metric { font-size: 30px; font-weight: 700; }
+    .label { color: var(--muted); font-size: 12px; text-transform: uppercase; letter-spacing: 0.08em; }
+    .pill { display: inline-block; padding: 5px 10px; border-radius: 999px; background: rgba(180,71,47,0.10); color: var(--accent); font-size: 12px; font-weight: 700; }
+    table { width: 100%; border-collapse: collapse; }
+    th, td { padding: 10px 8px; border-bottom: 1px solid #e8dece; text-align: left; font-size: 13px; vertical-align: top; }
+    th { color: var(--muted); font-weight: 700; }
+    .score { font-weight: 700; }
+    ul { margin: 8px 0 0 18px; padding: 0; }
+    @media (max-width: 900px) {
+      .grid.two, .grid.three { grid-template-columns: 1fr; }
+      .wrap { padding: 14px; }
+      h1 { font-size: 28px; }
+    }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <section class="hero">
+      <h1>V2 每日策略 Dashboard</h1>
+      <div class="sub">策略 swing_v2 | 股票池 universe_smoke_5 | 日期 2026-02-26</div>
+      <div class="grid three">
+        <div>
+          <div class="label">策略模式</div>
+          <div class="metric">defensive</div>
+        </div>
+        <div>
+          <div class="label">风险状态</div>
+          <div class="metric">cautious</div>
+        </div>
+        <div>
+          <div class="label">目标总仓位</div>
+          <div class="metric">45.0%</div>
+        </div>
+      </div>
+    </section>
+
+    <section class="grid two">
+      <div class="card">
+        <h2>大盘状态</h2>
+        <table>
+          <tr><th>1日上涨概率</th><td>48.2%</td></tr>
+          <tr><th>5日上涨概率</th><td>40.9%</td></tr>
+          <tr><th>20日上涨概率</th><td>30.0%</td></tr>
+          <tr><th>趋势状态</th><td>risk_off</td></tr>
+          <tr><th>回撤风险</th><td>0.6%</td></tr>
+          <tr><th>波动状态</th><td>normal</td></tr>
+          <tr><th>流动性压力</th><td>48.8%</td></tr>
+        </table>
+      </div>
+      <div class="card">
+        <h2>横截面状态</h2>
+        <table>
+          <tr><th>大小盘偏好</th><td>-0.001</td></tr>
+          <tr><th>成长价值偏好</th><td>0.007</td></tr>
+          <tr><th>资金强度</th><td>0.000</td></tr>
+          <tr><th>两融风险偏好</th><td>0.000</td></tr>
+          <tr><th>宽度强度</th><td>0.012</td></tr>
+          <tr><th>龙头参与率</th><td>100.0%</td></tr>
+          <tr><th>弱势股比例</th><td>19.6%</td></tr>
+        </table>
+      </div>
+    </section>
+
+    <section class="grid two">
+      <div class="card">
+        <h2>板块预算</h2>
+        <table>
+          <thead><tr><th>板块</th><th>5日</th><th>20日</th><th>强度</th><th>轮动</th><th>拥挤</th><th>预算</th></tr></thead>
+          <tbody><tr><td>其他</td><td>55.1%</td><td>55.2%</td><td class='score' style='color:#ea5353'>+0.067</td><td>0.057</td><td>1.000</td><td>45.0%</td></tr></tbody>
+        </table>
+      </div>
+      <div class="card">
+        <h2>个股目标仓位</h2>
+        <table>
+          <thead><tr><th>股票</th><th>1日</th><th>5日</th><th>20日</th><th>板块内超额</th><th>交易性</th><th>目标</th></tr></thead>
+          <tbody><tr><td><div class='sym'>300719.SZ</div><div class='code'>其他</div></td><td>42.6%</td><td>43.2%</td><td>44.0%</td><td>63.2%</td><td>98.6%</td><td>15.0%</td></tr><tr><td><div class='sym'>688147.SH</div><div class='code'>其他</div></td><td>41.2%</td><td>42.0%</td><td>43.1%</td><td>62.3%</td><td>98.1%</td><td>15.0%</td></tr><tr><td><div class='sym'>300812.SZ</div><div class='code'>其他</div></td><td>42.6%</td><td>38.3%</td><td>31.8%</td><td>51.0%</td><td>89.3%</td><td>15.0%</td></tr><tr><td><div class='sym'>300251.SZ</div><div class='code'>其他</div></td><td>53.5%</td><td>41.6%</td><td>23.6%</td><td>42.9%</td><td>70.1%</td><td>0.0%</td></tr><tr><td><div class='sym'>300449.SZ</div><div class='code'>其他</div></td><td>31.4%</td><td>26.1%</td><td>18.1%</td><td>37.3%</td><td>86.7%</td><td>0.0%</td></tr></tbody>
+        </table>
+      </div>
+    </section>
+
+    <section class="grid two">
+      <div class="card">
+        <h2>策略决策</h2>
+        <div class="pill">持仓数 3</div>
+        <table>
+          <tr><th>是否调仓</th><td>是</td></tr>
+          <tr><th>调仓强度</th><td>100.0%</td></tr>
+          <tr><th>日内T</th><td>不允许</td></tr>
+          <tr><th>换手上限</th><td>28.0%</td></tr>
+        </table>
+        <div class="label" style="margin-top:12px;">风险备注</div>
+        <ul><li>Market mid-term probability below 0.50.</li></ul>
+      </div>
+      <div class="card">
+        <h2>交易计划</h2>
+        <table>
+          <thead><tr><th>股票</th><th>动作</th><th>当前</th><th>目标</th><th>变化</th><th>备注</th></tr></thead>
+          <tbody><tr><td>300719.SZ</td><td style='font-weight:700;color:#cf3131;'>BUY</td><td>0.0%</td><td>15.0%</td><td class='score' style='color:#e85050'>15.0%</td><td>NA</td></tr><tr><td>300812.SZ</td><td style='font-weight:700;color:#cf3131;'>BUY</td><td>0.0%</td><td>15.0%</td><td class='score' style='color:#e85050'>15.0%</td><td>NA</td></tr><tr><td>688147.SH</td><td style='font-weight:700;color:#cf3131;'>BUY</td><td>0.0%</td><td>15.0%</td><td class='score' style='color:#e85050'>15.0%</td><td>NA</td></tr></tbody>
+        </table>
+      </div>
+    </section>
+  </div>
+</body>
+</html>

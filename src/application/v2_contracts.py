@@ -71,6 +71,19 @@ class PolicyInput:
 
 
 @dataclass(frozen=True)
+class PolicySpec:
+    risk_on_exposure: float = 0.85
+    cautious_exposure: float = 0.60
+    risk_off_exposure: float = 0.35
+    risk_on_positions: int = 4
+    cautious_positions: int = 3
+    risk_off_positions: int = 2
+    risk_on_turnover_cap: float = 0.40
+    cautious_turnover_cap: float = 0.28
+    risk_off_turnover_cap: float = 0.20
+
+
+@dataclass(frozen=True)
 class PolicyDecision:
     target_exposure: float
     target_position_count: int
@@ -102,3 +115,23 @@ class DailyRunResult:
     composite_state: CompositeState
     policy_decision: PolicyDecision
     trade_actions: List[TradeAction]
+
+
+@dataclass(frozen=True)
+class V2BacktestSummary:
+    start_date: str
+    end_date: str
+    n_days: int
+    total_return: float
+    annual_return: float
+    max_drawdown: float
+    avg_turnover: float
+    total_cost: float
+
+
+@dataclass(frozen=True)
+class V2CalibrationResult:
+    best_policy: PolicySpec
+    best_score: float
+    baseline: V2BacktestSummary
+    calibrated: V2BacktestSummary
