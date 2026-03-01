@@ -51,7 +51,6 @@ DELIST_GAP_DAYS = 20
 def _infer_symbol_status(
     *,
     stock_raw: pd.DataFrame,
-    market_frame: pd.DataFrame,
 ) -> str:
     if stock_raw.empty:
         return STATUS_DATA_INSUFFICIENT
@@ -61,17 +60,6 @@ def _infer_symbol_status(
     clean = clean.dropna(subset=["date"]).sort_values("date")
     if clean.empty or len(clean) < MIN_HISTORY_ROWS:
         return STATUS_DATA_INSUFFICIENT
-
-    market_dates = pd.to_datetime(market_frame["date"], errors="coerce").dropna().sort_values()
-    if market_dates.empty:
-        return STATUS_NORMAL
-
-    last_trade_date = pd.Timestamp(clean["date"].iloc[-1])
-    missing_market_days = int((market_dates > last_trade_date).sum())
-    if missing_market_days >= DELIST_GAP_DAYS:
-        return STATUS_DELISTED
-    if missing_market_days >= HALT_GAP_DAYS:
-        return STATUS_HALTED
     return STATUS_NORMAL
 
 
@@ -207,6 +195,7 @@ def build_stock_panel_dataset(
     parts: list[pd.DataFrame] = []
     stock_margin_cols_union: list[str] = []
     symbol_status: dict[str, str] = {}
+    raw_latest_dates: dict[str, pd.Timestamp] = {}
 
     for security in stock_securities:
         try:
@@ -222,10 +211,11 @@ def build_stock_panel_dataset(
             symbol_status[security.symbol] = STATUS_DATA_INSUFFICIENT
             continue
 
-        symbol_status[security.symbol] = _infer_symbol_status(
-            stock_raw=stock_raw,
-            market_frame=market_frame,
-        )
+        raw_dates = pd.to_datetime(stock_raw.get("date"), errors="coerce")
+        raw_dates = raw_dates.dropna().sort_values()
+        if not raw_dates.empty:
+            raw_latest_dates[security.symbol] = pd.Timestamp(raw_dates.iloc[-1])
+        symbol_status[security.symbol] = _infer_symbol_status(stock_raw=stock_raw)
         frame = make_stock_feature_frame(stock_raw, market_frame)
         stock_margin_cols: list[str] = []
         if use_margin_features:
@@ -251,6 +241,20 @@ def build_stock_panel_dataset(
 
     if not parts:
         return StockPanelDataset(frame=pd.DataFrame(), feature_columns=[], notes=notes, symbol_status=symbol_status)
+
+    universe_latest = max(raw_latest_dates.values()) if raw_latest_dates else None
+    market_dates = pd.to_datetime(market_frame["date"], errors="coerce").dropna().sort_values()
+    for symbol, status in list(symbol_status.items()):
+        if status != STATUS_NORMAL:
+            continue
+        last_trade_date = raw_latest_dates.get(symbol)
+        if universe_latest is None or last_trade_date is None or market_dates.empty:
+            continue
+        missing_peer_days = int(((market_dates > last_trade_date) & (market_dates <= universe_latest)).sum())
+        if missing_peer_days >= DELIST_GAP_DAYS:
+            symbol_status[symbol] = STATUS_DELISTED
+        elif missing_peer_days >= HALT_GAP_DAYS:
+            symbol_status[symbol] = STATUS_HALTED
 
     panel = pd.concat(parts, ignore_index=True)
     panel["date"] = pd.to_datetime(panel["date"], errors="coerce")
