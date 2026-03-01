@@ -23,6 +23,18 @@ BASE_FEATURE_COLUMNS = [
     "atr_14",
     "gap_1",
     "bear_body_1",
+    "upper_shadow_ratio_1",
+    "lower_shadow_ratio_1",
+    "body_ratio_1",
+    "up_streak_3",
+    "down_streak_3",
+    "narrow_range_rank_20",
+    "range_contraction_5",
+    "breakout_above_20_high",
+    "breakdown_below_20_low",
+    "distance_to_20d_high",
+    "distance_to_20d_low",
+    "volume_breakout_ratio",
     "hvbd_recent_5",
 ]
 
@@ -34,6 +46,26 @@ MID_RETURN_BUCKET_EDGES = [-float("inf"), -0.10, -0.03, 0.03, 0.10, float("inf")
 
 def _safe_std(series: pd.Series, window: int) -> pd.Series:
     return series.rolling(window).std().replace(0, np.nan)
+
+
+def _rolling_last_rank_pct(series: pd.Series, window: int) -> pd.Series:
+    return series.rolling(window).apply(
+        lambda values: float(pd.Series(values).rank(pct=True).iloc[-1]),
+        raw=False,
+    )
+
+
+def _capped_run_length(flags: pd.Series, cap: int) -> pd.Series:
+    out = np.zeros(len(flags), dtype=float)
+    run = 0
+    arr = flags.fillna(False).astype(bool).to_numpy()
+    for idx, flag in enumerate(arr):
+        if flag:
+            run = min(cap, run + 1)
+        else:
+            run = 0
+        out[idx] = float(run)
+    return pd.Series(out, index=flags.index, dtype=float)
 
 
 def build_features(df: pd.DataFrame) -> pd.DataFrame:
@@ -79,6 +111,41 @@ def build_features(df: pd.DataFrame) -> pd.DataFrame:
         axis=1,
     ).max(axis=1)
     out["atr_14"] = tr.rolling(14).mean() / (close + 1e-9)
+
+    candle_range = (high - low).abs()
+    candle_range_safe = candle_range.replace(0, np.nan)
+    upper_shadow = (high - pd.concat([open_, close], axis=1).max(axis=1)).clip(lower=0.0)
+    lower_shadow = (pd.concat([open_, close], axis=1).min(axis=1) - low).clip(lower=0.0)
+    body_abs = (close - open_).abs()
+    out["upper_shadow_ratio_1"] = upper_shadow / (candle_range_safe + 1e-9)
+    out["lower_shadow_ratio_1"] = lower_shadow / (candle_range_safe + 1e-9)
+    out["body_ratio_1"] = body_abs / (candle_range_safe + 1e-9)
+
+    up_close = close > close.shift(1)
+    down_close = close < close.shift(1)
+    out["up_streak_3"] = _capped_run_length(up_close, 3) / 3.0
+    out["down_streak_3"] = _capped_run_length(down_close, 3) / 3.0
+
+    out["narrow_range_rank_20"] = _rolling_last_rank_pct(candle_range_safe, 20)
+    out["range_contraction_5"] = candle_range_safe.rolling(5).mean() / (candle_range_safe.rolling(20).mean() + 1e-9)
+
+    prev_high_20 = close.shift(1).rolling(20).max()
+    prev_low_20 = close.shift(1).rolling(20).min()
+    out["breakout_above_20_high"] = np.where(
+        prev_high_20.notna(),
+        (close > prev_high_20).astype(float),
+        np.nan,
+    )
+    out["breakdown_below_20_low"] = np.where(
+        prev_low_20.notna(),
+        (close < prev_low_20).astype(float),
+        np.nan,
+    )
+    out["distance_to_20d_high"] = (close - prev_high_20) / (prev_high_20 + 1e-9)
+    out["distance_to_20d_low"] = (close - prev_low_20) / (prev_low_20 + 1e-9)
+    out["volume_breakout_ratio"] = (
+        out["vol_ratio_20"] * np.where(out["breakout_above_20_high"].fillna(0.0) > 0.5, 1.0, 0.0)
+    )
 
     out["gap_1"] = open_ / close.shift(1) - 1.0
     out["bear_body_1"] = np.clip((open_ - close) / (open_ + 1e-9), -0.25, 0.25)
