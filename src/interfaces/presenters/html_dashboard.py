@@ -1502,7 +1502,7 @@ def write_v2_research_dashboard(
   <div class="wrap">
     <section class="hero">
       <h1>V2 研究回测看板</h1>
-      <div class="sub">策略 {escape(strategy_id)} | 基线回测与策略校准结果</div>
+      <div class="sub">策略 {escape(strategy_id)} | 验证集选参，留出集展示结果</div>
       <div class="grid four">
         {_metric_tile("基线年化", _pct(baseline.annual_return), "#185e66")}
         {_metric_tile("基准年化", _pct(baseline.benchmark_annual_return), "#1f63d8")}
@@ -1527,6 +1527,7 @@ def write_v2_research_dashboard(
     <section class="grid">
       <div class="viz-card">
         <h2>基线方案 vs 校准方案</h2>
+        <div class="sub">说明：参数搜索基于验证集，下面对比默认展示留出集表现。</div>
         {compare_chart}
       </div>
     </section>

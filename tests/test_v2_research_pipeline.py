@@ -209,18 +209,18 @@ def test_backtest_summary_accepts_multi_horizon_metrics_payload() -> None:
 
 def test_research_workflow_light_mode_skips_heavy_stages(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     baseline = _make_backtest(0.18, 0.16)
-    prepared_sentinel = object()
     trajectory_sentinel = object()
+    train_sentinel = object()
+    validation_sentinel = object()
+    holdout_sentinel = object()
     seen: dict[str, object] = {}
 
-    def fake_prepare(**_: object) -> object:
-        return prepared_sentinel
-
-    def fake_build(prepared: object, *, retrain_days: int = 20, forecast_backend: str = "linear") -> object:
-        assert prepared is prepared_sentinel
-        assert retrain_days == 20
-        assert forecast_backend == "linear"
+    def fake_load(**_: object) -> object:
         return trajectory_sentinel
+
+    def fake_split(trajectory: object) -> tuple[object, object, object]:
+        assert trajectory is trajectory_sentinel
+        return train_sentinel, validation_sentinel, holdout_sentinel
 
     def fake_baseline(**kwargs: object) -> V2BacktestSummary:
         seen["baseline_trajectory"] = kwargs.get("trajectory")
@@ -232,8 +232,8 @@ def test_research_workflow_light_mode_skips_heavy_stages(monkeypatch: pytest.Mon
     def fail_learning(**_: object) -> V2PolicyLearningResult:
         raise AssertionError("light mode should skip learning")
 
-    monkeypatch.setattr("src.application.v2_services._prepare_v2_backtest_data", fake_prepare)
-    monkeypatch.setattr("src.application.v2_services._build_v2_backtest_trajectory_from_prepared", fake_build)
+    monkeypatch.setattr("src.application.v2_services._load_or_build_v2_backtest_trajectory", fake_load)
+    monkeypatch.setattr("src.application.v2_services._split_research_trajectory", fake_split)
     monkeypatch.setattr("src.application.v2_services.run_v2_backtest_live", fake_baseline)
     monkeypatch.setattr("src.application.v2_services.calibrate_v2_policy", fail_calibration)
     monkeypatch.setattr("src.application.v2_services.learn_v2_policy_model", fail_learning)
@@ -246,7 +246,7 @@ def test_research_workflow_light_mode_skips_heavy_stages(monkeypatch: pytest.Mon
     )
 
     assert got_baseline == baseline
-    assert seen["baseline_trajectory"] is trajectory_sentinel
+    assert seen["baseline_trajectory"] is holdout_sentinel
     assert calibration.calibrated == baseline
     assert calibration.trials
     assert learning.learned == baseline
@@ -257,21 +257,21 @@ def test_research_workflow_reuses_single_trajectory_for_all_stages(monkeypatch: 
     baseline = _make_backtest(0.18, 0.16)
     calibrated = _make_backtest(0.20, 0.18)
     learned = _make_backtest(0.19, 0.17)
-    prepared_sentinel = object()
     trajectory_sentinel = object()
+    train_sentinel = object()
+    validation_sentinel = object()
+    holdout_sentinel = object()
     seen: dict[str, object] = {}
 
-    def fake_prepare(**_: object) -> object:
-        return prepared_sentinel
-
-    def fake_build(prepared: object, *, retrain_days: int = 20, forecast_backend: str = "linear") -> object:
-        assert prepared is prepared_sentinel
-        assert retrain_days == 20
-        assert forecast_backend == "linear"
+    def fake_load(**_: object) -> object:
         return trajectory_sentinel
 
+    def fake_split(trajectory: object) -> tuple[object, object, object]:
+        assert trajectory is trajectory_sentinel
+        return train_sentinel, validation_sentinel, holdout_sentinel
+
     def fake_baseline(**kwargs: object) -> V2BacktestSummary:
-        seen["baseline_trajectory"] = kwargs.get("trajectory")
+        seen.setdefault("baseline_trajectories", []).append(kwargs.get("trajectory"))
         return baseline
 
     def fake_calibration(**kwargs: object) -> V2CalibrationResult:
@@ -287,6 +287,8 @@ def test_research_workflow_reuses_single_trajectory_for_all_stages(monkeypatch: 
 
     def fake_learning(**kwargs: object) -> V2PolicyLearningResult:
         seen["learning_trajectory"] = kwargs.get("trajectory")
+        seen["learning_fit_trajectory"] = kwargs.get("fit_trajectory")
+        seen["learning_eval_trajectory"] = kwargs.get("evaluation_trajectory")
         seen["learning_baseline"] = kwargs.get("baseline")
         return V2PolicyLearningResult(
             model=LearnedPolicyModel(
@@ -306,8 +308,8 @@ def test_research_workflow_reuses_single_trajectory_for_all_stages(monkeypatch: 
             learned=learned,
         )
 
-    monkeypatch.setattr("src.application.v2_services._prepare_v2_backtest_data", fake_prepare)
-    monkeypatch.setattr("src.application.v2_services._build_v2_backtest_trajectory_from_prepared", fake_build)
+    monkeypatch.setattr("src.application.v2_services._load_or_build_v2_backtest_trajectory", fake_load)
+    monkeypatch.setattr("src.application.v2_services._split_research_trajectory", fake_split)
     monkeypatch.setattr("src.application.v2_services.run_v2_backtest_live", fake_baseline)
     monkeypatch.setattr("src.application.v2_services.calibrate_v2_policy", fake_calibration)
     monkeypatch.setattr("src.application.v2_services.learn_v2_policy_model", fake_learning)
@@ -320,33 +322,37 @@ def test_research_workflow_reuses_single_trajectory_for_all_stages(monkeypatch: 
     assert got_baseline == baseline
     assert got_calibration.calibrated == calibrated
     assert got_learning.learned == learned
-    assert seen["baseline_trajectory"] is trajectory_sentinel
-    assert seen["calibration_trajectory"] is trajectory_sentinel
-    assert seen["learning_trajectory"] is trajectory_sentinel
+    assert seen["baseline_trajectories"] == [holdout_sentinel, validation_sentinel, holdout_sentinel]
+    assert seen["calibration_trajectory"] is validation_sentinel
+    assert seen["learning_trajectory"] is holdout_sentinel
+    assert seen["learning_fit_trajectory"] is validation_sentinel
+    assert seen["learning_eval_trajectory"] is holdout_sentinel
     assert seen["calibration_baseline"] == baseline
     assert seen["learning_baseline"] == baseline
 
 
 def test_research_workflow_passes_deep_backend(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     baseline = _make_backtest(0.18, 0.16)
-    prepared_sentinel = object()
     trajectory_sentinel = object()
+    train_sentinel = object()
+    validation_sentinel = object()
+    holdout_sentinel = object()
     seen: dict[str, object] = {}
 
-    def fake_prepare(**_: object) -> object:
-        return prepared_sentinel
-
-    def fake_build(prepared: object, *, retrain_days: int = 20, forecast_backend: str = "linear") -> object:
-        assert prepared is prepared_sentinel
-        seen["forecast_backend"] = forecast_backend
+    def fake_load(**_: object) -> object:
         return trajectory_sentinel
 
+    def fake_split(trajectory: object) -> tuple[object, object, object]:
+        assert trajectory is trajectory_sentinel
+        return train_sentinel, validation_sentinel, holdout_sentinel
+
     def fake_baseline(**kwargs: object) -> V2BacktestSummary:
+        seen["forecast_backend"] = forecast_backend
         seen["trajectory"] = kwargs.get("trajectory")
         return baseline
 
-    monkeypatch.setattr("src.application.v2_services._prepare_v2_backtest_data", fake_prepare)
-    monkeypatch.setattr("src.application.v2_services._build_v2_backtest_trajectory_from_prepared", fake_build)
+    monkeypatch.setattr("src.application.v2_services._load_or_build_v2_backtest_trajectory", fake_load)
+    monkeypatch.setattr("src.application.v2_services._split_research_trajectory", fake_split)
     monkeypatch.setattr("src.application.v2_services.run_v2_backtest_live", fake_baseline)
 
     got_baseline, _, _ = run_v2_research_workflow(
@@ -359,7 +365,7 @@ def test_research_workflow_passes_deep_backend(monkeypatch: pytest.MonkeyPatch, 
 
     assert got_baseline == baseline
     assert seen["forecast_backend"] == "deep"
-    assert seen["trajectory"] is trajectory_sentinel
+    assert seen["trajectory"] is holdout_sentinel
 
 
 def test_load_or_build_v2_backtest_trajectory_uses_disk_cache(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:

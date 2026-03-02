@@ -1459,8 +1459,50 @@ class ForecastBackend(Protocol):
         prepared: _PreparedV2BacktestData,
         *,
         retrain_days: int = 20,
-    ) -> _BacktestTrajectory:
+        ) -> _BacktestTrajectory:
         ...
+
+
+def _slice_backtest_trajectory(
+    trajectory: _BacktestTrajectory,
+    *,
+    start: int,
+    end: int,
+) -> _BacktestTrajectory:
+    n_steps = len(trajectory.steps)
+    lo = max(0, min(int(start), n_steps))
+    hi = max(lo, min(int(end), n_steps))
+    return _BacktestTrajectory(
+        prepared=trajectory.prepared,
+        steps=list(trajectory.steps[lo:hi]),
+    )
+
+
+def _split_research_trajectory(
+    trajectory: _BacktestTrajectory,
+) -> tuple[_BacktestTrajectory, _BacktestTrajectory, _BacktestTrajectory]:
+    n_steps = len(trajectory.steps)
+    if n_steps <= 2:
+        empty = _slice_backtest_trajectory(trajectory, start=0, end=0)
+        holdout = _slice_backtest_trajectory(trajectory, start=0, end=n_steps)
+        return empty, empty, holdout
+
+    train_end = max(1, int(n_steps * 0.60))
+    remaining = max(2, n_steps - train_end)
+    validation_len = max(1, remaining // 2)
+    holdout_start = min(n_steps - 1, train_end + validation_len)
+    if holdout_start <= train_end:
+        holdout_start = min(n_steps - 1, train_end + 1)
+    if holdout_start >= n_steps:
+        holdout_start = max(1, n_steps - 1)
+    validation = _slice_backtest_trajectory(trajectory, start=train_end, end=holdout_start)
+    holdout = _slice_backtest_trajectory(trajectory, start=holdout_start, end=n_steps)
+    train = _slice_backtest_trajectory(trajectory, start=0, end=train_end)
+    if not validation.steps:
+        validation = _slice_backtest_trajectory(trajectory, start=max(0, holdout_start - 1), end=holdout_start)
+    if not holdout.steps:
+        holdout = _slice_backtest_trajectory(trajectory, start=max(0, n_steps - 1), end=n_steps)
+    return train, validation, holdout
 
 
 def _empty_v2_backtest_result() -> tuple[V2BacktestSummary, list[dict[str, float]]]:
@@ -2344,17 +2386,21 @@ def learn_v2_policy_model(
     l2: float = 1.0,
     baseline: V2BacktestSummary | None = None,
     trajectory: _BacktestTrajectory | None = None,
+    fit_trajectory: _BacktestTrajectory | None = None,
+    evaluation_trajectory: _BacktestTrajectory | None = None,
     cache_root: str = "artifacts/v2/cache",
     refresh_cache: bool = False,
     forecast_backend: str = "linear",
 ) -> V2PolicyLearningResult:
+    fit_trajectory = fit_trajectory or trajectory
+    evaluation_trajectory = evaluation_trajectory or trajectory
     baseline = baseline or run_v2_backtest_live(
         strategy_id=strategy_id,
         config_path=config_path,
         source=source,
         universe_file=universe_file,
         universe_limit=universe_limit,
-        trajectory=trajectory,
+        trajectory=evaluation_trajectory,
         cache_root=cache_root,
         refresh_cache=refresh_cache,
         forecast_backend=forecast_backend,
@@ -2366,7 +2412,7 @@ def learn_v2_policy_model(
         universe_file=universe_file,
         universe_limit=universe_limit,
         capture_learning_rows=True,
-        trajectory=trajectory,
+        trajectory=fit_trajectory,
         cache_root=cache_root,
         refresh_cache=refresh_cache,
         forecast_backend=forecast_backend,
@@ -2393,7 +2439,7 @@ def learn_v2_policy_model(
             universe_file=universe_file,
             universe_limit=universe_limit,
             learned_policy=model,
-            trajectory=trajectory,
+            trajectory=evaluation_trajectory,
             cache_root=cache_root,
             refresh_cache=refresh_cache,
             forecast_backend=forecast_backend,
@@ -2433,7 +2479,7 @@ def learn_v2_policy_model(
         universe_file=universe_file,
         universe_limit=universe_limit,
         learned_policy=model,
-        trajectory=trajectory,
+        trajectory=evaluation_trajectory,
         cache_root=cache_root,
         refresh_cache=refresh_cache,
         forecast_backend=forecast_backend,
@@ -2506,13 +2552,38 @@ def run_v2_research_workflow(
         refresh_cache=refresh_cache,
         forecast_backend=forecast_backend,
     )
+    if trajectory is None:
+        empty_summary = run_v2_backtest_live(
+            strategy_id=strategy_id,
+            config_path=config_path,
+            source=source,
+            universe_file=universe_file,
+            universe_limit=universe_limit,
+            trajectory=None,
+            cache_root=cache_root,
+            refresh_cache=refresh_cache,
+            forecast_backend=forecast_backend,
+        )
+        return empty_summary, _baseline_only_calibration(empty_summary), _placeholder_learning_result(empty_summary)
+    _, validation_trajectory, holdout_trajectory = _split_research_trajectory(trajectory)
     baseline = run_v2_backtest_live(
         strategy_id=strategy_id,
         config_path=config_path,
         source=source,
         universe_file=universe_file,
         universe_limit=universe_limit,
-        trajectory=trajectory,
+        trajectory=holdout_trajectory,
+        cache_root=cache_root,
+        refresh_cache=refresh_cache,
+        forecast_backend=forecast_backend,
+    )
+    validation_baseline = run_v2_backtest_live(
+        strategy_id=strategy_id,
+        config_path=config_path,
+        source=source,
+        universe_file=universe_file,
+        universe_limit=universe_limit,
+        trajectory=validation_trajectory,
         cache_root=cache_root,
         refresh_cache=refresh_cache,
         forecast_backend=forecast_backend,
@@ -2526,13 +2597,33 @@ def run_v2_research_workflow(
             source=source,
             universe_file=universe_file,
             universe_limit=universe_limit,
-            baseline=baseline,
-            trajectory=trajectory,
+            baseline=validation_baseline,
+            trajectory=validation_trajectory,
             cache_root=cache_root,
             refresh_cache=refresh_cache,
             forecast_backend=forecast_backend,
         )
     )
+    if not skip_calibration:
+        holdout_calibrated = run_v2_backtest_live(
+            strategy_id=strategy_id,
+            config_path=config_path,
+            source=source,
+            universe_file=universe_file,
+            universe_limit=universe_limit,
+            policy_spec=calibration.best_policy,
+            trajectory=holdout_trajectory,
+            cache_root=cache_root,
+            refresh_cache=refresh_cache,
+            forecast_backend=forecast_backend,
+        )
+        calibration = V2CalibrationResult(
+            best_policy=calibration.best_policy,
+            best_score=calibration.best_score,
+            baseline=baseline,
+            calibrated=holdout_calibrated,
+            trials=calibration.trials,
+        )
     learning = (
         _placeholder_learning_result(baseline)
         if skip_learning
@@ -2543,7 +2634,9 @@ def run_v2_research_workflow(
             universe_file=universe_file,
             universe_limit=universe_limit,
             baseline=baseline,
-            trajectory=trajectory,
+            trajectory=holdout_trajectory,
+            fit_trajectory=validation_trajectory,
+            evaluation_trajectory=holdout_trajectory,
             cache_root=cache_root,
             refresh_cache=refresh_cache,
             forecast_backend=forecast_backend,

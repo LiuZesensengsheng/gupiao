@@ -552,7 +552,7 @@ def write_v2_research_report(
     lines.append("")
     lines.append(f"- 策略ID: {strategy_id}")
     lines.append("")
-    lines.append("## 基线回测")
+    lines.append("## 基线回测（留出集 Holdout）")
     lines.append("")
     lines.append("| 开始 | 结束 | 交易日 | 总收益 | 毛收益 | 年化收益 | 基准年化 | 超额年化 | 超额累计 | 超额回撤 | IR | 年化波动 | 胜率 | 最大回撤 | 平均换手 | 平均成交率 | 平均滑点 | 平均RankIC | 头部分层收益 | 头尾价差 | TopK命中率 | 总成本 |")
     lines.append("|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|")
@@ -563,8 +563,9 @@ def write_v2_research_report(
         f"{_to_float(baseline.avg_rank_ic, 3)} | {_to_percent(baseline.avg_top_decile_return)} | {_to_percent(baseline.avg_top_bottom_spread)} | {_to_percent(baseline.avg_top_k_hit_rate)} | {_to_percent(baseline.total_cost)} |"
     )
     lines.append("")
-    lines.append("## 策略校准")
+    lines.append("## 策略校准（验证集选参，留出集复核）")
     lines.append("")
+    lines.append("- 说明: `trials` 内部评分基于验证集；下方“基线参数 / 校准参数”表格默认展示留出集结果。")
     lines.append(f"- 最优评分: {_to_float(calibration.best_score, 4)}")
     lines.append(
         f"- 风险偏好仓位: 积极={_to_percent(calibration.best_policy.risk_on_exposure)}, "
@@ -597,7 +598,7 @@ def write_v2_research_report(
         f"{_to_percent(calibration.calibrated.avg_top_decile_return)} | {_to_percent(calibration.calibrated.avg_top_bottom_spread)} | {_to_percent(calibration.calibrated.avg_top_k_hit_rate)} | {_to_percent(calibration.calibrated.total_cost)} |"
     )
     lines.append("")
-    lines.append("## 学习型策略层")
+    lines.append("## 学习型策略层（验证集拟合，留出集评估）")
     lines.append("")
     lines.append(f"- 样本数: {learning.model.train_rows}")
     lines.append(f"- 仓位拟合R²: {_to_float(learning.model.train_r2_exposure, 4)}")
