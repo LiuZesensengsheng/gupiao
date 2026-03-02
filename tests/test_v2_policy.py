@@ -173,6 +173,65 @@ def test_v2_policy_sector_budgets_are_bounded_by_target_exposure() -> None:
         assert total <= decision.sector_budgets.get(sector, 0.0) + 1e-9
 
 
+def test_v2_policy_caps_single_sector_concentration() -> None:
+    market, _, _, cross_section = _make_demo_state()
+    sectors = [
+        SectorForecastState("单一", 0.62, 0.74, 0.26, 0.18, 0.12),
+    ]
+    stocks = [
+        StockForecastState("A1", "单一", 0.58, 0.62, 0.70, 0.60, 0.30, 0.92),
+        StockForecastState("A2", "单一", 0.55, 0.60, 0.67, 0.56, 0.24, 0.88),
+    ]
+    composite_state = compose_state(
+        market=market,
+        sectors=sectors,
+        stocks=stocks,
+        cross_section=cross_section,
+    )
+
+    decision = apply_policy(
+        PolicyInput(
+            composite_state=composite_state,
+            current_weights={},
+            current_cash=1.0,
+            total_equity=1.0,
+        )
+    )
+
+    assert decision.sector_budgets["单一"] < decision.target_exposure
+    assert any("sector budget capped" in note for note in decision.risk_notes)
+
+
+def test_v2_policy_does_not_cap_unknown_fallback_sector_bucket() -> None:
+    market, _, _, cross_section = _make_demo_state()
+    sectors = [
+        SectorForecastState("其他", 0.62, 0.74, 0.26, 0.18, 0.12),
+    ]
+    stocks = [
+        StockForecastState("A1", "其他", 0.58, 0.62, 0.70, 0.60, 0.30, 0.92),
+        StockForecastState("A2", "其他", 0.55, 0.60, 0.67, 0.56, 0.24, 0.88),
+    ]
+    composite_state = compose_state(
+        market=market,
+        sectors=sectors,
+        stocks=stocks,
+        cross_section=cross_section,
+    )
+
+    decision = apply_policy(
+        PolicyInput(
+            composite_state=composite_state,
+            current_weights={},
+            current_cash=1.0,
+            total_equity=1.0,
+        )
+    )
+
+    assert decision.desired_sector_budgets["其他"] == pytest.approx(decision.target_exposure)
+    assert decision.sector_budgets["其他"] <= decision.desired_sector_budgets["其他"]
+    assert not any("sector budget capped" in note for note in decision.risk_notes)
+
+
 def test_stock_policy_score_penalizes_fragile_high_risk_setup() -> None:
     steady = StockForecastState(
         "AAA",

@@ -770,6 +770,63 @@ def _ranked_sector_budgets(sectors: Iterable[SectorForecastState], *, target_exp
     return {item.sector: float(target_exposure) * score / total for item, score in zip(rows, raw)}
 
 
+def _cap_sector_budgets(
+    *,
+    sector_budgets: dict[str, float],
+    target_exposure: float,
+    risk_regime: str,
+    breadth_strength: float,
+) -> tuple[dict[str, float], list[str]]:
+    if not sector_budgets:
+        return {}, []
+    notes: list[str] = []
+    active = {sector: max(0.0, float(weight)) for sector, weight in sector_budgets.items() if float(weight) > 1e-9}
+    if not active:
+        return {}, notes
+    if len(active) == 1 and "其他" in active:
+        return active, notes
+    if risk_regime == "risk_on":
+        cap_ratio = 0.68
+    elif risk_regime == "cautious":
+        cap_ratio = 0.58
+    else:
+        cap_ratio = 0.50
+    if float(breadth_strength) < 0.10:
+        cap_ratio = min(cap_ratio, 0.50)
+    max_sector_weight = float(target_exposure) * float(cap_ratio)
+    if max_sector_weight <= 1e-9:
+        return active, notes
+    clipped = dict(active)
+    overflow = 0.0
+    for sector, weight in list(clipped.items()):
+        if weight > max_sector_weight + 1e-9:
+            overflow += float(weight - max_sector_weight)
+            clipped[sector] = float(max_sector_weight)
+            notes.append(f"{sector}: sector budget capped for concentration control.")
+    if overflow <= 1e-9:
+        return clipped, notes
+    receivers = [sector for sector, weight in clipped.items() if weight < max_sector_weight - 1e-9]
+    while overflow > 1e-9 and receivers:
+        headroom_total = float(sum(max(0.0, max_sector_weight - clipped[sector]) for sector in receivers))
+        if headroom_total <= 1e-9:
+            break
+        for sector in list(receivers):
+            headroom = max(0.0, max_sector_weight - clipped[sector])
+            if headroom <= 1e-9:
+                continue
+            take = min(headroom, overflow * headroom / headroom_total)
+            clipped[sector] = float(clipped[sector] + take)
+            overflow -= float(take)
+            if overflow <= 1e-9:
+                break
+        receivers = [sector for sector, weight in clipped.items() if weight < max_sector_weight - 1e-9]
+    total = float(sum(clipped.values()))
+    if total > float(target_exposure) + 1e-9 and total > 1e-9:
+        scale = float(target_exposure) / total
+        clipped = {sector: float(weight) * scale for sector, weight in clipped.items()}
+    return clipped, notes
+
+
 def _stock_policy_score(stock: StockForecastState) -> float:
     return float(_alpha_score_components(stock)["alpha_score"])
 
@@ -1004,9 +1061,22 @@ def apply_policy(
     if cross.fund_flow_strength < 0.0:
         target_exposure *= 0.85
         risk_notes.append("Fund flow weak.")
+    if cross.large_vs_small_bias < -0.05:
+        target_position_count = min(target_position_count + 1, 5)
+        risk_notes.append("Large-cap bias weak: diversify more positions.")
+    if cross.growth_vs_value_bias < -0.08:
+        turnover_cap = min(turnover_cap, 0.24)
+        risk_notes.append("Growth style weak: turnover capped conservatively.")
 
     target_exposure = _clip(target_exposure, 0.0, 1.0)
     desired_sector_budgets = _ranked_sector_budgets(state.sectors[: max(1, target_position_count)], target_exposure=target_exposure)
+    desired_sector_budgets, sector_cap_notes = _cap_sector_budgets(
+        sector_budgets=desired_sector_budgets,
+        target_exposure=target_exposure,
+        risk_regime=state.risk_regime,
+        breadth_strength=float(cross.breadth_strength),
+    )
+    risk_notes.extend(sector_cap_notes)
     desired_symbol_target_weights = _allocate_with_sector_budgets(
         stocks=state.stocks,
         sector_budgets=desired_sector_budgets,
@@ -1225,12 +1295,17 @@ def _simulate_execution_day(
     gross_end_value = float(cash_after_trade)
     position_values: dict[str, float] = {}
     for symbol, weight in executed_weights.items():
+        state = state_map.get(symbol)
+        status = "normal" if state is None else str(getattr(state, "tradability_status", "normal") or "normal")
         frame = stock_frames.get(symbol)
         if frame is None:
-            realized_ret = 0.0
+            realized_ret = -0.30 if status == "delisted" else 0.0
         else:
             row = frame[frame["date"] == date]
-            realized_ret = 0.0 if row.empty else float(row.iloc[0]["fwd_ret_1"])
+            if row.empty:
+                realized_ret = -0.30 if status == "delisted" else 0.0
+            else:
+                realized_ret = float(row.iloc[0]["fwd_ret_1"])
         value = float(weight) * (1.0 + realized_ret)
         position_values[symbol] = value
         gross_end_value += value
@@ -2338,6 +2413,19 @@ def calibrate_v2_policy(
     refresh_cache: bool = False,
     forecast_backend: str = "linear",
 ) -> V2CalibrationResult:
+    def _policy_spec_key(spec: PolicySpec) -> tuple[float, float, float, int, int, int, float, float, float]:
+        return (
+            float(spec.risk_on_exposure),
+            float(spec.cautious_exposure),
+            float(spec.risk_off_exposure),
+            int(spec.risk_on_positions),
+            int(spec.cautious_positions),
+            int(spec.risk_off_positions),
+            float(spec.risk_on_turnover_cap),
+            float(spec.cautious_turnover_cap),
+            float(spec.risk_off_turnover_cap),
+        )
+
     baseline_spec = PolicySpec()
     baseline = baseline or run_v2_backtest_live(
         strategy_id=strategy_id,
@@ -2351,12 +2439,42 @@ def calibrate_v2_policy(
         refresh_cache=refresh_cache,
         forecast_backend=forecast_backend,
     )
-    candidates = [
-        baseline_spec,
-        PolicySpec(risk_on_exposure=0.75, cautious_exposure=0.50, risk_off_exposure=0.25),
-        PolicySpec(risk_on_exposure=0.90, cautious_exposure=0.65, risk_off_exposure=0.35),
-        PolicySpec(risk_on_positions=5, cautious_positions=3, risk_off_positions=1),
+    exposure_sets = [
+        (0.75, 0.50, 0.25),
+        (0.85, 0.60, 0.35),
+        (0.90, 0.65, 0.35),
     ]
+    position_sets = [
+        (4, 3, 2),
+        (5, 3, 1),
+        (4, 4, 2),
+    ]
+    turnover_sets = [
+        (0.40, 0.28, 0.20),
+        (0.34, 0.24, 0.16),
+        (0.45, 0.32, 0.22),
+    ]
+    candidates: list[PolicySpec] = []
+    seen_specs: set[tuple[float, float, float, int, int, int, float, float, float]] = set()
+    for exp in exposure_sets:
+        for pos in position_sets:
+            for turn in turnover_sets:
+                spec = PolicySpec(
+                    risk_on_exposure=float(exp[0]),
+                    cautious_exposure=float(exp[1]),
+                    risk_off_exposure=float(exp[2]),
+                    risk_on_positions=int(pos[0]),
+                    cautious_positions=int(pos[1]),
+                    risk_off_positions=int(pos[2]),
+                    risk_on_turnover_cap=float(turn[0]),
+                    cautious_turnover_cap=float(turn[1]),
+                    risk_off_turnover_cap=float(turn[2]),
+                )
+                key = _policy_spec_key(spec)
+                if key in seen_specs:
+                    continue
+                seen_specs.add(key)
+                candidates.append(spec)
     best_spec = baseline_spec
     best_summary = baseline
     best_score = float(baseline.annual_return) - 0.5 * abs(float(baseline.max_drawdown))
@@ -2367,7 +2485,10 @@ def calibrate_v2_policy(
             "score": float(best_score),
         }
     ]
-    for spec in candidates[1:]:
+    baseline_key = _policy_spec_key(baseline_spec)
+    for spec in candidates:
+        if _policy_spec_key(spec) == baseline_key:
+            continue
         summary = run_v2_backtest_live(
             strategy_id=strategy_id,
             config_path=config_path,

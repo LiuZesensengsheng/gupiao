@@ -468,6 +468,41 @@ def test_simulate_execution_day_blocks_sell_when_limit_down_pinned() -> None:
     assert daily_ret == 0.0
 
 
+def test_simulate_execution_day_marks_down_delisted_holding_without_price() -> None:
+    date = pd.Timestamp("2024-01-02")
+    next_date = pd.Timestamp("2024-01-03")
+    decision = PolicyDecision(
+        target_exposure=0.10,
+        target_position_count=1,
+        rebalance_now=False,
+        rebalance_intensity=0.0,
+        intraday_t_allowed=False,
+        turnover_cap=0.0,
+        sector_budgets={"有色": 0.10},
+        symbol_target_weights={"AAA": 0.10},
+    )
+
+    daily_ret, turnover, cost, fill_ratio, slip_bps, next_weights, next_cash = _simulate_execution_day(
+        date=date,
+        next_date=next_date,
+        decision=decision,
+        current_weights={"AAA": 0.10},
+        current_cash=0.90,
+        stock_states=[StockForecastState("AAA", "有色", 0.40, 0.42, 0.45, 0.40, 0.0, 0.0, tradability_status="delisted")],
+        stock_frames={},
+        total_commission_rate=0.001,
+        base_slippage_rate=0.0005,
+    )
+
+    assert turnover == 0.0
+    assert cost == 0.0
+    assert fill_ratio == 0.0
+    assert slip_bps == 0.0
+    assert daily_ret < 0.0
+    assert next_weights["AAA"] < 0.08
+    assert next_cash > 0.92
+
+
 def test_v2_markdown_reports_keep_key_chinese_sections(tmp_path: Path) -> None:
     daily_result = _make_daily_result()
     daily_path = write_v2_daily_report(tmp_path / "daily.md", daily_result)

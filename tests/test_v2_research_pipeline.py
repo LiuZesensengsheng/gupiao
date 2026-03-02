@@ -18,6 +18,7 @@ from src.application.v2_contracts import (
     V2PolicyLearningResult,
 )
 from src.application.v2_services import (
+    calibrate_v2_policy,
     _load_or_build_v2_backtest_trajectory,
     _make_forecast_backend,
     _policy_spec_from_model,
@@ -205,6 +206,42 @@ def test_backtest_summary_accepts_multi_horizon_metrics_payload() -> None:
 
     assert set(summary.horizon_metrics) == {"1d", "5d", "20d"}
     assert summary.horizon_metrics["5d"]["top_k_hit_rate"] == 0.55
+
+
+def test_calibrate_v2_policy_runs_expanded_validation_grid(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    baseline = _make_backtest(0.18, 0.16)
+    seen: dict[str, object] = {"calls": 0}
+
+    def fake_backtest(**kwargs: object) -> V2BacktestSummary:
+        policy_spec = kwargs.get("policy_spec")
+        seen["calls"] = int(seen["calls"]) + 1
+        if not isinstance(policy_spec, PolicySpec):
+            return baseline
+        annual = 0.10 + 0.08 * float(policy_spec.risk_on_exposure) + 0.01 * float(policy_spec.risk_on_positions)
+        dd = -0.05 - 0.02 * float(policy_spec.risk_off_exposure)
+        return V2BacktestSummary(
+            start_date="2024-01-01",
+            end_date="2024-12-31",
+            n_days=120,
+            total_return=annual,
+            annual_return=annual,
+            max_drawdown=dd,
+            avg_turnover=float(policy_spec.risk_on_turnover_cap),
+            total_cost=0.01,
+        )
+
+    monkeypatch.setattr("src.application.v2_services.run_v2_backtest_live", fake_backtest)
+
+    result = calibrate_v2_policy(
+        strategy_id="swing_v2",
+        baseline=baseline,
+        trajectory=object(),
+        cache_root=str(tmp_path),
+    )
+
+    assert len(result.trials) == 27
+    assert seen["calls"] == 26
+    assert result.best_score >= max(float(item["score"]) for item in result.trials)
 
 
 def test_research_workflow_light_mode_skips_heavy_stages(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
