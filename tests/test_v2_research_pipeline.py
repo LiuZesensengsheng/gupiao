@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pandas as pd
 import pytest
 
 from src.application.v2_contracts import (
@@ -20,6 +21,7 @@ from src.application.v2_services import (
     _load_or_build_v2_backtest_trajectory,
     _make_forecast_backend,
     _policy_spec_from_model,
+    _tensorize_temporal_frame,
     load_published_v2_policy_model,
     publish_v2_research_artifacts,
     run_v2_research_workflow,
@@ -325,6 +327,41 @@ def test_research_workflow_reuses_single_trajectory_for_all_stages(monkeypatch: 
     assert seen["learning_baseline"] == baseline
 
 
+def test_research_workflow_passes_deep_backend(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    baseline = _make_backtest(0.18, 0.16)
+    prepared_sentinel = object()
+    trajectory_sentinel = object()
+    seen: dict[str, object] = {}
+
+    def fake_prepare(**_: object) -> object:
+        return prepared_sentinel
+
+    def fake_build(prepared: object, *, retrain_days: int = 20, forecast_backend: str = "linear") -> object:
+        assert prepared is prepared_sentinel
+        seen["forecast_backend"] = forecast_backend
+        return trajectory_sentinel
+
+    def fake_baseline(**kwargs: object) -> V2BacktestSummary:
+        seen["trajectory"] = kwargs.get("trajectory")
+        return baseline
+
+    monkeypatch.setattr("src.application.v2_services._prepare_v2_backtest_data", fake_prepare)
+    monkeypatch.setattr("src.application.v2_services._build_v2_backtest_trajectory_from_prepared", fake_build)
+    monkeypatch.setattr("src.application.v2_services.run_v2_backtest_live", fake_baseline)
+
+    got_baseline, _, _ = run_v2_research_workflow(
+        strategy_id="swing_v2",
+        forecast_backend="deep",
+        skip_calibration=True,
+        skip_learning=True,
+        cache_root=str(tmp_path),
+    )
+
+    assert got_baseline == baseline
+    assert seen["forecast_backend"] == "deep"
+    assert seen["trajectory"] is trajectory_sentinel
+
+
 def test_load_or_build_v2_backtest_trajectory_uses_disk_cache(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     built_trajectory = {"steps": 3}
     seen = {"build_calls": 0}
@@ -358,7 +395,35 @@ def test_load_or_build_v2_backtest_trajectory_uses_disk_cache(monkeypatch: pytes
     assert seen["build_calls"] == 1
 
 
-def test_make_forecast_backend_accepts_linear() -> None:
-    backend = _make_forecast_backend("linear")
+def test_make_forecast_backend_accepts_linear_and_deep() -> None:
+    linear_backend = _make_forecast_backend("linear")
+    deep_backend = _make_forecast_backend("deep")
 
-    assert backend.name == "linear"
+    assert linear_backend.name == "linear"
+    assert deep_backend.name == "deep"
+
+
+def test_tensorize_temporal_frame_builds_group_lags() -> None:
+    frame = pd.DataFrame(
+        {
+            "symbol": ["AAA", "AAA", "BBB", "BBB"],
+            "date": pd.to_datetime(["2024-01-01", "2024-01-02", "2024-01-01", "2024-01-02"]),
+            "f1": [1.0, 2.0, 10.0, 20.0],
+            "f2": [3.0, 4.0, 30.0, 40.0],
+        }
+    )
+
+    out, cols = _tensorize_temporal_frame(
+        frame,
+        feature_cols=["f1", "f2"],
+        group_col="symbol",
+        lag_depth=2,
+    )
+
+    assert cols == ["f1__lag0", "f2__lag0", "f1__lag1", "f2__lag1"]
+    latest_aaa = out[(out["symbol"] == "AAA") & (out["date"] == pd.Timestamp("2024-01-02"))].iloc[0]
+    latest_bbb = out[(out["symbol"] == "BBB") & (out["date"] == pd.Timestamp("2024-01-02"))].iloc[0]
+    assert latest_aaa["f1__lag0"] == 2.0
+    assert latest_aaa["f1__lag1"] == 1.0
+    assert latest_bbb["f2__lag0"] == 40.0
+    assert latest_bbb["f2__lag1"] == 30.0

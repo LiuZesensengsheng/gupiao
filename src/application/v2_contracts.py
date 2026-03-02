@@ -143,7 +143,15 @@ class V2BacktestSummary:
     avg_top_bottom_spread: float = 0.0
     avg_top_k_hit_rate: float = 0.0
     horizon_metrics: Dict[str, Dict[str, float]] = field(default_factory=dict)
+    benchmark_total_return: float = 0.0
+    benchmark_annual_return: float = 0.0
+    excess_total_return: float = 0.0
+    excess_annual_return: float = 0.0
+    excess_max_drawdown: float = 0.0
+    information_ratio: float = 0.0
     nav_curve: List[float] = field(default_factory=list)
+    benchmark_nav_curve: List[float] = field(default_factory=list)
+    excess_nav_curve: List[float] = field(default_factory=list)
     curve_dates: List[str] = field(default_factory=list)
 
 

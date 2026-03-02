@@ -52,7 +52,7 @@ def build_parser() -> argparse.ArgumentParser:
     research.add_argument("--artifact-root", default="artifacts/v2", help="Artifact output root for research runs")
     research.add_argument("--cache-root", default="artifacts/v2/cache", help="On-disk cache root for prepared data and trajectories")
     research.add_argument("--refresh-cache", action="store_true", help="Ignore existing cached trajectory and rebuild it")
-    research.add_argument("--forecast-backend", default="linear", help="Forecast backend id for research backtests")
+    research.add_argument("--forecast-backend", default="linear", help="Forecast backend id for research backtests (linear/deep)")
     research.add_argument("--light", action="store_true", help="Run baseline-only light research mode")
     research.add_argument("--skip-calibration", action="store_true", help="Skip policy calibration stage")
     research.add_argument("--skip-learning", action="store_true", help="Skip learned policy stage")

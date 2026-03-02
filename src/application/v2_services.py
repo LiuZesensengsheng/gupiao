@@ -39,7 +39,12 @@ from src.infrastructure.features import (
 from src.infrastructure.forecast_engine import run_quant_pipeline
 from src.infrastructure.market_context import build_market_context_features
 from src.infrastructure.market_data import load_symbol_daily
-from src.infrastructure.modeling import LogisticBinaryModel, QuantileLinearModel
+from src.infrastructure.modeling import (
+    LogisticBinaryModel,
+    MLPBinaryModel,
+    MLPQuantileModel,
+    QuantileLinearModel,
+)
 from src.infrastructure.panel_dataset import build_stock_panel_dataset
 from src.infrastructure.sector_data import build_sector_daily_frames
 from src.infrastructure.sector_forecast import run_sector_forecast
@@ -172,11 +177,33 @@ def _fit_quantile_quintet(
     )
 
 
+def _fit_mlp_quantile_quintet(
+    df: pd.DataFrame,
+    *,
+    feature_cols: list[str],
+    target_col: str,
+    l2: float,
+) -> tuple[MLPQuantileModel, MLPQuantileModel, MLPQuantileModel, MLPQuantileModel, MLPQuantileModel]:
+    return (
+        MLPQuantileModel(quantile=0.10, l2=l2).fit(df, feature_cols, target_col),
+        MLPQuantileModel(quantile=0.30, l2=l2).fit(df, feature_cols, target_col),
+        MLPQuantileModel(quantile=0.50, l2=l2).fit(df, feature_cols, target_col),
+        MLPQuantileModel(quantile=0.70, l2=l2).fit(df, feature_cols, target_col),
+        MLPQuantileModel(quantile=0.90, l2=l2).fit(df, feature_cols, target_col),
+    )
+
+
 def _predict_quantile_profile(
     row: pd.DataFrame,
     *,
     feature_cols: list[str],
-    q_models: tuple[QuantileLinearModel, QuantileLinearModel, QuantileLinearModel, QuantileLinearModel, QuantileLinearModel],
+    q_models: tuple[
+        QuantileLinearModel | MLPQuantileModel,
+        QuantileLinearModel | MLPQuantileModel,
+        QuantileLinearModel | MLPQuantileModel,
+        QuantileLinearModel | MLPQuantileModel,
+        QuantileLinearModel | MLPQuantileModel,
+    ],
 ) -> _ReturnQuantileProfile:
     raw = [float(model.predict(row, feature_cols)[0]) for model in q_models]
     q10, q30, q50, q70, q90 = [float(x) for x in np.maximum.accumulate(np.asarray(raw, dtype=float))]
@@ -258,11 +285,23 @@ def _build_stock_states_from_panel_slice(
     *,
     panel_row: pd.DataFrame,
     feature_cols: list[str],
-    short_model: LogisticBinaryModel,
-    five_model: LogisticBinaryModel,
-    mid_model: LogisticBinaryModel,
-    short_q_models: tuple[QuantileLinearModel, QuantileLinearModel, QuantileLinearModel, QuantileLinearModel, QuantileLinearModel],
-    mid_q_models: tuple[QuantileLinearModel, QuantileLinearModel, QuantileLinearModel, QuantileLinearModel, QuantileLinearModel],
+    short_model: LogisticBinaryModel | MLPBinaryModel,
+    five_model: LogisticBinaryModel | MLPBinaryModel,
+    mid_model: LogisticBinaryModel | MLPBinaryModel,
+    short_q_models: tuple[
+        QuantileLinearModel | MLPQuantileModel,
+        QuantileLinearModel | MLPQuantileModel,
+        QuantileLinearModel | MLPQuantileModel,
+        QuantileLinearModel | MLPQuantileModel,
+        QuantileLinearModel | MLPQuantileModel,
+    ],
+    mid_q_models: tuple[
+        QuantileLinearModel | MLPQuantileModel,
+        QuantileLinearModel | MLPQuantileModel,
+        QuantileLinearModel | MLPQuantileModel,
+        QuantileLinearModel | MLPQuantileModel,
+        QuantileLinearModel | MLPQuantileModel,
+    ],
 ) -> tuple[list[StockForecastState], pd.DataFrame]:
     if panel_row.empty:
         return [], pd.DataFrame()
@@ -1183,6 +1222,7 @@ def _simulate_execution_day(
 def _to_v2_backtest_summary(
     *,
     returns: list[float],
+    benchmark_returns: list[float] | None = None,
     turnovers: list[float],
     costs: list[float],
     gross_returns: list[float],
@@ -1213,15 +1253,29 @@ def _to_v2_backtest_summary(
         )
     ret_arr = np.asarray(returns, dtype=float)
     nav = np.cumprod(1.0 + ret_arr)
+    bench_arr = np.asarray(benchmark_returns if benchmark_returns is not None else np.zeros_like(ret_arr), dtype=float)
+    if bench_arr.shape != ret_arr.shape:
+        bench_arr = np.resize(bench_arr, ret_arr.shape)
+    benchmark_nav = np.cumprod(1.0 + bench_arr)
+    excess_ret_arr = (1.0 + ret_arr) / np.maximum(1.0 + bench_arr, 1e-9) - 1.0
+    excess_nav = np.cumprod(1.0 + excess_ret_arr)
     gross_nav = np.cumprod(1.0 + np.asarray(gross_returns, dtype=float)) if gross_returns else nav
     peak = np.maximum.accumulate(nav)
     drawdown = nav / np.maximum(peak, 1e-12) - 1.0
+    excess_peak = np.maximum.accumulate(excess_nav)
     total_return = float(nav[-1] - 1.0)
+    benchmark_total_return = float(benchmark_nav[-1] - 1.0)
+    excess_total_return = float(excess_nav[-1] - 1.0)
     gross_total_return = float(gross_nav[-1] - 1.0)
     n_days = len(returns)
     annual_return = float((1.0 + total_return) ** (252.0 / max(1, n_days)) - 1.0)
+    benchmark_annual_return = float((1.0 + benchmark_total_return) ** (252.0 / max(1, n_days)) - 1.0)
+    excess_annual_return = float((1.0 + excess_total_return) ** (252.0 / max(1, n_days)) - 1.0)
     annual_vol = float(np.std(ret_arr, ddof=0) * np.sqrt(252.0))
     win_rate = float(np.mean(ret_arr > 0.0))
+    excess_drawdown = excess_nav / np.maximum(excess_peak, 1e-12) - 1.0
+    excess_vol = float(np.std(excess_ret_arr, ddof=0))
+    information_ratio = 0.0 if excess_vol <= 1e-12 else float(np.mean(excess_ret_arr) / excess_vol * np.sqrt(252.0))
     horizon_summary: dict[str, dict[str, float]] = {}
     if horizon_metrics:
         for horizon, metric_map in horizon_metrics.items():
@@ -1249,7 +1303,15 @@ def _to_v2_backtest_summary(
         avg_top_bottom_spread=float(np.mean(top_bottom_spreads)) if top_bottom_spreads else 0.0,
         avg_top_k_hit_rate=float(np.mean(top_k_hit_rates)) if top_k_hit_rates else 0.0,
         horizon_metrics=horizon_summary,
+        benchmark_total_return=float(benchmark_total_return),
+        benchmark_annual_return=float(benchmark_annual_return),
+        excess_total_return=float(excess_total_return),
+        excess_annual_return=float(excess_annual_return),
+        excess_max_drawdown=float(np.min(excess_drawdown)),
+        information_ratio=float(information_ratio),
         nav_curve=[float(x) for x in nav.tolist()],
+        benchmark_nav_curve=[float(x) for x in benchmark_nav.tolist()],
+        excess_nav_curve=[float(x) for x in excess_nav.tolist()],
         curve_dates=[str(item.date()) for item in dates],
     )
 
@@ -1487,6 +1549,40 @@ def _prepare_v2_backtest_data(
     )
 
 
+def _tensorize_temporal_frame(
+    frame: pd.DataFrame,
+    *,
+    feature_cols: list[str],
+    group_col: str | None,
+    lag_depth: int = 3,
+) -> tuple[pd.DataFrame, list[str]]:
+    if frame.empty or not feature_cols:
+        return frame.copy(), []
+    lag_depth = max(1, int(lag_depth))
+    if group_col is None:
+        work = frame.sort_values("date").copy()
+        grouped = None
+    else:
+        work = frame.sort_values([group_col, "date"]).copy()
+        grouped = work.groupby(group_col, observed=True, sort=False)
+
+    out_cols: list[str] = []
+    lag_frames: list[pd.DataFrame] = []
+    for lag in range(lag_depth):
+        if grouped is None:
+            shifted = work[feature_cols].shift(lag)
+        else:
+            shifted = grouped[feature_cols].shift(lag)
+        new_cols = [f"{col}__lag{lag}" for col in feature_cols]
+        shifted = shifted.copy()
+        shifted.columns = new_cols
+        lag_frames.append(shifted)
+        out_cols.extend(new_cols)
+    if lag_frames:
+        work = pd.concat([work] + lag_frames, axis=1)
+    return work, out_cols
+
+
 class LinearForecastBackend:
     name = "linear"
 
@@ -1624,10 +1720,160 @@ class LinearForecastBackend:
         return _BacktestTrajectory(prepared=prepared, steps=steps)
 
 
+class DeepForecastBackend:
+    name = "deep"
+
+    def build_trajectory(
+        self,
+        prepared: _PreparedV2BacktestData,
+        *,
+        retrain_days: int = 20,
+    ) -> _BacktestTrajectory:
+        settings = prepared.settings
+        market_valid = prepared.market_valid
+        panel = prepared.panel
+        dates = prepared.dates
+        min_train_days = int(settings["min_train_days"])
+        steps: list[_TrajectoryStep] = []
+
+        tensor_market, tensor_market_cols = _tensorize_temporal_frame(
+            market_valid,
+            feature_cols=prepared.market_feature_cols,
+            group_col=None,
+            lag_depth=3,
+        )
+        tensor_panel, tensor_panel_cols = _tensorize_temporal_frame(
+            panel,
+            feature_cols=prepared.feature_cols,
+            group_col="symbol",
+            lag_depth=3,
+        )
+
+        for block_start in range(min_train_days, len(dates) - 1, max(1, int(retrain_days))):
+            train_dates = set(dates[:block_start])
+            market_train = tensor_market[tensor_market["date"].isin(train_dates)].copy()
+            if market_train.empty:
+                continue
+            market_short_model = MLPBinaryModel(l2=float(settings["l2"])).fit(
+                market_train,
+                tensor_market_cols,
+                "mkt_target_1d_up",
+            )
+            market_five_model = MLPBinaryModel(l2=float(settings["l2"])).fit(
+                market_train,
+                tensor_market_cols,
+                "mkt_target_5d_up",
+            )
+            market_mid_model = MLPBinaryModel(l2=float(settings["l2"])).fit(
+                market_train,
+                tensor_market_cols,
+                "mkt_target_20d_up",
+            )
+            panel_train = tensor_panel[tensor_panel["date"].isin(train_dates)].copy()
+            if panel_train.empty:
+                continue
+            panel_short_model = MLPBinaryModel(l2=float(settings["l2"])).fit(
+                panel_train,
+                tensor_panel_cols,
+                "target_1d_excess_mkt_up",
+            )
+            panel_five_model = MLPBinaryModel(l2=float(settings["l2"])).fit(
+                panel_train,
+                tensor_panel_cols,
+                "target_5d_excess_mkt_up",
+            )
+            panel_mid_model = MLPBinaryModel(l2=float(settings["l2"])).fit(
+                panel_train,
+                tensor_panel_cols,
+                "target_20d_excess_sector_up",
+            )
+            panel_short_q_models = _fit_mlp_quantile_quintet(
+                panel_train,
+                feature_cols=tensor_panel_cols,
+                target_col="excess_ret_1_vs_mkt",
+                l2=float(settings["l2"]),
+            )
+            panel_mid_q_models = _fit_mlp_quantile_quintet(
+                panel_train,
+                feature_cols=tensor_panel_cols,
+                target_col="excess_ret_20_vs_sector",
+                l2=float(settings["l2"]),
+            )
+
+            block_end = min(block_start + max(1, int(retrain_days)), len(dates) - 1)
+            for idx in range(block_start, block_end):
+                date = dates[idx]
+                next_date = dates[idx + 1]
+                market_row = tensor_market[tensor_market["date"] == date].copy()
+                if market_row.empty:
+                    continue
+                mkt_short = float(market_short_model.predict_proba(market_row, tensor_market_cols)[0])
+                mkt_five = float(market_five_model.predict_proba(market_row, tensor_market_cols)[0])
+                mkt_mid = float(market_mid_model.predict_proba(market_row, tensor_market_cols)[0])
+                market_state, cross_section = _build_market_and_cross_section_from_prebuilt_frame(
+                    market_frame=market_valid[market_valid["date"] <= date].copy(),
+                    market_short_prob=mkt_short,
+                    market_five_prob=mkt_five,
+                    market_mid_prob=mkt_mid,
+                )
+                panel_row = tensor_panel[tensor_panel["date"] == date].copy()
+                stock_states, scored_rows = _build_stock_states_from_panel_slice(
+                    panel_row=panel_row,
+                    feature_cols=tensor_panel_cols,
+                    short_model=panel_short_model,
+                    five_model=panel_five_model,
+                    mid_model=panel_mid_model,
+                    short_q_models=panel_short_q_models,
+                    mid_q_models=panel_mid_q_models,
+                )
+                if not stock_states:
+                    continue
+                grouped: dict[str, list[StockForecastState]] = {}
+                for stock_state in stock_states:
+                    grouped.setdefault(stock_state.sector, []).append(stock_state)
+                sector_states: list[SectorForecastState] = []
+                for sector, items in grouped.items():
+                    n = max(1, len(items))
+                    up5 = sum(item.up_5d_prob for item in items) / n
+                    up20 = sum(item.up_20d_prob for item in items) / n
+                    rel = sum(item.up_20d_prob - 0.5 for item in items) / n
+                    rotation = sum(abs(item.up_5d_prob - item.up_20d_prob) for item in items) / n
+                    crowding = sum(max(0.0, item.up_20d_prob - 0.5) for item in items) / n
+                    sector_states.append(
+                        SectorForecastState(
+                            sector=sector,
+                            up_5d_prob=float(up5),
+                            up_20d_prob=float(up20),
+                            relative_strength=float(rel),
+                            rotation_speed=float(_clip(rotation, 0.0, 1.0)),
+                            crowding_score=float(_clip(crowding, 0.0, 1.0)),
+                        )
+                    )
+                composite_state = compose_state(
+                    market=market_state,
+                    sectors=sector_states,
+                    stocks=stock_states,
+                    cross_section=cross_section,
+                )
+                steps.append(
+                    _TrajectoryStep(
+                        date=date,
+                        next_date=next_date,
+                        composite_state=composite_state,
+                        stock_states=stock_states,
+                        horizon_metrics=_panel_horizon_metrics(scored_rows),
+                    )
+                )
+
+        return _BacktestTrajectory(prepared=prepared, steps=steps)
+
+
 def _make_forecast_backend(name: str | None) -> ForecastBackend:
     backend = (str(name).strip().lower() if name is not None else "linear") or "linear"
     if backend == "linear":
         return LinearForecastBackend()
+    if backend == "deep":
+        return DeepForecastBackend()
     raise ValueError(f"Unsupported forecast backend: {backend}")
 
 
@@ -1796,6 +2042,7 @@ def _execute_v2_backtest_trajectory(
     commission_rate = max(0.0, float(commission_bps)) / 10000.0
     slippage_rate = max(0.0, float(slippage_bps)) / 10000.0
     returns: list[float] = []
+    benchmark_returns: list[float] = []
     gross_returns: list[float] = []
     turnovers: list[float] = []
     costs: list[float] = []
@@ -1861,7 +2108,12 @@ def _execute_v2_backtest_trajectory(
             total_commission_rate=commission_rate,
             base_slippage_rate=slippage_rate,
         )
+        benchmark_row = trajectory.prepared.market_valid[trajectory.prepared.market_valid["date"] == step.date]
+        benchmark_ret = 0.0
+        if not benchmark_row.empty:
+            benchmark_ret = _safe_float(benchmark_row.iloc[0].get("mkt_fwd_ret_1", 0.0), 0.0)
         returns.append(float(daily_ret))
+        benchmark_returns.append(float(benchmark_ret))
         gross_returns.append(float(gross_ret))
         turnovers.append(turnover)
         costs.append(cost)
@@ -1893,6 +2145,7 @@ def _execute_v2_backtest_trajectory(
     return (
         _to_v2_backtest_summary(
             returns=returns,
+            benchmark_returns=benchmark_returns,
             turnovers=turnovers,
             costs=costs,
             gross_returns=gross_returns,
@@ -2591,6 +2844,8 @@ def summarize_daily_run(result: DailyRunResult) -> dict[str, object]:
 def summarize_v2_backtest(result: V2BacktestSummary) -> dict[str, object]:
     payload = asdict(result)
     payload.pop("nav_curve", None)
+    payload.pop("benchmark_nav_curve", None)
+    payload.pop("excess_nav_curve", None)
     payload.pop("curve_dates", None)
     return payload
 

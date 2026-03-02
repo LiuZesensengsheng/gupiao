@@ -109,11 +109,21 @@ def _make_backtest(annual_return: float) -> V2BacktestSummary:
         avg_top_decile_return=0.008,
         avg_top_bottom_spread=0.012,
         avg_top_k_hit_rate=0.56,
+        benchmark_total_return=0.10,
+        benchmark_annual_return=0.09,
+        excess_total_return=0.07,
+        excess_annual_return=0.08,
+        excess_max_drawdown=-0.04,
+        information_ratio=0.72,
         horizon_metrics={
             "1d": {"rank_ic": 0.12, "top_decile_return": 0.003, "top_bottom_spread": 0.005, "top_k_hit_rate": 0.52},
             "5d": {"rank_ic": 0.10, "top_decile_return": 0.007, "top_bottom_spread": 0.012, "top_k_hit_rate": 0.56},
             "20d": {"rank_ic": 0.08, "top_decile_return": 0.018, "top_bottom_spread": 0.026, "top_k_hit_rate": 0.59},
         },
+        nav_curve=[1.0, 1.08, 1.18],
+        benchmark_nav_curve=[1.0, 1.04, 1.10],
+        excess_nav_curve=[1.0, 1.038, 1.073],
+        curve_dates=["2024-01-01", "2024-06-30", "2024-12-31"],
     )
 
 
@@ -368,6 +378,8 @@ def test_v2_markdown_reports_keep_key_chinese_sections(tmp_path: Path) -> None:
 
     assert "多周期横截面分层指标" in research_text
     assert "| 基线 | 5d |" in research_text
+    assert "超额年化" in research_text
+    assert "基准年化" in research_text
 
 
 def test_v2_html_dashboards_keep_key_chinese_sections(tmp_path: Path) -> None:
@@ -415,3 +427,5 @@ def test_v2_html_dashboards_keep_key_chinese_sections(tmp_path: Path) -> None:
     assert "V2 研究回测看板" in research_html
     assert "多周期横截面分层指标" in research_html
     assert ">5d<" in research_html
+    assert "策略 / 基准 / 超额净值" in research_html
+    assert "超额年化" in research_html

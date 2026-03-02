@@ -221,3 +221,193 @@ class QuantileLinearModel:
         if self.fallback_value_ is not None:
             return np.full(xs.shape[0], float(self.fallback_value_), dtype=float)
         return (xs @ self.coef_ + self.intercept_).astype(float)
+
+
+class _BaseMLPModel:
+    def __init__(
+        self,
+        *,
+        l2: float = 1.0,
+        hidden_dim: int = 24,
+        epochs: int = 120,
+        learning_rate: float = 0.03,
+        random_state: int = 7,
+    ) -> None:
+        self.l2 = float(l2)
+        self.hidden_dim = int(max(4, hidden_dim))
+        self.epochs = int(max(20, epochs))
+        self.learning_rate = float(max(1e-4, learning_rate))
+        self.random_state = int(random_state)
+        self.feature_names: List[str] = []
+        self.mean_: np.ndarray | None = None
+        self.std_: np.ndarray | None = None
+        self.w1_: np.ndarray | None = None
+        self.b1_: np.ndarray | None = None
+        self.w2_: np.ndarray | None = None
+        self.b2_: float = 0.0
+
+    def _prepare_x(self, df: pd.DataFrame, feature_cols: List[str]) -> np.ndarray:
+        x = _as_float_array(df, feature_cols)
+        if self.mean_ is None or self.std_ is None:
+            raise ValueError("Model is not trained.")
+        return (x - self.mean_) / self.std_
+
+    def _init_params(self, n_features: int) -> None:
+        rng = np.random.default_rng(self.random_state)
+        scale1 = 1.0 / np.sqrt(max(1, n_features))
+        scale2 = 1.0 / np.sqrt(max(1, self.hidden_dim))
+        self.w1_ = rng.normal(0.0, scale1, size=(n_features, self.hidden_dim)).astype(float)
+        self.b1_ = np.zeros(self.hidden_dim, dtype=float)
+        self.w2_ = rng.normal(0.0, scale2, size=self.hidden_dim).astype(float)
+        self.b2_ = 0.0
+
+    def _forward(self, xs: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+        if self.w1_ is None or self.b1_ is None or self.w2_ is None:
+            raise ValueError("Model is not initialized.")
+        hidden_linear = xs @ self.w1_ + self.b1_
+        hidden = np.tanh(hidden_linear)
+        output = hidden @ self.w2_ + float(self.b2_)
+        return hidden, output
+
+
+class MLPBinaryModel(_BaseMLPModel):
+    def __init__(
+        self,
+        l2: float = 1.0,
+        hidden_dim: int = 24,
+        epochs: int = 120,
+        learning_rate: float = 0.03,
+        random_state: int = 7,
+    ) -> None:
+        super().__init__(
+            l2=l2,
+            hidden_dim=hidden_dim,
+            epochs=epochs,
+            learning_rate=learning_rate,
+            random_state=random_state,
+        )
+        self.fallback_prob_: float | None = None
+
+    def fit(self, df: pd.DataFrame, feature_cols: List[str], target_col: str) -> "MLPBinaryModel":
+        train = df.dropna(subset=feature_cols + [target_col]).copy()
+        if train.empty:
+            raise ValueError("No rows available for MLP binary training after dropping NaN.")
+
+        y = train[target_col].astype(float).to_numpy()
+        x = _as_float_array(train, feature_cols)
+
+        self.feature_names = list(feature_cols)
+        self.mean_ = np.nanmean(x, axis=0)
+        self.std_ = np.nanstd(x, axis=0)
+        self.std_[self.std_ < 1e-8] = 1.0
+        xs = (x - self.mean_) / self.std_
+
+        positives = int((y == 1).sum())
+        negatives = int((y == 0).sum())
+        if positives == 0 or negatives == 0:
+            self.fallback_prob_ = float(np.clip(np.mean(y), 1e-4, 1 - 1e-4))
+            self._init_params(xs.shape[1])
+            return self
+
+        self._init_params(xs.shape[1])
+        for _ in range(self.epochs):
+            hidden, logits = self._forward(xs)
+            prob = np.clip(expit(logits), 1e-6, 1 - 1e-6)
+            grad_logits = (prob - y) / len(y)
+            grad_w2 = hidden.T @ grad_logits + self.l2 * self.w2_
+            grad_b2 = float(np.sum(grad_logits))
+            grad_hidden = np.outer(grad_logits, self.w2_) * (1.0 - hidden * hidden)
+            grad_w1 = xs.T @ grad_hidden + self.l2 * self.w1_
+            grad_b1 = np.sum(grad_hidden, axis=0)
+
+            self.w2_ = self.w2_ - self.learning_rate * grad_w2
+            self.b2_ = float(self.b2_ - self.learning_rate * grad_b2)
+            self.w1_ = self.w1_ - self.learning_rate * grad_w1
+            self.b1_ = self.b1_ - self.learning_rate * grad_b1
+
+        self.fallback_prob_ = None
+        return self
+
+    def predict_proba(self, df: pd.DataFrame, feature_cols: List[str] | None = None) -> np.ndarray:
+        if feature_cols is None:
+            feature_cols = self.feature_names
+        xs = self._prepare_x(df, feature_cols)
+        if self.fallback_prob_ is not None:
+            return np.full(xs.shape[0], float(self.fallback_prob_), dtype=float)
+        _, logits = self._forward(xs)
+        return np.clip(expit(logits), 1e-6, 1 - 1e-6)
+
+
+class MLPQuantileModel(_BaseMLPModel):
+    def __init__(
+        self,
+        quantile: float,
+        l2: float = 1.0,
+        hidden_dim: int = 24,
+        epochs: int = 120,
+        learning_rate: float = 0.03,
+        random_state: int = 7,
+    ) -> None:
+        super().__init__(
+            l2=l2,
+            hidden_dim=hidden_dim,
+            epochs=epochs,
+            learning_rate=learning_rate,
+            random_state=random_state,
+        )
+        self.quantile = float(np.clip(float(quantile), 1e-3, 1.0 - 1e-3))
+        self.fallback_value_: float | None = None
+
+    def fit(self, df: pd.DataFrame, feature_cols: List[str], target_col: str) -> "MLPQuantileModel":
+        train = df.dropna(subset=feature_cols + [target_col]).copy()
+        if train.empty:
+            raise ValueError("No rows available for MLP quantile training after dropping NaN.")
+
+        y = train[target_col].astype(float).to_numpy()
+        x = _as_float_array(train, feature_cols)
+
+        self.feature_names = list(feature_cols)
+        self.mean_ = np.nanmean(x, axis=0)
+        self.std_ = np.nanstd(x, axis=0)
+        self.std_[self.std_ < 1e-8] = 1.0
+        xs = (x - self.mean_) / self.std_
+
+        q_value = float(np.quantile(y, self.quantile))
+        if len(y) < 25 or float(np.nanstd(y)) < 1e-10:
+            self.fallback_value_ = q_value
+            self._init_params(xs.shape[1])
+            self.b2_ = q_value
+            return self
+
+        self._init_params(xs.shape[1])
+        self.b2_ = q_value
+        for _ in range(self.epochs):
+            hidden, pred = self._forward(xs)
+            residual = y - pred
+            grad_pred = np.where(
+                residual > 0.0,
+                -self.quantile,
+                1.0 - self.quantile,
+            ) / len(y)
+            grad_w2 = hidden.T @ grad_pred + self.l2 * self.w2_
+            grad_b2 = float(np.sum(grad_pred))
+            grad_hidden = np.outer(grad_pred, self.w2_) * (1.0 - hidden * hidden)
+            grad_w1 = xs.T @ grad_hidden + self.l2 * self.w1_
+            grad_b1 = np.sum(grad_hidden, axis=0)
+
+            self.w2_ = self.w2_ - self.learning_rate * grad_w2
+            self.b2_ = float(self.b2_ - self.learning_rate * grad_b2)
+            self.w1_ = self.w1_ - self.learning_rate * grad_w1
+            self.b1_ = self.b1_ - self.learning_rate * grad_b1
+
+        self.fallback_value_ = None
+        return self
+
+    def predict(self, df: pd.DataFrame, feature_cols: List[str] | None = None) -> np.ndarray:
+        if feature_cols is None:
+            feature_cols = self.feature_names
+        xs = self._prepare_x(df, feature_cols)
+        if self.fallback_value_ is not None:
+            return np.full(xs.shape[0], float(self.fallback_value_), dtype=float)
+        _, pred = self._forward(xs)
+        return np.asarray(pred, dtype=float)

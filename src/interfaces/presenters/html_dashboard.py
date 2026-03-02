@@ -1408,6 +1408,17 @@ def write_v2_research_dashboard(
             ),
         ]
     )
+    curve_html = ""
+    if baseline.nav_curve and baseline.benchmark_nav_curve and baseline.excess_nav_curve and baseline.curve_dates:
+        curve_frame = pd.DataFrame(
+            {
+                "date": pd.to_datetime(baseline.curve_dates),
+                "strategy_nav": baseline.nav_curve,
+                "benchmark_nav": baseline.benchmark_nav_curve,
+                "excess_nav": baseline.excess_nav_curve,
+            }
+        )
+        curve_html = _line_chart_html(curve_frame)
     artifact_rows = "".join(
         f"<tr><th>{escape(str(label))}</th><td>{escape(str(path_value))}</td></tr>"
         for label, path_value in (artifacts or {}).items()
@@ -1494,9 +1505,22 @@ def write_v2_research_dashboard(
       <div class="sub">策略 {escape(strategy_id)} | 基线回测与策略校准结果</div>
       <div class="grid four">
         {_metric_tile("基线年化", _pct(baseline.annual_return), "#185e66")}
+        {_metric_tile("基准年化", _pct(baseline.benchmark_annual_return), "#1f63d8")}
+        {_metric_tile("超额年化", _pct(baseline.excess_annual_return), "#0f8a64")}
+        {_metric_tile("超额IR", _num(baseline.information_ratio, 3), "#0f8a64")}
+      </div>
+      <div class="grid four">
         {_metric_tile("基线回撤", _pct(baseline.max_drawdown), "#c14d2d")}
         {_metric_tile("最优评分", _num(calibration.best_score, 4), "#185e66")}
         {_metric_tile("校准年化", _pct(calibration.calibrated.annual_return), "#c14d2d")}
+        {_metric_tile("校准超额", _pct(calibration.calibrated.excess_annual_return), "#0f8a64")}
+      </div>
+    </section>
+
+    <section class="grid">
+      <div class="viz-card">
+        <h2>策略 / 基准 / 超额净值</h2>
+        {curve_html or "<div class='empty'>无可用净值曲线</div>"}
       </div>
     </section>
 
@@ -1515,11 +1539,11 @@ def write_v2_research_dashboard(
       <div class="card">
         <h2>回测结果</h2>
         <table>
-          <thead><tr><th>方案</th><th>开始</th><th>结束</th><th>交易日</th><th>总收益</th><th>年化</th><th>回撤</th><th>换手</th><th>平均RankIC</th><th>头尾价差</th><th>TopK命中率</th><th>成本</th></tr></thead>
+          <thead><tr><th>方案</th><th>开始</th><th>结束</th><th>交易日</th><th>总收益</th><th>年化</th><th>基准年化</th><th>超额年化</th><th>超额IR</th><th>回撤</th><th>换手</th><th>平均RankIC</th><th>头尾价差</th><th>TopK命中率</th><th>成本</th></tr></thead>
           <tbody>
-            <tr><td>基线方案</td><td>{escape(baseline.start_date or 'NA')}</td><td>{escape(baseline.end_date or 'NA')}</td><td>{baseline.n_days}</td><td>{_pct(baseline.total_return)}</td><td>{_pct(baseline.annual_return)}</td><td>{_pct(baseline.max_drawdown)}</td><td>{_pct(baseline.avg_turnover)}</td><td>{_num(baseline.avg_rank_ic, 3)}</td><td>{_pct(baseline.avg_top_bottom_spread)}</td><td>{_pct(baseline.avg_top_k_hit_rate)}</td><td>{_pct(baseline.total_cost)}</td></tr>
-            <tr><td>校准方案</td><td>{escape(calibration.calibrated.start_date or 'NA')}</td><td>{escape(calibration.calibrated.end_date or 'NA')}</td><td>{calibration.calibrated.n_days}</td><td>{_pct(calibration.calibrated.total_return)}</td><td>{_pct(calibration.calibrated.annual_return)}</td><td>{_pct(calibration.calibrated.max_drawdown)}</td><td>{_pct(calibration.calibrated.avg_turnover)}</td><td>{_num(calibration.calibrated.avg_rank_ic, 3)}</td><td>{_pct(calibration.calibrated.avg_top_bottom_spread)}</td><td>{_pct(calibration.calibrated.avg_top_k_hit_rate)}</td><td>{_pct(calibration.calibrated.total_cost)}</td></tr>
-            <tr><td>学习方案</td><td>{escape(learning.learned.start_date or 'NA')}</td><td>{escape(learning.learned.end_date or 'NA')}</td><td>{learning.learned.n_days}</td><td>{_pct(learning.learned.total_return)}</td><td>{_pct(learning.learned.annual_return)}</td><td>{_pct(learning.learned.max_drawdown)}</td><td>{_pct(learning.learned.avg_turnover)}</td><td>{_num(learning.learned.avg_rank_ic, 3)}</td><td>{_pct(learning.learned.avg_top_bottom_spread)}</td><td>{_pct(learning.learned.avg_top_k_hit_rate)}</td><td>{_pct(learning.learned.total_cost)}</td></tr>
+            <tr><td>基线方案</td><td>{escape(baseline.start_date or 'NA')}</td><td>{escape(baseline.end_date or 'NA')}</td><td>{baseline.n_days}</td><td>{_pct(baseline.total_return)}</td><td>{_pct(baseline.annual_return)}</td><td>{_pct(baseline.benchmark_annual_return)}</td><td>{_pct(baseline.excess_annual_return)}</td><td>{_num(baseline.information_ratio, 3)}</td><td>{_pct(baseline.max_drawdown)}</td><td>{_pct(baseline.avg_turnover)}</td><td>{_num(baseline.avg_rank_ic, 3)}</td><td>{_pct(baseline.avg_top_bottom_spread)}</td><td>{_pct(baseline.avg_top_k_hit_rate)}</td><td>{_pct(baseline.total_cost)}</td></tr>
+            <tr><td>校准方案</td><td>{escape(calibration.calibrated.start_date or 'NA')}</td><td>{escape(calibration.calibrated.end_date or 'NA')}</td><td>{calibration.calibrated.n_days}</td><td>{_pct(calibration.calibrated.total_return)}</td><td>{_pct(calibration.calibrated.annual_return)}</td><td>{_pct(calibration.calibrated.benchmark_annual_return)}</td><td>{_pct(calibration.calibrated.excess_annual_return)}</td><td>{_num(calibration.calibrated.information_ratio, 3)}</td><td>{_pct(calibration.calibrated.max_drawdown)}</td><td>{_pct(calibration.calibrated.avg_turnover)}</td><td>{_num(calibration.calibrated.avg_rank_ic, 3)}</td><td>{_pct(calibration.calibrated.avg_top_bottom_spread)}</td><td>{_pct(calibration.calibrated.avg_top_k_hit_rate)}</td><td>{_pct(calibration.calibrated.total_cost)}</td></tr>
+            <tr><td>学习方案</td><td>{escape(learning.learned.start_date or 'NA')}</td><td>{escape(learning.learned.end_date or 'NA')}</td><td>{learning.learned.n_days}</td><td>{_pct(learning.learned.total_return)}</td><td>{_pct(learning.learned.annual_return)}</td><td>{_pct(learning.learned.benchmark_annual_return)}</td><td>{_pct(learning.learned.excess_annual_return)}</td><td>{_num(learning.learned.information_ratio, 3)}</td><td>{_pct(learning.learned.max_drawdown)}</td><td>{_pct(learning.learned.avg_turnover)}</td><td>{_num(learning.learned.avg_rank_ic, 3)}</td><td>{_pct(learning.learned.avg_top_bottom_spread)}</td><td>{_pct(learning.learned.avg_top_k_hit_rate)}</td><td>{_pct(learning.learned.total_cost)}</td></tr>
           </tbody>
         </table>
       </div>
