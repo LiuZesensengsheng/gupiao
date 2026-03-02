@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Callable
 from typing import Sequence
 
 import numpy as np
@@ -312,7 +313,13 @@ def run_quant_pipeline(
     margin_market_file: str = "input/margin_market.csv",
     margin_stock_file: str = "input/margin_stock.csv",
     enable_walk_forward_eval: bool = True,
+    progress_callback: Callable[[str], None] | None = None,
 ) -> tuple[MarketForecast, list[ForecastRow]]:
+    def _notify(message: str) -> None:
+        if progress_callback is not None:
+            progress_callback(str(message))
+
+    _notify("开始拟合市场模型")
     market_raw = load_symbol_daily(
         symbol=market_security.symbol,
         source=source,
@@ -412,6 +419,7 @@ def run_quant_pipeline(
     market_forecast.short_bucket_probs = list(market_short_bucket.bucket_probs)
     market_forecast.mid_bucket_probs = list(market_mid_bucket.bucket_probs)
 
+    _notify(f"开始构建股票面板: universe={len(stock_securities)}")
     panel_bundle: StockPanelDataset = build_stock_panel_dataset(
         stock_securities=stock_securities,
         source=source,
@@ -429,6 +437,7 @@ def run_quant_pipeline(
     if panel.empty or not feature_cols:
         raise DataError("No valid stock rows with complete panel features for selected universe.")
 
+    _notify(f"开始拟合股票面板模型: rows={len(panel)}, features={len(feature_cols)}")
     panel_short_model = _fit_latest_model(panel, feature_cols=feature_cols, target_col="target_1d_excess_mkt_up", l2=l2)
     panel_five_model = _fit_latest_model(panel, feature_cols=feature_cols, target_col="target_5d_excess_mkt_up", l2=l2)
     panel_mid_model = _fit_latest_model(panel, feature_cols=feature_cols, target_col="target_20d_excess_sector_up", l2=l2)
@@ -478,6 +487,7 @@ def run_quant_pipeline(
     if latest_panel.empty:
         raise DataError("No latest panel rows available for stock prediction.")
 
+    _notify(f"开始批量股票打分: symbols={len(latest_panel)}")
     short_probs = panel_short_model.predict_proba(latest_panel, feature_cols=feature_cols)
     five_probs = panel_five_model.predict_proba(latest_panel, feature_cols=feature_cols)
     mid_probs = panel_mid_model.predict_proba(latest_panel, feature_cols=feature_cols)
@@ -567,4 +577,5 @@ def run_quant_pipeline(
     for idx, weight in zip(tradable_indices, tradable_weights):
         stock_rows[idx].suggested_weight = float(weight)
     stock_rows.sort(key=lambda x: x.score, reverse=True)
+    _notify(f"量化预测完成: actionable={len(tradable_rows)}, total={len(stock_rows)}")
     return market_forecast, stock_rows

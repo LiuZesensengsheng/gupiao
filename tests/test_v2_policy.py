@@ -597,9 +597,13 @@ def test_run_daily_v2_live_reuses_cache_without_retraining(monkeypatch: pytest.M
         "universe_limit": 5,
     }
     calls = {"quant": 0}
+    progress: list[tuple[str, str]] = []
 
     def fake_quant(**_: object) -> tuple[MarketForecast, list[ForecastRow]]:
+        progress_callback = _.get("progress_callback")
+        assert callable(progress_callback)
         calls["quant"] += 1
+        progress_callback("量化预测测试进度")
         return (
             MarketForecast(
                 symbol="000001.SH",
@@ -628,6 +632,7 @@ def test_run_daily_v2_live_reuses_cache_without_retraining(monkeypatch: pytest.M
             ],
         )
 
+    monkeypatch.setattr("src.application.v2_services._emit_progress", lambda stage, message: progress.append((stage, message)))
     monkeypatch.setattr("src.application.v2_services._load_v2_runtime_settings", lambda **_: settings)
     monkeypatch.setattr(
         "src.application.v2_services.load_watchlist",
@@ -669,3 +674,5 @@ def test_run_daily_v2_live_reuses_cache_without_retraining(monkeypatch: pytest.M
     assert calls["quant"] == 1
     assert first.policy_decision.target_exposure == second.policy_decision.target_exposure
     assert len(second.trade_actions) == len(first.trade_actions)
+    assert any(stage == "daily" and "量化预测测试进度" in message for stage, message in progress)
+    assert any(stage == "daily" and "命中日运行缓存" in message for stage, message in progress)

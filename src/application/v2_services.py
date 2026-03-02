@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 import pickle
+import time
 from dataclasses import asdict, dataclass
 from datetime import datetime
 from pathlib import Path
@@ -82,6 +83,14 @@ def _trajectory_step_count(trajectory: object) -> int:
         return int(len(steps))
     except TypeError:
         return 0
+
+
+def _format_elapsed(seconds: float) -> str:
+    secs = max(0, int(round(float(seconds))))
+    minutes, remain = divmod(secs, 60)
+    if minutes <= 0:
+        return f"{remain}s"
+    return f"{minutes}m{remain:02d}s"
 
 
 def _policy_feature_names() -> list[str]:
@@ -1917,11 +1926,15 @@ class LinearForecastBackend:
             "trajectory",
             f"backend={self.name} 开始构建轨迹: blocks={len(block_starts)}, dates={len(dates)}, universe={len(prepared.stock_frames)}",
         )
+        trajectory_started = time.perf_counter()
 
         for block_idx, block_start in enumerate(block_starts, start=1):
+            elapsed = time.perf_counter() - trajectory_started
+            completed = max(0, block_idx - 1)
+            eta = 0.0 if completed <= 0 else (elapsed / completed) * (len(block_starts) - completed)
             _emit_progress(
                 "trajectory",
-                f"backend={self.name} 训练块 {block_idx}/{len(block_starts)}: 截止 {pd.Timestamp(dates[block_start - 1]).date()}",
+                f"backend={self.name} 训练块 {block_idx}/{len(block_starts)}: 截止 {pd.Timestamp(dates[block_start - 1]).date()} | elapsed={_format_elapsed(elapsed)} | eta={_format_elapsed(eta)}",
             )
             train_cutoff = market_bounds.get(dates[block_start - 1], (0, 0))[1]
             market_train = market_sorted.iloc[:train_cutoff].copy()
@@ -2070,12 +2083,14 @@ class DeepForecastBackend:
             group_col=None,
             lag_depth=3,
         )
+        _emit_progress("trajectory", f"backend={self.name} 已完成市场时序张量化: cols={len(tensor_market_cols)}")
         tensor_panel, tensor_panel_cols = _tensorize_temporal_frame(
             panel,
             feature_cols=prepared.feature_cols,
             group_col="symbol",
             lag_depth=3,
         )
+        _emit_progress("trajectory", f"backend={self.name} 已完成个股时序张量化: cols={len(tensor_panel_cols)}")
         tensor_market_sorted, tensor_market_bounds = _build_date_slice_index(
             tensor_market,
             sort_cols=["date"],
@@ -2089,11 +2104,15 @@ class DeepForecastBackend:
             "trajectory",
             f"backend={self.name} 开始构建轨迹: blocks={len(block_starts)}, dates={len(dates)}, universe={len(prepared.stock_frames)}",
         )
+        trajectory_started = time.perf_counter()
 
         for block_idx, block_start in enumerate(block_starts, start=1):
+            elapsed = time.perf_counter() - trajectory_started
+            completed = max(0, block_idx - 1)
+            eta = 0.0 if completed <= 0 else (elapsed / completed) * (len(block_starts) - completed)
             _emit_progress(
                 "trajectory",
-                f"backend={self.name} 训练块 {block_idx}/{len(block_starts)}: 截止 {pd.Timestamp(dates[block_start - 1]).date()}",
+                f"backend={self.name} 训练块 {block_idx}/{len(block_starts)}: 截止 {pd.Timestamp(dates[block_start - 1]).date()} | elapsed={_format_elapsed(elapsed)} | eta={_format_elapsed(eta)}",
             )
             train_cutoff = tensor_market_bounds.get(dates[block_start - 1], (0, 0))[1]
             market_train = tensor_market_sorted.iloc[:train_cutoff].copy()
@@ -3156,6 +3175,7 @@ def run_daily_v2_live(
         cache_key=cache_key,
     )
     if not refresh_cache and cache_path.exists():
+        _emit_progress("daily", "命中日运行缓存，直接复用结果")
         try:
             with cache_path.open("rb") as f:
                 cached = pickle.load(f)
@@ -3163,11 +3183,14 @@ def run_daily_v2_live(
                 return cached
         except Exception:
             pass
+    else:
+        _emit_progress("daily", "日运行缓存未命中，开始重建")
     snapshot = build_strategy_snapshot(
         strategy_id=strategy_id,
         universe_id=Path(str(settings["universe_file"])).stem or "v2_universe",
     )
 
+    _emit_progress("daily", "加载观察池与候选股票池")
     market_security, current_holdings, base_sector_map = load_watchlist(str(settings["watchlist"]))
     universe = build_candidate_universe(
         source=str(settings["source"]),
@@ -3182,6 +3205,7 @@ def run_daily_v2_live(
         for stock in stocks
     }
 
+    _emit_progress("daily", f"开始量化预测: universe={len(stocks)}")
     market_forecast, stock_rows = run_quant_pipeline(
         market_security=market_security,
         stock_securities=stocks,
@@ -3197,8 +3221,10 @@ def run_daily_v2_live(
         margin_market_file=str(settings["margin_market_file"]),
         margin_stock_file=str(settings["margin_stock_file"]),
         enable_walk_forward_eval=False,
+        progress_callback=lambda message: _emit_progress("daily", message),
     )
 
+    _emit_progress("daily", "开始构建市场状态与横截面状态")
     market_raw = load_symbol_daily(
         symbol=market_security.symbol,
         source=str(settings["source"]),
@@ -3218,6 +3244,7 @@ def run_daily_v2_live(
         market_five_prob=float(market_forecast.five_prob),
         market_mid_prob=float(market_forecast.mid_prob),
     )
+    _emit_progress("daily", "开始独立板块预测")
     sector_frames = build_sector_daily_frames(
         stock_securities=stocks,
         sector_map=sector_map,
@@ -3244,6 +3271,7 @@ def run_daily_v2_live(
     ]
     sector_strength_map = {item.sector: float(item.excess_vs_market_prob - 0.5) for item in sector_records}
     stocks_state = _build_stock_states_from_rows(stock_rows, sector_map, sector_strength_map=sector_strength_map)
+    _emit_progress("daily", "开始策略决策与交易计划生成")
     composite_state = compose_state(
         market=market_state,
         sectors=sectors,
@@ -3289,6 +3317,7 @@ def run_daily_v2_live(
     try:
         with cache_path.open("wb") as f:
             pickle.dump(result, f, protocol=pickle.HIGHEST_PROTOCOL)
+        _emit_progress("daily", "日运行缓存已写入")
     except Exception:
         pass
     return result
