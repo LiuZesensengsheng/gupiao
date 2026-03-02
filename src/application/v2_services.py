@@ -72,6 +72,18 @@ def _safe_float(value: object, default: float = 0.0) -> float:
     return out
 
 
+def _emit_progress(stage: str, message: str) -> None:
+    print(f"[V2][{stage}] {message}")
+
+
+def _trajectory_step_count(trajectory: object) -> int:
+    steps = getattr(trajectory, "steps", [])
+    try:
+        return int(len(steps))
+    except TypeError:
+        return 0
+
+
 def _policy_feature_names() -> list[str]:
     return [
         "mkt_up_1d",
@@ -1900,8 +1912,17 @@ class LinearForecastBackend:
             panel,
             sort_cols=["date", "symbol"],
         )
+        block_starts = list(range(min_train_days, len(dates) - 1, max(1, int(retrain_days))))
+        _emit_progress(
+            "trajectory",
+            f"backend={self.name} 开始构建轨迹: blocks={len(block_starts)}, dates={len(dates)}, universe={len(prepared.stock_frames)}",
+        )
 
-        for block_start in range(min_train_days, len(dates) - 1, max(1, int(retrain_days))):
+        for block_idx, block_start in enumerate(block_starts, start=1):
+            _emit_progress(
+                "trajectory",
+                f"backend={self.name} 训练块 {block_idx}/{len(block_starts)}: 截止 {pd.Timestamp(dates[block_start - 1]).date()}",
+            )
             train_cutoff = market_bounds.get(dates[block_start - 1], (0, 0))[1]
             market_train = market_sorted.iloc[:train_cutoff].copy()
             if market_train.empty:
@@ -2063,8 +2084,17 @@ class DeepForecastBackend:
             tensor_panel,
             sort_cols=["date", "symbol"],
         )
+        block_starts = list(range(min_train_days, len(dates) - 1, max(1, int(retrain_days))))
+        _emit_progress(
+            "trajectory",
+            f"backend={self.name} 开始构建轨迹: blocks={len(block_starts)}, dates={len(dates)}, universe={len(prepared.stock_frames)}",
+        )
 
-        for block_start in range(min_train_days, len(dates) - 1, max(1, int(retrain_days))):
+        for block_idx, block_start in enumerate(block_starts, start=1):
+            _emit_progress(
+                "trajectory",
+                f"backend={self.name} 训练块 {block_idx}/{len(block_starts)}: 截止 {pd.Timestamp(dates[block_start - 1]).date()}",
+            )
             train_cutoff = tensor_market_bounds.get(dates[block_start - 1], (0, 0))[1]
             market_train = tensor_market_sorted.iloc[:train_cutoff].copy()
             if market_train.empty:
@@ -2308,6 +2338,7 @@ def _load_or_build_v2_backtest_trajectory(
     )
     cache_path = _trajectory_cache_path(cache_root=cache_root, cache_key=cache_key)
     if not refresh_cache and cache_path.exists():
+        _emit_progress("cache", f"命中轨迹缓存: backend={backend.name}")
         try:
             with cache_path.open("rb") as f:
                 cached = pickle.load(f)
@@ -2315,7 +2346,10 @@ def _load_or_build_v2_backtest_trajectory(
                 return cached
         except Exception:
             pass
+    else:
+        _emit_progress("cache", f"轨迹缓存未命中: backend={backend.name}，准备重建")
 
+    _emit_progress("research", "开始准备研究数据")
     prepared = _prepare_v2_backtest_data(
         config_path=config_path,
         source=source,
@@ -2324,6 +2358,7 @@ def _load_or_build_v2_backtest_trajectory(
     )
     if prepared is None:
         return None
+    _emit_progress("research", "开始构建预测轨迹")
     trajectory = _build_v2_backtest_trajectory_from_prepared(
         prepared,
         retrain_days=retrain_days,
@@ -2332,6 +2367,7 @@ def _load_or_build_v2_backtest_trajectory(
     try:
         with cache_path.open("wb") as f:
             pickle.dump(trajectory, f, protocol=pickle.HIGHEST_PROTOCOL)
+        _emit_progress("cache", f"轨迹缓存已写入: backend={backend.name}")
     except Exception:
         pass
     return trajectory
@@ -2647,9 +2683,14 @@ def calibrate_v2_policy(
         }
     ]
     baseline_key = _policy_spec_key(baseline_spec)
-    for spec in candidates:
-        if _policy_spec_key(spec) == baseline_key:
-            continue
+    candidate_specs = [spec for spec in candidates if _policy_spec_key(spec) != baseline_key]
+    total_candidates = len(candidate_specs)
+    _emit_progress("calibration", f"开始参数搜索: candidates={total_candidates}")
+    for idx, spec in enumerate(candidate_specs, start=1):
+        _emit_progress(
+            "calibration",
+            f"评估候选 {idx}/{total_candidates}: exposure={spec.risk_on_exposure:.2f}, positions={spec.risk_on_positions}, turnover={spec.risk_on_turnover_cap:.2f}",
+        )
         summary = run_v2_backtest_live(
             strategy_id=strategy_id,
             config_path=config_path,
@@ -2674,6 +2715,7 @@ def calibrate_v2_policy(
             best_score = float(score)
             best_spec = spec
             best_summary = summary
+            _emit_progress("calibration", f"发现更优参数: score={best_score:.4f}")
     return V2CalibrationResult(
         best_policy=best_spec,
         best_score=float(best_score),
@@ -2850,6 +2892,7 @@ def run_v2_research_workflow(
     refresh_cache: bool = False,
     forecast_backend: str = "linear",
 ) -> tuple[V2BacktestSummary, V2CalibrationResult, V2PolicyLearningResult]:
+    _emit_progress("research", f"载入研究轨迹: backend={forecast_backend}")
     trajectory = _load_or_build_v2_backtest_trajectory(
         config_path=config_path,
         source=source,
@@ -2873,6 +2916,11 @@ def run_v2_research_workflow(
         )
         return empty_summary, _baseline_only_calibration(empty_summary), _placeholder_learning_result(empty_summary)
     _, validation_trajectory, holdout_trajectory = _split_research_trajectory(trajectory)
+    _emit_progress(
+        "research",
+        f"样本切分完成: validation={_trajectory_step_count(validation_trajectory)}, holdout={_trajectory_step_count(holdout_trajectory)}",
+    )
+    _emit_progress("research", "开始回放 holdout 基线")
     baseline = run_v2_backtest_live(
         strategy_id=strategy_id,
         config_path=config_path,
@@ -2886,6 +2934,7 @@ def run_v2_research_workflow(
     )
     validation_baseline = None
     if not skip_calibration:
+        _emit_progress("research", "开始回放 validation 基线")
         validation_baseline = run_v2_backtest_live(
             strategy_id=strategy_id,
             config_path=config_path,
@@ -2914,6 +2963,7 @@ def run_v2_research_workflow(
         )
     )
     if not skip_calibration:
+        _emit_progress("research", "参数搜索完成，开始 holdout 复核")
         holdout_calibrated = run_v2_backtest_live(
             strategy_id=strategy_id,
             config_path=config_path,
@@ -2933,6 +2983,8 @@ def run_v2_research_workflow(
             calibrated=holdout_calibrated,
             trials=calibration.trials,
         )
+    else:
+        _emit_progress("research", "已跳过参数搜索")
     learning = (
         _placeholder_learning_result(baseline)
         if skip_learning
@@ -2951,6 +3003,10 @@ def run_v2_research_workflow(
             forecast_backend=forecast_backend,
         )
     )
+    if skip_learning:
+        _emit_progress("research", "已跳过学习型策略")
+    else:
+        _emit_progress("research", "学习型策略评估完成")
     return baseline, calibration, learning
 
 

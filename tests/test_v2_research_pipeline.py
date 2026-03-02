@@ -278,6 +278,42 @@ def test_calibrate_v2_policy_runs_expanded_validation_grid(monkeypatch: pytest.M
     assert result.best_score >= max(float(item["score"]) for item in result.trials)
 
 
+def test_calibrate_v2_policy_emits_progress_updates(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    baseline = _make_backtest(0.18, 0.16)
+    progress: list[tuple[str, str]] = []
+
+    def fake_backtest(**kwargs: object) -> V2BacktestSummary:
+        policy_spec = kwargs.get("policy_spec")
+        annual = 0.12
+        if isinstance(policy_spec, PolicySpec):
+            annual += 0.02 * float(policy_spec.risk_on_exposure)
+        return V2BacktestSummary(
+            start_date="2024-01-01",
+            end_date="2024-12-31",
+            n_days=120,
+            total_return=annual,
+            annual_return=annual,
+            max_drawdown=-0.06,
+            avg_turnover=0.18,
+            total_cost=0.01,
+            excess_annual_return=0.08,
+            information_ratio=0.50,
+        )
+
+    monkeypatch.setattr("src.application.v2_services.run_v2_backtest_live", fake_backtest)
+    monkeypatch.setattr("src.application.v2_services._emit_progress", lambda stage, message: progress.append((stage, message)))
+
+    calibrate_v2_policy(
+        strategy_id="swing_v2",
+        baseline=baseline,
+        trajectory=object(),
+        cache_root=str(tmp_path),
+    )
+
+    assert any(stage == "calibration" and "开始参数搜索" in message for stage, message in progress)
+    assert any(stage == "calibration" and "评估候选" in message for stage, message in progress)
+
+
 def test_research_workflow_light_mode_skips_heavy_stages(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     baseline = _make_backtest(0.18, 0.16)
     trajectory_sentinel = object()
@@ -322,6 +358,35 @@ def test_research_workflow_light_mode_skips_heavy_stages(monkeypatch: pytest.Mon
     assert calibration.trials
     assert learning.learned == baseline
     assert learning.model.train_rows == 0
+
+
+def test_research_workflow_emits_stage_progress(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    baseline = _make_backtest(0.18, 0.16)
+    trajectory_sentinel = object()
+    train_sentinel = object()
+    validation_sentinel = object()
+    holdout_sentinel = object()
+    progress: list[tuple[str, str]] = []
+
+    monkeypatch.setattr("src.application.v2_services._emit_progress", lambda stage, message: progress.append((stage, message)))
+    monkeypatch.setattr("src.application.v2_services._load_or_build_v2_backtest_trajectory", lambda **_: trajectory_sentinel)
+    monkeypatch.setattr(
+        "src.application.v2_services._split_research_trajectory",
+        lambda trajectory: (train_sentinel, validation_sentinel, holdout_sentinel),
+    )
+    monkeypatch.setattr("src.application.v2_services.run_v2_backtest_live", lambda **_: baseline)
+
+    run_v2_research_workflow(
+        strategy_id="swing_v2",
+        skip_calibration=True,
+        skip_learning=True,
+        cache_root=str(tmp_path),
+    )
+
+    assert any(stage == "research" and "载入研究轨迹" in message for stage, message in progress)
+    assert any(stage == "research" and "样本切分完成" in message for stage, message in progress)
+    assert any(stage == "research" and "已跳过参数搜索" in message for stage, message in progress)
+    assert any(stage == "research" and "已跳过学习型策略" in message for stage, message in progress)
 
 
 def test_research_workflow_reuses_single_trajectory_for_all_stages(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
