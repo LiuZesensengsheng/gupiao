@@ -18,11 +18,13 @@ from src.application.v2_contracts import (
     V2PolicyLearningResult,
 )
 from src.application.v2_services import (
+    _build_date_slice_index,
     calibrate_v2_policy,
     _load_or_build_v2_backtest_trajectory,
     _make_forecast_backend,
     _policy_objective_score,
     _policy_spec_from_model,
+    _predict_quantile_profiles,
     _tensorize_temporal_frame,
     load_published_v2_policy_model,
     publish_v2_research_artifacts,
@@ -473,6 +475,62 @@ def test_load_or_build_v2_backtest_trajectory_uses_disk_cache(monkeypatch: pytes
     assert first == built_trajectory
     assert second == built_trajectory
     assert seen["build_calls"] == 1
+
+
+def test_predict_quantile_profiles_vectorizes_and_keeps_monotonic_order() -> None:
+    frame = pd.DataFrame({"feature": [1.0, 2.0]})
+
+    class _DummyModel:
+        def __init__(self, scale: float) -> None:
+            self.scale = scale
+
+        def predict(self, row: pd.DataFrame, feature_cols: list[str]) -> pd.Series:
+            return row[feature_cols[0]].astype(float) * self.scale
+
+    out = _predict_quantile_profiles(
+        frame,
+        feature_cols=["feature"],
+        q_models=(
+            _DummyModel(0.60),
+            _DummyModel(0.30),
+            _DummyModel(0.80),
+            _DummyModel(0.70),
+            _DummyModel(0.90),
+        ),
+    )
+
+    assert list(out.columns) == ["expected_return", "q10", "q30", "q20", "q50", "q70", "q80", "q90"]
+    assert out.loc[0, "q10"] <= out.loc[0, "q30"] <= out.loc[0, "q50"] <= out.loc[0, "q70"] <= out.loc[0, "q90"]
+    assert out.loc[1, "q10"] == pytest.approx(1.2)
+    assert out.loc[1, "q30"] == pytest.approx(1.2)
+    assert out.loc[1, "q50"] == pytest.approx(1.6)
+    assert out.loc[1, "q70"] == pytest.approx(1.6)
+    assert out.loc[1, "q90"] == pytest.approx(1.8)
+    assert out.loc[1, "expected_return"] == pytest.approx(1.5)
+
+
+def test_build_date_slice_index_returns_contiguous_bounds() -> None:
+    frame = pd.DataFrame(
+        {
+            "date": pd.to_datetime(["2024-01-02", "2024-01-01", "2024-01-02", "2024-01-01"]),
+            "symbol": ["BBB", "AAA", "AAA", "BBB"],
+            "value": [2, 1, 3, 4],
+        }
+    )
+
+    sorted_frame, bounds = _build_date_slice_index(frame, sort_cols=["date", "symbol"])
+
+    first_start, first_end = bounds[pd.Timestamp("2024-01-01")]
+    second_start, second_end = bounds[pd.Timestamp("2024-01-02")]
+
+    assert list(sorted_frame["date"]) == [
+        pd.Timestamp("2024-01-01"),
+        pd.Timestamp("2024-01-01"),
+        pd.Timestamp("2024-01-02"),
+        pd.Timestamp("2024-01-02"),
+    ]
+    assert list(sorted_frame.iloc[first_start:first_end]["symbol"]) == ["AAA", "BBB"]
+    assert list(sorted_frame.iloc[second_start:second_end]["symbol"]) == ["AAA", "BBB"]
 
 
 def test_make_forecast_backend_accepts_linear_and_deep() -> None:

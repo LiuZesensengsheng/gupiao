@@ -221,6 +221,69 @@ def _predict_quantile_profile(
     )
 
 
+def _predict_quantile_profiles(
+    frame: pd.DataFrame,
+    *,
+    feature_cols: list[str],
+    q_models: tuple[
+        QuantileLinearModel | MLPQuantileModel,
+        QuantileLinearModel | MLPQuantileModel,
+        QuantileLinearModel | MLPQuantileModel,
+        QuantileLinearModel | MLPQuantileModel,
+        QuantileLinearModel | MLPQuantileModel,
+    ],
+) -> pd.DataFrame:
+    if frame.empty:
+        return pd.DataFrame(
+            columns=["expected_return", "q10", "q30", "q20", "q50", "q70", "q80", "q90"],
+        )
+    raw = np.column_stack([model.predict(frame, feature_cols) for model in q_models]).astype(float)
+    ordered = np.maximum.accumulate(raw, axis=1)
+    q10 = ordered[:, 0]
+    q30 = ordered[:, 1]
+    q50 = ordered[:, 2]
+    q70 = ordered[:, 3]
+    q90 = ordered[:, 4]
+    q20 = 0.5 * (q10 + q30)
+    q80 = 0.5 * (q70 + q90)
+    expected = 0.10 * q10 + 0.20 * q30 + 0.40 * q50 + 0.20 * q70 + 0.10 * q90
+    return pd.DataFrame(
+        {
+            "expected_return": expected.astype(float),
+            "q10": q10.astype(float),
+            "q30": q30.astype(float),
+            "q20": q20.astype(float),
+            "q50": q50.astype(float),
+            "q70": q70.astype(float),
+            "q80": q80.astype(float),
+            "q90": q90.astype(float),
+        },
+        index=frame.index,
+    )
+
+
+def _build_date_slice_index(
+    frame: pd.DataFrame,
+    *,
+    sort_cols: list[str],
+) -> tuple[pd.DataFrame, dict[pd.Timestamp, tuple[int, int]]]:
+    if frame.empty:
+        return frame.copy(), {}
+    work = frame.sort_values(sort_cols).reset_index(drop=True).copy()
+    dates = pd.to_datetime(work["date"]).to_numpy()
+    bounds: dict[pd.Timestamp, tuple[int, int]] = {}
+    start = 0
+    n = len(work)
+    while start < n:
+        date = pd.Timestamp(dates[start])
+        end = start + 1
+        while end < n and pd.Timestamp(dates[end]) == date:
+            end += 1
+        bounds[date] = (start, end)
+        start = end
+    return work, bounds
+
+
 def _distributional_score(
     *,
     short_prob: float,
@@ -335,43 +398,56 @@ def _build_stock_states_from_panel_slice(
     short_probs = short_model.predict_proba(panel_row, feature_cols)
     five_probs = five_model.predict_proba(panel_row, feature_cols)
     mid_probs = mid_model.predict_proba(panel_row, feature_cols)
+    short_profiles = _predict_quantile_profiles(
+        panel_row,
+        feature_cols=feature_cols,
+        q_models=short_q_models,
+    )
+    mid_profiles = _predict_quantile_profiles(
+        panel_row,
+        feature_cols=feature_cols,
+        q_models=mid_q_models,
+    )
+
+    symbols = panel_row["symbol"].astype(str).to_numpy()
+    sectors = panel_row.get("sector", pd.Series(["其他"] * len(panel_row), index=panel_row.index)).fillna("其他").astype(str).to_numpy()
+    if "tradability_status" in panel_row.columns:
+        statuses = panel_row["tradability_status"].fillna("normal").astype(str).to_numpy()
+    else:
+        statuses = np.full(len(panel_row), "normal", dtype=object)
+    realized_1d_arr = panel_row.get("excess_ret_1_vs_mkt", pd.Series(np.nan, index=panel_row.index)).astype(float).to_numpy()
+    realized_5d_arr = panel_row.get("excess_ret_5_vs_mkt", pd.Series(np.nan, index=panel_row.index)).astype(float).to_numpy()
+    realized_20d_arr = panel_row.get("excess_ret_20_vs_sector", pd.Series(np.nan, index=panel_row.index)).astype(float).to_numpy()
+    short_expected_arr = short_profiles["expected_return"].to_numpy(dtype=float)
+    mid_expected_arr = mid_profiles["expected_return"].to_numpy(dtype=float)
 
     interim_rows: list[dict[str, float | str]] = []
     sector_mid_total: dict[str, float] = {}
     sector_counts: dict[str, int] = {}
 
-    for idx, (_, latest_row) in enumerate(panel_row.iterrows()):
-        latest_df = pd.DataFrame([latest_row])
-        short_profile = _predict_quantile_profile(
-            latest_df,
-            feature_cols=feature_cols,
-            q_models=short_q_models,
-        )
-        mid_profile = _predict_quantile_profile(
-            latest_df,
-            feature_cols=feature_cols,
-            q_models=mid_q_models,
-        )
-        symbol = str(latest_row["symbol"])
-        sector = str(latest_row.get("sector", "其他") or "其他")
+    for idx, symbol in enumerate(symbols):
+        sector = sectors[idx]
         short_prob = float(short_probs[idx])
         five_prob = float(five_probs[idx])
         mid_prob = float(mid_probs[idx])
+        short_expected_ret = float(short_expected_arr[idx])
+        mid_expected_ret = float(mid_expected_arr[idx])
         interim_rows.append(
             {
+                "idx": idx,
                 "symbol": symbol,
                 "sector": sector,
                 "short_prob": short_prob,
                 "five_prob": five_prob,
                 "mid_prob": mid_prob,
-                "short_expected_ret": float(short_profile.expected_return),
-                "mid_expected_ret": float(mid_profile.expected_return),
+                "short_expected_ret": short_expected_ret,
+                "mid_expected_ret": mid_expected_ret,
                 "score": _distributional_score(
                     short_prob=short_prob,
                     five_prob=five_prob,
                     mid_prob=mid_prob,
-                    short_expected_ret=float(short_profile.expected_return),
-                    mid_expected_ret=float(mid_profile.expected_return),
+                    short_expected_ret=short_expected_ret,
+                    mid_expected_ret=mid_expected_ret,
                 ),
             }
         )
@@ -385,13 +461,14 @@ def _build_stock_states_from_panel_slice(
     scored_rows: list[dict[str, float | str]] = []
     out: list[StockForecastState] = []
     for item in interim_rows:
+        idx = int(item["idx"])
         short_prob = float(item["short_prob"])
         five_prob = float(item["five_prob"])
         mid_prob = float(item["mid_prob"])
         short_expected_ret = float(item["short_expected_ret"])
         mid_expected_ret = float(item["mid_expected_ret"])
         sector = str(item["sector"])
-        status = str(panel_row.loc[panel_row["symbol"] == str(item["symbol"]), "tradability_status"].iloc[0]) if "tradability_status" in panel_row.columns and not panel_row.loc[panel_row["symbol"] == str(item["symbol"]), "tradability_status"].empty else "normal"
+        status = str(statuses[idx] or "normal")
         tradeability = _clip(1.0 - abs(short_prob - mid_prob), 0.0, 1.0)
         tradeability = min(tradeability, _status_tradeability_limit(status))
         expected_anchor = float(np.clip(mid_expected_ret / 0.20, -0.5, 0.5))
@@ -424,11 +501,9 @@ def _build_stock_states_from_panel_slice(
         realized_1d = np.nan
         realized_5d = np.nan
         realized_20d = np.nan
-        matched = panel_row[panel_row["symbol"] == str(item["symbol"])]
-        if not matched.empty:
-            realized_1d = float(matched.iloc[0].get("excess_ret_1_vs_mkt", np.nan))
-            realized_5d = float(matched.iloc[0].get("excess_ret_5_vs_mkt", np.nan))
-            realized_20d = float(matched.iloc[0].get("excess_ret_20_vs_sector", np.nan))
+        realized_1d = float(realized_1d_arr[idx])
+        realized_5d = float(realized_5d_arr[idx])
+        realized_20d = float(realized_20d_arr[idx])
         scored_rows.append(
             {
                 "symbol": str(item["symbol"]),
@@ -1817,10 +1892,18 @@ class LinearForecastBackend:
         dates = prepared.dates
         min_train_days = int(settings["min_train_days"])
         steps: list[_TrajectoryStep] = []
+        market_sorted, market_bounds = _build_date_slice_index(
+            market_valid,
+            sort_cols=["date"],
+        )
+        panel_sorted, panel_bounds = _build_date_slice_index(
+            panel,
+            sort_cols=["date", "symbol"],
+        )
 
         for block_start in range(min_train_days, len(dates) - 1, max(1, int(retrain_days))):
-            train_dates = set(dates[:block_start])
-            market_train = market_valid[market_valid["date"].isin(train_dates)].copy()
+            train_cutoff = market_bounds.get(dates[block_start - 1], (0, 0))[1]
+            market_train = market_sorted.iloc[:train_cutoff].copy()
             if market_train.empty:
                 continue
             market_short_model = LogisticBinaryModel(l2=float(settings["l2"])).fit(
@@ -1838,7 +1921,8 @@ class LinearForecastBackend:
                 market_feature_cols,
                 "mkt_target_20d_up",
             )
-            panel_train = panel[panel["date"].isin(train_dates)].copy()
+            panel_cutoff = panel_bounds.get(dates[block_start - 1], (0, 0))[1]
+            panel_train = panel_sorted.iloc[:panel_cutoff].copy()
             if panel_train.empty:
                 continue
             panel_short_model = LogisticBinaryModel(l2=float(settings["l2"])).fit(
@@ -1873,19 +1957,21 @@ class LinearForecastBackend:
             for idx in range(block_start, block_end):
                 date = dates[idx]
                 next_date = dates[idx + 1]
-                market_row = market_valid[market_valid["date"] == date].copy()
+                market_start, market_end = market_bounds.get(date, (0, 0))
+                market_row = market_sorted.iloc[market_start:market_end].copy()
                 if market_row.empty:
                     continue
                 mkt_short = float(market_short_model.predict_proba(market_row, market_feature_cols)[0])
                 mkt_five = float(market_five_model.predict_proba(market_row, market_feature_cols)[0])
                 mkt_mid = float(market_mid_model.predict_proba(market_row, market_feature_cols)[0])
                 market_state, cross_section = _build_market_and_cross_section_from_prebuilt_frame(
-                    market_frame=market_valid[market_valid["date"] <= date].copy(),
+                    market_frame=market_sorted.iloc[:market_end].copy(),
                     market_short_prob=mkt_short,
                     market_five_prob=mkt_five,
                     market_mid_prob=mkt_mid,
                 )
-                panel_row = panel[panel["date"] == date].copy()
+                panel_start, panel_end = panel_bounds.get(date, (0, 0))
+                panel_row = panel_sorted.iloc[panel_start:panel_end].copy()
                 stock_states, scored_rows = _build_stock_states_from_panel_slice(
                     panel_row=panel_row,
                     feature_cols=feature_cols,
@@ -1952,6 +2038,10 @@ class DeepForecastBackend:
         dates = prepared.dates
         min_train_days = int(settings["min_train_days"])
         steps: list[_TrajectoryStep] = []
+        market_valid_sorted, market_valid_bounds = _build_date_slice_index(
+            market_valid,
+            sort_cols=["date"],
+        )
 
         tensor_market, tensor_market_cols = _tensorize_temporal_frame(
             market_valid,
@@ -1965,10 +2055,18 @@ class DeepForecastBackend:
             group_col="symbol",
             lag_depth=3,
         )
+        tensor_market_sorted, tensor_market_bounds = _build_date_slice_index(
+            tensor_market,
+            sort_cols=["date"],
+        )
+        tensor_panel_sorted, tensor_panel_bounds = _build_date_slice_index(
+            tensor_panel,
+            sort_cols=["date", "symbol"],
+        )
 
         for block_start in range(min_train_days, len(dates) - 1, max(1, int(retrain_days))):
-            train_dates = set(dates[:block_start])
-            market_train = tensor_market[tensor_market["date"].isin(train_dates)].copy()
+            train_cutoff = tensor_market_bounds.get(dates[block_start - 1], (0, 0))[1]
+            market_train = tensor_market_sorted.iloc[:train_cutoff].copy()
             if market_train.empty:
                 continue
             market_short_model = MLPBinaryModel(l2=float(settings["l2"])).fit(
@@ -1986,7 +2084,8 @@ class DeepForecastBackend:
                 tensor_market_cols,
                 "mkt_target_20d_up",
             )
-            panel_train = tensor_panel[tensor_panel["date"].isin(train_dates)].copy()
+            panel_cutoff = tensor_panel_bounds.get(dates[block_start - 1], (0, 0))[1]
+            panel_train = tensor_panel_sorted.iloc[:panel_cutoff].copy()
             if panel_train.empty:
                 continue
             panel_short_model = MLPBinaryModel(l2=float(settings["l2"])).fit(
@@ -2021,19 +2120,22 @@ class DeepForecastBackend:
             for idx in range(block_start, block_end):
                 date = dates[idx]
                 next_date = dates[idx + 1]
-                market_row = tensor_market[tensor_market["date"] == date].copy()
+                market_start, market_end = tensor_market_bounds.get(date, (0, 0))
+                market_row = tensor_market_sorted.iloc[market_start:market_end].copy()
                 if market_row.empty:
                     continue
                 mkt_short = float(market_short_model.predict_proba(market_row, tensor_market_cols)[0])
                 mkt_five = float(market_five_model.predict_proba(market_row, tensor_market_cols)[0])
                 mkt_mid = float(market_mid_model.predict_proba(market_row, tensor_market_cols)[0])
+                market_hist_end = market_valid_bounds.get(date, (0, 0))[1]
                 market_state, cross_section = _build_market_and_cross_section_from_prebuilt_frame(
-                    market_frame=market_valid[market_valid["date"] <= date].copy(),
+                    market_frame=market_valid_sorted.iloc[:market_hist_end].copy(),
                     market_short_prob=mkt_short,
                     market_five_prob=mkt_five,
                     market_mid_prob=mkt_mid,
                 )
-                panel_row = tensor_panel[tensor_panel["date"] == date].copy()
+                panel_start, panel_end = tensor_panel_bounds.get(date, (0, 0))
+                panel_row = tensor_panel_sorted.iloc[panel_start:panel_end].copy()
                 stock_states, scored_rows = _build_stock_states_from_panel_slice(
                     panel_row=panel_row,
                     feature_cols=tensor_panel_cols,
