@@ -1148,6 +1148,22 @@ def _simulate_execution_day(
             status = "halted"
         if not _is_actionable_status(status):
             continue
+        if day_row is not None and not day_row.empty:
+            latest = day_row.iloc[0]
+            close_px = _safe_float(latest.get("close"), np.nan)
+            low_px = _safe_float(latest.get("low"), np.nan)
+            high_px = _safe_float(latest.get("high"), np.nan)
+            ret_1 = _safe_float(latest.get("ret_1"), np.nan)
+            if close_px == close_px and ret_1 == ret_1:
+                prev_close = close_px / max(1e-9, 1.0 + ret_1)
+                limit_up_px = prev_close * 1.098
+                limit_down_px = prev_close * 0.902
+                # Single rebalance per trading day is already T+1 compatible; this only blocks orders
+                # when the instrument appears pinned at the daily price limit for the full session.
+                if delta > 0.0 and low_px == low_px and low_px >= limit_up_px:
+                    continue
+                if delta < 0.0 and high_px == high_px and high_px <= limit_down_px:
+                    continue
         tradeability = 0.45 if state is None else _clip(float(state.tradeability_score), 0.10, 1.0)
         tradeability = min(tradeability, _status_tradeability_limit(status))
         liquidity_cap = 0.03 + 0.12 * tradeability

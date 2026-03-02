@@ -334,6 +334,98 @@ def test_simulate_execution_day_skips_trades_for_halted_status() -> None:
     assert next_cash < 0.90
 
 
+def test_simulate_execution_day_blocks_buy_when_limit_up_pinned() -> None:
+    date = pd.Timestamp("2024-01-02")
+    next_date = pd.Timestamp("2024-01-03")
+    decision = PolicyDecision(
+        target_exposure=0.40,
+        target_position_count=1,
+        rebalance_now=True,
+        rebalance_intensity=0.20,
+        intraday_t_allowed=False,
+        turnover_cap=0.20,
+        sector_budgets={"有色": 0.40},
+        symbol_target_weights={"AAA": 0.40},
+    )
+
+    daily_ret, turnover, cost, fill_ratio, slip_bps, next_weights, next_cash = _simulate_execution_day(
+        date=date,
+        next_date=next_date,
+        decision=decision,
+        current_weights={},
+        current_cash=1.0,
+        stock_states=[StockForecastState("AAA", "有色", 0.60, 0.62, 0.66, 0.55, 0.0, 0.90)],
+        stock_frames={
+            "AAA": pd.DataFrame(
+                {
+                    "date": [date],
+                    "close": [11.0],
+                    "low": [11.0],
+                    "high": [11.0],
+                    "ret_1": [0.10],
+                    "fwd_ret_1": [0.0],
+                }
+            )
+        },
+        total_commission_rate=0.001,
+        base_slippage_rate=0.0005,
+    )
+
+    assert turnover == 0.0
+    assert cost == 0.0
+    assert fill_ratio == 0.0
+    assert slip_bps == 0.0
+    assert next_weights == {}
+    assert next_cash == 1.0
+    assert daily_ret == 0.0
+
+
+def test_simulate_execution_day_blocks_sell_when_limit_down_pinned() -> None:
+    date = pd.Timestamp("2024-01-02")
+    next_date = pd.Timestamp("2024-01-03")
+    decision = PolicyDecision(
+        target_exposure=0.0,
+        target_position_count=0,
+        rebalance_now=True,
+        rebalance_intensity=0.20,
+        intraday_t_allowed=False,
+        turnover_cap=0.30,
+        sector_budgets={},
+        symbol_target_weights={},
+    )
+
+    daily_ret, turnover, cost, fill_ratio, slip_bps, next_weights, next_cash = _simulate_execution_day(
+        date=date,
+        next_date=next_date,
+        decision=decision,
+        current_weights={"AAA": 0.30},
+        current_cash=0.70,
+        stock_states=[StockForecastState("AAA", "有色", 0.45, 0.48, 0.50, 0.45, 0.0, 0.90)],
+        stock_frames={
+            "AAA": pd.DataFrame(
+                {
+                    "date": [date],
+                    "close": [9.0],
+                    "low": [9.0],
+                    "high": [9.0],
+                    "ret_1": [-0.10],
+                    "fwd_ret_1": [0.0],
+                }
+            )
+        },
+        total_commission_rate=0.001,
+        base_slippage_rate=0.0005,
+    )
+
+    assert turnover == 0.0
+    assert cost == 0.0
+    assert fill_ratio == 0.0
+    assert slip_bps == 0.0
+    assert next_weights["AAA"] == 0.30
+    assert next_cash == 0.70
+    assert daily_ret == 0.0
+
+
 def test_v2_markdown_reports_keep_key_chinese_sections(tmp_path: Path) -> None:
     daily_result = _make_daily_result()
     daily_path = write_v2_daily_report(tmp_path / "daily.md", daily_result)
