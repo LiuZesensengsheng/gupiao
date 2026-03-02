@@ -3,6 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 
 import pandas as pd
+import pytest
 
 from src.application.v2_contracts import (
     CompositeState,
@@ -376,6 +377,66 @@ def test_simulate_execution_day_blocks_add_on_for_data_insufficient_status() -> 
     assert next_cash == 0.90
 
 
+def test_simulate_execution_day_charges_more_slippage_on_adverse_gap_open() -> None:
+    date = pd.Timestamp("2024-01-02")
+    next_date = pd.Timestamp("2024-01-03")
+    decision = PolicyDecision(
+        target_exposure=0.20,
+        target_position_count=1,
+        rebalance_now=True,
+        rebalance_intensity=0.10,
+        intraday_t_allowed=False,
+        turnover_cap=0.20,
+        sector_budgets={"有色": 0.20},
+        symbol_target_weights={"AAA": 0.20},
+    )
+    base_kwargs = dict(
+        date=date,
+        next_date=next_date,
+        decision=decision,
+        current_weights={},
+        current_cash=1.0,
+        stock_states=[StockForecastState("AAA", "有色", 0.58, 0.60, 0.64, 0.55, 0.0, 0.90)],
+        total_commission_rate=0.001,
+        base_slippage_rate=0.0005,
+    )
+    flat = _simulate_execution_day(
+        stock_frames={
+            "AAA": pd.DataFrame(
+                {
+                    "date": [date],
+                    "open": [10.0],
+                    "close": [10.0],
+                    "low": [9.9],
+                    "high": [10.1],
+                    "ret_1": [0.0],
+                    "fwd_ret_1": [0.0],
+                }
+            )
+        },
+        **base_kwargs,
+    )
+    adverse = _simulate_execution_day(
+        stock_frames={
+            "AAA": pd.DataFrame(
+                {
+                    "date": [date],
+                    "open": [10.6],
+                    "close": [10.0],
+                    "low": [9.9],
+                    "high": [10.7],
+                    "ret_1": [0.0],
+                    "fwd_ret_1": [0.0],
+                }
+            )
+        },
+        **base_kwargs,
+    )
+
+    assert adverse[2] > flat[2]
+    assert adverse[4] > flat[4]
+
+
 def test_simulate_execution_day_blocks_buy_when_limit_up_pinned() -> None:
     date = pd.Timestamp("2024-01-02")
     next_date = pd.Timestamp("2024-01-03")
@@ -501,6 +562,44 @@ def test_simulate_execution_day_marks_down_delisted_holding_without_price() -> N
     assert daily_ret < 0.0
     assert next_weights["AAA"] < 0.08
     assert next_cash > 0.92
+
+
+def test_simulate_execution_day_caps_delisted_positive_forward_return() -> None:
+    date = pd.Timestamp("2024-01-02")
+    next_date = pd.Timestamp("2024-01-03")
+    decision = PolicyDecision(
+        target_exposure=0.10,
+        target_position_count=1,
+        rebalance_now=False,
+        rebalance_intensity=0.0,
+        intraday_t_allowed=False,
+        turnover_cap=0.0,
+        sector_budgets={"有色": 0.10},
+        symbol_target_weights={"AAA": 0.10},
+    )
+
+    daily_ret, *_rest, next_weights, next_cash = _simulate_execution_day(
+        date=date,
+        next_date=next_date,
+        decision=decision,
+        current_weights={"AAA": 0.10},
+        current_cash=0.90,
+        stock_states=[StockForecastState("AAA", "有色", 0.40, 0.42, 0.45, 0.40, 0.0, 0.0, tradability_status="delisted")],
+        stock_frames={
+            "AAA": pd.DataFrame(
+                {
+                    "date": [date],
+                    "fwd_ret_1": [0.15],
+                }
+            )
+        },
+        total_commission_rate=0.001,
+        base_slippage_rate=0.0005,
+    )
+
+    assert daily_ret < 0.0
+    assert next_weights["AAA"] == pytest.approx(0.08 / 0.98)
+    assert next_cash == pytest.approx(0.90 / 0.98)
 
 
 def test_v2_markdown_reports_keep_key_chinese_sections(tmp_path: Path) -> None:

@@ -232,6 +232,43 @@ def test_v2_policy_does_not_cap_unknown_fallback_sector_bucket() -> None:
     assert not any("sector budget capped" in note for note in decision.risk_notes)
 
 
+def test_v2_policy_tightens_single_name_cap_under_high_volatility() -> None:
+    _, sectors, _, cross_section = _make_demo_state()
+    stressed_market = MarketForecastState(
+        as_of_date="2026-03-01",
+        up_1d_prob=0.56,
+        up_5d_prob=0.58,
+        up_20d_prob=0.61,
+        trend_state="trend",
+        drawdown_risk=0.18,
+        volatility_regime="high",
+        liquidity_stress=0.20,
+    )
+    stocks = [
+        StockForecastState("A1", "有色", 0.60, 0.62, 0.70, 0.60, 0.24, 0.95),
+        StockForecastState("A2", "化工", 0.58, 0.60, 0.67, 0.58, 0.20, 0.92),
+        StockForecastState("A3", "科技", 0.56, 0.58, 0.64, 0.55, 0.18, 0.90),
+    ]
+    composite_state = compose_state(
+        market=stressed_market,
+        sectors=sectors,
+        stocks=stocks,
+        cross_section=cross_section,
+    )
+
+    decision = apply_policy(
+        PolicyInput(
+            composite_state=composite_state,
+            current_weights={},
+            current_cash=1.0,
+            total_equity=1.0,
+        )
+    )
+
+    assert all(weight <= 0.24 + 1e-9 for weight in decision.symbol_target_weights.values())
+    assert any("volatility target" in note for note in decision.risk_notes)
+
+
 def test_stock_policy_score_penalizes_fragile_high_risk_setup() -> None:
     steady = StockForecastState(
         "AAA",

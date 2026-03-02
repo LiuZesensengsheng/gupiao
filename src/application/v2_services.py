@@ -831,6 +831,22 @@ def _stock_policy_score(stock: StockForecastState) -> float:
     return float(_alpha_score_components(stock)["alpha_score"])
 
 
+def _policy_objective_score(summary: V2BacktestSummary) -> float:
+    excess_alpha = float(summary.excess_annual_return)
+    if abs(excess_alpha) <= 1e-9:
+        excess_alpha = 0.75 * float(summary.annual_return)
+    ir_term = float(np.clip(float(summary.information_ratio), -2.0, 2.0)) / 2.0
+    score = (
+        0.60 * excess_alpha
+        + 0.15 * float(summary.annual_return)
+        + 0.20 * ir_term
+        - 0.30 * abs(float(summary.max_drawdown))
+        - 0.20 * float(summary.total_cost)
+        - 0.05 * float(summary.avg_turnover)
+    )
+    return float(score)
+
+
 def _allocate_sector_slots(
     *,
     sector_budgets: dict[str, float],
@@ -877,8 +893,8 @@ def _allocate_with_sector_budgets(
     stocks: list[StockForecastState],
     sector_budgets: dict[str, float],
     target_position_count: int,
+    max_single_position: float = 0.35,
 ) -> dict[str, float]:
-    max_single_position = 0.35
     available_by_sector: dict[str, list[tuple[StockForecastState, float]]] = {}
     for stock in stocks:
         if not _is_actionable_status(getattr(stock, "tradability_status", "normal")):
@@ -1061,6 +1077,13 @@ def apply_policy(
     if cross.fund_flow_strength < 0.0:
         target_exposure *= 0.85
         risk_notes.append("Fund flow weak.")
+    if market.volatility_regime == "high":
+        target_exposure *= 0.80
+        turnover_cap = min(turnover_cap, 0.20)
+        risk_notes.append("High volatility regime: exposure scaled to volatility target.")
+    elif market.volatility_regime == "low" and state.risk_regime == "risk_on" and cross.breadth_strength > 0.15:
+        target_exposure = min(1.0, target_exposure * 1.05)
+        risk_notes.append("Low volatility regime: exposure nudged up to target.")
     if cross.large_vs_small_bias < -0.05:
         target_position_count = min(target_position_count + 1, 5)
         risk_notes.append("Large-cap bias weak: diversify more positions.")
@@ -1069,6 +1092,13 @@ def apply_policy(
         risk_notes.append("Growth style weak: turnover capped conservatively.")
 
     target_exposure = _clip(target_exposure, 0.0, 1.0)
+    max_single_position = 0.35
+    if market.volatility_regime == "high":
+        max_single_position = min(max_single_position, 0.24)
+    if cross.large_vs_small_bias < -0.05:
+        max_single_position = min(max_single_position, 0.22)
+    if cross.growth_vs_value_bias < -0.08:
+        max_single_position = min(max_single_position, 0.20)
     desired_sector_budgets = _ranked_sector_budgets(state.sectors[: max(1, target_position_count)], target_exposure=target_exposure)
     desired_sector_budgets, sector_cap_notes = _cap_sector_budgets(
         sector_budgets=desired_sector_budgets,
@@ -1081,6 +1111,7 @@ def apply_policy(
         stocks=state.stocks,
         sector_budgets=desired_sector_budgets,
         target_position_count=int(target_position_count),
+        max_single_position=float(max_single_position),
     )
     symbol_target_weights, execution_notes = _finalize_target_weights(
         desired_weights=desired_symbol_target_weights,
@@ -1246,6 +1277,7 @@ def _simulate_execution_day(
         if day_row is not None and not day_row.empty:
             latest = day_row.iloc[0]
             close_px = _safe_float(latest.get("close"), np.nan)
+            open_px = _safe_float(latest.get("open"), np.nan)
             low_px = _safe_float(latest.get("low"), np.nan)
             high_px = _safe_float(latest.get("high"), np.nan)
             ret_1 = _safe_float(latest.get("ret_1"), np.nan)
@@ -1271,7 +1303,32 @@ def _simulate_execution_day(
         executed_deltas[symbol] = executed
         fill_ratios.append(float(fill_ratio))
         impact = max_abs_trade / max(liquidity_cap, 1e-6)
-        slippage_rate = float(base_slippage_rate * (0.65 + 0.7 * impact + 0.35 * (1.0 - tradeability)))
+        open_gap_penalty = 0.0
+        intraday_range_penalty = 0.0
+        if day_row is not None and not day_row.empty:
+            latest = day_row.iloc[0]
+            close_px = _safe_float(latest.get("close"), np.nan)
+            open_px = _safe_float(latest.get("open"), np.nan)
+            low_px = _safe_float(latest.get("low"), np.nan)
+            high_px = _safe_float(latest.get("high"), np.nan)
+            ret_1 = _safe_float(latest.get("ret_1"), np.nan)
+            if close_px == close_px and ret_1 == ret_1:
+                prev_close = close_px / max(1e-9, 1.0 + ret_1)
+                if open_px == open_px:
+                    open_gap = float(open_px / max(prev_close, 1e-9) - 1.0)
+                    open_gap_penalty = max(0.0, open_gap) if delta > 0.0 else max(0.0, -open_gap)
+                if low_px == low_px and high_px == high_px:
+                    intraday_range_penalty = max(0.0, float(high_px - low_px) / max(prev_close, 1e-9))
+        slippage_rate = float(
+            base_slippage_rate
+            * (
+                0.65
+                + 0.7 * impact
+                + 0.35 * (1.0 - tradeability)
+                + 0.40 * open_gap_penalty
+                + 0.10 * intraday_range_penalty
+            )
+        )
         slippage_rates.append(slippage_rate)
         slippage_amounts.append(float(abs(executed) * slippage_rate))
         used_turnover += abs(executed)
@@ -1306,6 +1363,8 @@ def _simulate_execution_day(
                 realized_ret = -0.30 if status == "delisted" else 0.0
             else:
                 realized_ret = float(row.iloc[0]["fwd_ret_1"])
+                if status == "delisted":
+                    realized_ret = min(realized_ret, -0.20)
         value = float(weight) * (1.0 + realized_ret)
         position_values[symbol] = value
         gross_end_value += value
@@ -2477,7 +2536,7 @@ def calibrate_v2_policy(
                 candidates.append(spec)
     best_spec = baseline_spec
     best_summary = baseline
-    best_score = float(baseline.annual_return) - 0.5 * abs(float(baseline.max_drawdown))
+    best_score = _policy_objective_score(baseline)
     trials: list[dict[str, object]] = [
         {
             "policy": asdict(baseline_spec),
@@ -2501,7 +2560,7 @@ def calibrate_v2_policy(
             refresh_cache=refresh_cache,
             forecast_backend=forecast_backend,
         )
-        score = float(summary.annual_return) - 0.5 * abs(float(summary.max_drawdown))
+        score = _policy_objective_score(summary)
         trials.append(
             {
                 "policy": asdict(spec),
@@ -2639,7 +2698,7 @@ def learn_v2_policy_model(
 
 def _baseline_only_calibration(baseline: V2BacktestSummary) -> V2CalibrationResult:
     baseline_spec = PolicySpec()
-    score = float(baseline.annual_return) - 0.5 * abs(float(baseline.max_drawdown))
+    score = _policy_objective_score(baseline)
     return V2CalibrationResult(
         best_policy=baseline_spec,
         best_score=float(score),

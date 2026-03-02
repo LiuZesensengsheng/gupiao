@@ -21,6 +21,7 @@ from src.application.v2_services import (
     calibrate_v2_policy,
     _load_or_build_v2_backtest_trajectory,
     _make_forecast_backend,
+    _policy_objective_score,
     _policy_spec_from_model,
     _tensorize_temporal_frame,
     load_published_v2_policy_model,
@@ -208,6 +209,35 @@ def test_backtest_summary_accepts_multi_horizon_metrics_payload() -> None:
     assert summary.horizon_metrics["5d"]["top_k_hit_rate"] == 0.55
 
 
+def test_policy_objective_prefers_excess_and_ir_over_raw_return() -> None:
+    high_beta = V2BacktestSummary(
+        start_date="2024-01-01",
+        end_date="2024-12-31",
+        n_days=120,
+        total_return=0.20,
+        annual_return=0.28,
+        max_drawdown=-0.10,
+        avg_turnover=0.18,
+        total_cost=0.02,
+        excess_annual_return=-0.01,
+        information_ratio=-0.10,
+    )
+    cleaner_alpha = V2BacktestSummary(
+        start_date="2024-01-01",
+        end_date="2024-12-31",
+        n_days=120,
+        total_return=0.16,
+        annual_return=0.20,
+        max_drawdown=-0.08,
+        avg_turnover=0.12,
+        total_cost=0.01,
+        excess_annual_return=0.08,
+        information_ratio=0.70,
+    )
+
+    assert _policy_objective_score(cleaner_alpha) > _policy_objective_score(high_beta)
+
+
 def test_calibrate_v2_policy_runs_expanded_validation_grid(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     baseline = _make_backtest(0.18, 0.16)
     seen: dict[str, object] = {"calls": 0}
@@ -228,6 +258,8 @@ def test_calibrate_v2_policy_runs_expanded_validation_grid(monkeypatch: pytest.M
             max_drawdown=dd,
             avg_turnover=float(policy_spec.risk_on_turnover_cap),
             total_cost=0.01,
+            excess_annual_return=0.5 * annual - 0.1 * float(policy_spec.risk_on_turnover_cap),
+            information_ratio=0.6 * annual,
         )
 
     monkeypatch.setattr("src.application.v2_services.run_v2_backtest_live", fake_backtest)
