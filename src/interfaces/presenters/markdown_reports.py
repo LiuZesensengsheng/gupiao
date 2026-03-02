@@ -583,6 +583,31 @@ def write_v2_research_report(
         f"收缩={_to_percent(calibration.best_policy.risk_off_turnover_cap)}"
     )
     lines.append("")
+    lines.append("### 验证集试验明细")
+    lines.append("")
+    lines.append("| 排名 | 验证集积极仓位 | 验证集积极持仓 | 验证集积极换手 | 验证集年化 | 验证集基准年化 | 验证集超额年化 | 验证集IR | 验证集回撤 | 评分 |")
+    lines.append("|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|")
+    sorted_trials = sorted(
+        calibration.trials,
+        key=lambda item: float(item.get("score", 0.0)),
+        reverse=True,
+    )
+    if not sorted_trials:
+        lines.append("| - | NA | NA | NA | NA | NA | NA | NA | NA | NA |")
+    else:
+        for rank, trial in enumerate(sorted_trials, start=1):
+            policy = trial.get("policy", {}) if isinstance(trial, dict) else {}
+            summary = trial.get("summary", {}) if isinstance(trial, dict) else {}
+            lines.append(
+                f"| {rank} | {_to_percent(float(policy.get('risk_on_exposure', 0.0)))} | "
+                f"{int(policy.get('risk_on_positions', 0))} | {_to_percent(float(policy.get('risk_on_turnover_cap', 0.0)))} | "
+                f"{_to_percent(float(summary.get('annual_return', 0.0)))} | {_to_percent(float(summary.get('benchmark_annual_return', 0.0)))} | "
+                f"{_to_percent(float(summary.get('excess_annual_return', 0.0)))} | {_to_float(float(summary.get('information_ratio', 0.0)), 3)} | "
+                f"{_to_percent(float(summary.get('max_drawdown', 0.0)))} | {_to_float(float(trial.get('score', 0.0)), 4)} |"
+            )
+    lines.append("")
+    lines.append("### 留出集复核结果")
+    lines.append("")
     lines.append("| 方案 | 开始 | 结束 | 交易日 | 总收益 | 年化收益 | 基准年化 | 超额年化 | IR | 最大回撤 | 平均换手 | 平均成交率 | 平均滑点 | 平均RankIC | 头部分层收益 | 头尾价差 | TopK命中率 | 总成本 |")
     lines.append("|---|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|")
     lines.append(

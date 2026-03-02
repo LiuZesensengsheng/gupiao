@@ -1440,6 +1440,29 @@ def write_v2_research_dashboard(
                 f"<td>{_pct(float(metrics.get('top_bottom_spread', 0.0)))}</td>"
                 f"<td>{_pct(float(metrics.get('top_k_hit_rate', 0.0)))}</td></tr>"
             )
+    validation_trial_rows = ""
+    sorted_trials = sorted(
+        calibration.trials,
+        key=lambda item: float(item.get("score", 0.0)),
+        reverse=True,
+    )
+    for rank, trial in enumerate(sorted_trials, start=1):
+        policy = trial.get("policy", {}) if isinstance(trial, dict) else {}
+        summary = trial.get("summary", {}) if isinstance(trial, dict) else {}
+        validation_trial_rows += (
+            "<tr>"
+            f"<td>{rank}</td>"
+            f"<td>{_pct(float(policy.get('risk_on_exposure', 0.0)))}</td>"
+            f"<td>{int(policy.get('risk_on_positions', 0))}</td>"
+            f"<td>{_pct(float(policy.get('risk_on_turnover_cap', 0.0)))}</td>"
+            f"<td>{_pct(float(summary.get('annual_return', 0.0)))}</td>"
+            f"<td>{_pct(float(summary.get('benchmark_annual_return', 0.0)))}</td>"
+            f"<td>{_pct(float(summary.get('excess_annual_return', 0.0)))}</td>"
+            f"<td>{_num(float(summary.get('information_ratio', 0.0)), 3)}</td>"
+            f"<td>{_pct(float(summary.get('max_drawdown', 0.0)))}</td>"
+            f"<td>{_num(float(trial.get('score', 0.0)), 4)}</td>"
+            "</tr>"
+        )
 
     html = f"""<!doctype html>
 <html lang="zh-CN">
@@ -1534,6 +1557,17 @@ def write_v2_research_dashboard(
 
     <section class="grid four">
       {improvement_tiles}
+    </section>
+
+    <section class="grid">
+      <div class="card">
+        <h2>验证集试验明细</h2>
+        <div class="sub">下表仅用于展示验证集选参过程；最终默认展示口径仍为留出集。</div>
+        <table>
+          <thead><tr><th>排名</th><th>积极仓位</th><th>积极持仓</th><th>积极换手</th><th>验证集年化</th><th>验证集基准年化</th><th>验证集超额年化</th><th>验证集IR</th><th>验证集回撤</th><th>评分</th></tr></thead>
+          <tbody>{validation_trial_rows or '<tr><td colspan="10">暂无验证集试验结果</td></tr>'}</tbody>
+        </table>
+      </div>
     </section>
 
     <section class="grid two">

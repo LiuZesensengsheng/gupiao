@@ -334,6 +334,48 @@ def test_simulate_execution_day_skips_trades_for_halted_status() -> None:
     assert next_cash < 0.90
 
 
+def test_simulate_execution_day_blocks_add_on_for_data_insufficient_status() -> None:
+    date = pd.Timestamp("2024-01-02")
+    next_date = pd.Timestamp("2024-01-03")
+    decision = PolicyDecision(
+        target_exposure=0.30,
+        target_position_count=1,
+        rebalance_now=True,
+        rebalance_intensity=0.20,
+        intraday_t_allowed=False,
+        turnover_cap=0.20,
+        sector_budgets={"有色": 0.30},
+        symbol_target_weights={"AAA": 0.30},
+    )
+
+    daily_ret, turnover, cost, fill_ratio, slip_bps, next_weights, next_cash = _simulate_execution_day(
+        date=date,
+        next_date=next_date,
+        decision=decision,
+        current_weights={"AAA": 0.10},
+        current_cash=0.90,
+        stock_states=[StockForecastState("AAA", "有色", 0.55, 0.57, 0.61, 0.54, 0.20, 0.35, tradability_status="data_insufficient")],
+        stock_frames={
+            "AAA": pd.DataFrame(
+                {
+                    "date": [date],
+                    "fwd_ret_1": [0.0],
+                }
+            )
+        },
+        total_commission_rate=0.001,
+        base_slippage_rate=0.0005,
+    )
+
+    assert daily_ret == 0.0
+    assert turnover == 0.0
+    assert cost == 0.0
+    assert fill_ratio == 0.0
+    assert slip_bps == 0.0
+    assert next_weights["AAA"] == 0.10
+    assert next_cash == 0.90
+
+
 def test_simulate_execution_day_blocks_buy_when_limit_up_pinned() -> None:
     date = pd.Timestamp("2024-01-02")
     next_date = pd.Timestamp("2024-01-03")
@@ -447,6 +489,23 @@ def test_v2_markdown_reports_keep_key_chinese_sections(tmp_path: Path) -> None:
             best_score=0.12,
             baseline=baseline,
             calibrated=calibrated,
+            trials=[
+                {
+                    "policy": {
+                        "risk_on_exposure": 0.85,
+                        "risk_on_positions": 4,
+                        "risk_on_turnover_cap": 0.40,
+                    },
+                    "summary": {
+                        "annual_return": 0.22,
+                        "benchmark_annual_return": 0.09,
+                        "excess_annual_return": 0.12,
+                        "information_ratio": 0.61,
+                        "max_drawdown": -0.07,
+                    },
+                    "score": 0.185,
+                }
+            ],
         ),
         learning=V2PolicyLearningResult(
             model=LearnedPolicyModel(
@@ -472,6 +531,9 @@ def test_v2_markdown_reports_keep_key_chinese_sections(tmp_path: Path) -> None:
     assert "| 基线 | 5d |" in research_text
     assert "超额年化" in research_text
     assert "基准年化" in research_text
+    assert "验证集试验明细" in research_text
+    assert "验证集年化" in research_text
+    assert "留出集复核结果" in research_text
 
 
 def test_v2_html_dashboards_keep_key_chinese_sections(tmp_path: Path) -> None:
@@ -495,6 +557,23 @@ def test_v2_html_dashboards_keep_key_chinese_sections(tmp_path: Path) -> None:
             best_score=0.12,
             baseline=baseline,
             calibrated=calibrated,
+            trials=[
+                {
+                    "policy": {
+                        "risk_on_exposure": 0.85,
+                        "risk_on_positions": 4,
+                        "risk_on_turnover_cap": 0.40,
+                    },
+                    "summary": {
+                        "annual_return": 0.22,
+                        "benchmark_annual_return": 0.09,
+                        "excess_annual_return": 0.12,
+                        "information_ratio": 0.61,
+                        "max_drawdown": -0.07,
+                    },
+                    "score": 0.185,
+                }
+            ],
         ),
         learning=V2PolicyLearningResult(
             model=LearnedPolicyModel(
@@ -521,3 +600,5 @@ def test_v2_html_dashboards_keep_key_chinese_sections(tmp_path: Path) -> None:
     assert ">5d<" in research_html
     assert "策略 / 基准 / 超额净值" in research_html
     assert "超额年化" in research_html
+    assert "验证集试验明细" in research_html
+    assert "最终默认展示口径仍为留出集" in research_html

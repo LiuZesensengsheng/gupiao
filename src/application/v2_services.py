@@ -266,18 +266,44 @@ def _status_score_penalty(status: str) -> float:
 
 
 def _alpha_score_components(stock: StockForecastState) -> dict[str, float]:
-    raw = {
-        "short": 0.20 * float(stock.up_1d_prob),
-        "five": 0.30 * float(stock.up_5d_prob),
-        "mid": 0.25 * float(stock.up_20d_prob),
-        "excess": 0.15 * float(stock.excess_vs_sector_prob),
-        "tradeability": 0.10 * float(stock.tradeability_score),
-        "event": 0.05 * float(stock.event_impact_score),
-    }
-    raw_score = float(sum(raw.values()))
-    penalty = float(_status_score_penalty(getattr(stock, "tradability_status", "normal")))
-    raw["status_penalty"] = penalty
-    raw["alpha_score"] = float(raw_score - penalty)
+    base_alpha_score = float(getattr(stock, "alpha_score", 0.0))
+    if abs(base_alpha_score) <= 1e-12:
+        base_components = {
+            "short": 0.20 * float(stock.up_1d_prob),
+            "five": 0.30 * float(stock.up_5d_prob),
+            "mid": 0.25 * float(stock.up_20d_prob),
+            "excess": 0.15 * float(stock.excess_vs_sector_prob),
+            "tradeability": 0.10 * float(stock.tradeability_score),
+            "event": 0.05 * float(stock.event_impact_score),
+        }
+        base_alpha_score = float(sum(base_components.values()))
+    else:
+        base_components = {}
+
+    horizon_dispersion = float(
+        _clip(
+            0.55 * abs(float(stock.up_1d_prob) - float(stock.up_5d_prob))
+            + 0.45 * abs(float(stock.up_5d_prob) - float(stock.up_20d_prob)),
+            0.0,
+            1.0,
+        )
+    )
+    execution_risk = float(_clip(1.0 - float(stock.tradeability_score), 0.0, 1.0))
+    event_risk = float(_clip((0.55 - float(stock.event_impact_score)) / 0.55, 0.0, 1.0))
+    risk_penalty = float(
+        0.16 * horizon_dispersion
+        + 0.12 * execution_risk
+        + 0.08 * event_risk
+    )
+    status_penalty = float(_status_score_penalty(getattr(stock, "tradability_status", "normal")))
+    raw = dict(base_components)
+    raw["base_alpha_score"] = float(base_alpha_score)
+    raw["horizon_dispersion"] = horizon_dispersion
+    raw["execution_risk"] = execution_risk
+    raw["event_risk"] = event_risk
+    raw["risk_penalty"] = risk_penalty
+    raw["status_penalty"] = status_penalty
+    raw["alpha_score"] = float(base_alpha_score - risk_penalty - status_penalty)
     return raw
 
 
@@ -745,10 +771,6 @@ def _ranked_sector_budgets(sectors: Iterable[SectorForecastState], *, target_exp
 
 
 def _stock_policy_score(stock: StockForecastState) -> float:
-    alpha_score = float(getattr(stock, "alpha_score", 0.0))
-    if abs(alpha_score) > 1e-12:
-        penalty = float(_status_score_penalty(getattr(stock, "tradability_status", "normal")))
-        return float(alpha_score - penalty)
     return float(_alpha_score_components(stock)["alpha_score"])
 
 
@@ -1147,6 +1169,9 @@ def _simulate_execution_day(
         elif frame is None or day_row is None or day_row.empty:
             status = "halted"
         if not _is_actionable_status(status):
+            continue
+        if status == "data_insufficient" and delta > 0.0:
+            # Keep execution conservative even if an upstream caller accidentally tries to add risk.
             continue
         if day_row is not None and not day_row.empty:
             latest = day_row.iloc[0]

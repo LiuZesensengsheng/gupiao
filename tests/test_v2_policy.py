@@ -173,6 +173,33 @@ def test_v2_policy_sector_budgets_are_bounded_by_target_exposure() -> None:
         assert total <= decision.sector_budgets.get(sector, 0.0) + 1e-9
 
 
+def test_stock_policy_score_penalizes_fragile_high_risk_setup() -> None:
+    steady = StockForecastState(
+        "AAA",
+        "有色",
+        0.58,
+        0.60,
+        0.63,
+        0.56,
+        0.62,
+        0.92,
+        alpha_score=0.78,
+    )
+    fragile = StockForecastState(
+        "BBB",
+        "有色",
+        0.78,
+        0.46,
+        0.28,
+        0.56,
+        0.18,
+        0.24,
+        alpha_score=0.78,
+    )
+
+    assert _stock_policy_score(steady) > _stock_policy_score(fragile)
+
+
 def test_summarize_daily_run_returns_structured_summary() -> None:
     market, sectors, stocks, cross_section = _make_demo_state()
     composite_state = compose_state(
@@ -377,29 +404,31 @@ def test_v2_policy_suppresses_small_rebalance_gap() -> None:
         stocks=stocks,
         cross_section=cross_section,
     )
+    baseline_decision = apply_policy(
+        PolicyInput(
+            composite_state=composite_state,
+            current_weights={},
+            current_cash=1.0,
+            total_equity=1.0,
+        )
+    )
+    nearly_aligned_weights = {
+        symbol: max(0.0, weight - 0.005)
+        for symbol, weight in baseline_decision.symbol_target_weights.items()
+    }
 
     decision = apply_policy(
         PolicyInput(
             composite_state=composite_state,
-            current_weights={
-                "000630.SZ": 0.20,
-                "600160.SH": 0.19,
-                "603619.SH": 0.18,
-                "603516.SH": 0.18,
-            },
-            current_cash=0.25,
+            current_weights=nearly_aligned_weights,
+            current_cash=max(0.0, 1.0 - sum(nearly_aligned_weights.values())),
             total_equity=1.0,
         )
     )
 
     deltas = [
         abs(decision.symbol_target_weights.get(symbol, 0.0) - weight)
-        for symbol, weight in {
-            "000630.SZ": 0.20,
-            "600160.SH": 0.19,
-            "603619.SH": 0.18,
-            "603516.SH": 0.18,
-        }.items()
+        for symbol, weight in nearly_aligned_weights.items()
     ]
     assert any(delta < 0.02 for delta in deltas)
     assert any("below threshold" in note for note in decision.risk_notes)
