@@ -271,7 +271,12 @@ def test_research_workflow_reuses_single_trajectory_for_all_stages(monkeypatch: 
         return train_sentinel, validation_sentinel, holdout_sentinel
 
     def fake_baseline(**kwargs: object) -> V2BacktestSummary:
-        seen.setdefault("baseline_trajectories", []).append(kwargs.get("trajectory"))
+        trajectory = kwargs.get("trajectory")
+        seen.setdefault("baseline_trajectories", []).append(trajectory)
+        if trajectory is holdout_sentinel and len(seen["baseline_trajectories"]) >= 2:
+            return calibrated
+        if trajectory is validation_sentinel:
+            return _make_backtest(0.17, 0.15)
         return baseline
 
     def fake_calibration(**kwargs: object) -> V2CalibrationResult:
@@ -280,7 +285,7 @@ def test_research_workflow_reuses_single_trajectory_for_all_stages(monkeypatch: 
         return V2CalibrationResult(
             best_policy=PolicySpec(),
             best_score=0.11,
-            baseline=baseline,
+            baseline=kwargs.get("baseline"),
             calibrated=calibrated,
             trials=[],
         )
@@ -327,7 +332,7 @@ def test_research_workflow_reuses_single_trajectory_for_all_stages(monkeypatch: 
     assert seen["learning_trajectory"] is holdout_sentinel
     assert seen["learning_fit_trajectory"] is validation_sentinel
     assert seen["learning_eval_trajectory"] is holdout_sentinel
-    assert seen["calibration_baseline"] == baseline
+    assert seen["calibration_baseline"] == _make_backtest(0.17, 0.15)
     assert seen["learning_baseline"] == baseline
 
 
@@ -347,7 +352,7 @@ def test_research_workflow_passes_deep_backend(monkeypatch: pytest.MonkeyPatch, 
         return train_sentinel, validation_sentinel, holdout_sentinel
 
     def fake_baseline(**kwargs: object) -> V2BacktestSummary:
-        seen["forecast_backend"] = forecast_backend
+        seen["forecast_backend"] = kwargs.get("forecast_backend")
         seen["trajectory"] = kwargs.get("trajectory")
         return baseline
 

@@ -2577,17 +2577,19 @@ def run_v2_research_workflow(
         refresh_cache=refresh_cache,
         forecast_backend=forecast_backend,
     )
-    validation_baseline = run_v2_backtest_live(
-        strategy_id=strategy_id,
-        config_path=config_path,
-        source=source,
-        universe_file=universe_file,
-        universe_limit=universe_limit,
-        trajectory=validation_trajectory,
-        cache_root=cache_root,
-        refresh_cache=refresh_cache,
-        forecast_backend=forecast_backend,
-    )
+    validation_baseline = None
+    if not skip_calibration:
+        validation_baseline = run_v2_backtest_live(
+            strategy_id=strategy_id,
+            config_path=config_path,
+            source=source,
+            universe_file=universe_file,
+            universe_limit=universe_limit,
+            trajectory=validation_trajectory,
+            cache_root=cache_root,
+            refresh_cache=refresh_cache,
+            forecast_backend=forecast_backend,
+        )
     calibration = (
         _baseline_only_calibration(baseline)
         if skip_calibration
@@ -2597,7 +2599,7 @@ def run_v2_research_workflow(
             source=source,
             universe_file=universe_file,
             universe_limit=universe_limit,
-            baseline=validation_baseline,
+            baseline=validation_baseline if validation_baseline is not None else baseline,
             trajectory=validation_trajectory,
             cache_root=cache_root,
             refresh_cache=refresh_cache,
