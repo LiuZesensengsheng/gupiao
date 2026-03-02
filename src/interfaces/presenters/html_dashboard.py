@@ -1085,6 +1085,10 @@ def write_daily_dashboard(out_path: str | Path, result: DailyFusionResult) -> Pa
 def write_v2_daily_dashboard(out_path: str | Path, result: V2DailyRunResult) -> Path:
     path = Path(out_path)
     path.parent.mkdir(parents=True, exist_ok=True)
+    name_map = dict(result.symbol_names)
+
+    def _stock_name(symbol: str) -> str:
+        return str(name_map.get(symbol, symbol))
 
     sector_rows = []
     for sector in result.composite_state.sectors:
@@ -1104,7 +1108,7 @@ def write_v2_daily_dashboard(out_path: str | Path, result: V2DailyRunResult) -> 
     for stock in result.composite_state.stocks:
         stock_rows.append(
             "<tr>"
-            f"<td><div class='sym'>{escape(stock.symbol)}</div><div class='code'>{escape(stock.sector)}</div></td>"
+            f"<td><div class='sym'>{escape(_stock_name(stock.symbol))}</div><div class='code'>{escape(stock.sector)}</div></td>"
             f"<td>{_pct(stock.up_1d_prob)}</td>"
             f"<td>{_pct(stock.up_5d_prob)}</td>"
             f"<td>{_pct(stock.up_20d_prob)}</td>"
@@ -1121,7 +1125,7 @@ def write_v2_daily_dashboard(out_path: str | Path, result: V2DailyRunResult) -> 
         action_color = "#cf3131" if action.action == "BUY" else ("#1f63d8" if action.action == "SELL" else "#6b7280")
         trade_rows.append(
             "<tr>"
-            f"<td>{escape(action.symbol)}</td>"
+            f"<td>{escape(_stock_name(action.symbol))}</td>"
             f"<td style='font-weight:700;color:{action_color};'>{escape(_v2_cn_action(action.action))}</td>"
             f"<td>{_pct(action.current_weight)}</td>"
             f"<td>{_pct(action.target_weight)}</td>"
@@ -1142,11 +1146,14 @@ def write_v2_daily_dashboard(out_path: str | Path, result: V2DailyRunResult) -> 
         color="#b4472f",
     )
     stock_chart = _v2_hbar_chart_html(
-        sorted(
-            result.policy_decision.symbol_target_weights.items(),
-            key=lambda item: float(item[1]),
-            reverse=True,
-        ),
+        [
+            (_stock_name(symbol), float(weight))
+            for symbol, weight in sorted(
+                result.policy_decision.symbol_target_weights.items(),
+                key=lambda item: float(item[1]),
+                reverse=True,
+            )
+        ],
         title="目标持仓权重",
         color="#1f6b72",
     )

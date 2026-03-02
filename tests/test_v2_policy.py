@@ -317,6 +317,7 @@ def test_summarize_daily_run_returns_structured_summary() -> None:
         composite_state=composite_state,
         policy_decision=decision,
         trade_actions=build_trade_actions(decision=decision, current_weights={"000630.SZ": 0.20}),
+        symbol_names={"000630.SZ": "铜陵有色"},
     )
 
     assert isinstance(result, DailyRunResult)
@@ -331,6 +332,8 @@ def test_summarize_daily_run_returns_structured_summary() -> None:
     assert "policy" in summary
     assert "trade_plan" in summary
     assert len(summary["trade_plan"]) == len(result.trade_actions)
+    assert "铜陵有色" in summary["policy"]["symbol_target_weights"]
+    assert all("symbol" not in item for item in summary["trade_plan"])
 
 
 def test_build_trade_actions_marks_buy_sell_and_hold() -> None:

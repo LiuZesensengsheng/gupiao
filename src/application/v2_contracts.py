@@ -120,6 +120,7 @@ class DailyRunResult:
     composite_state: CompositeState
     policy_decision: PolicyDecision
     trade_actions: List[TradeAction]
+    symbol_names: Dict[str, str] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)

@@ -442,6 +442,10 @@ def write_discovery_report(out_path: str | Path, result: DiscoveryResult) -> Pat
 def write_v2_daily_report(out_path: str | Path, result: V2DailyRunResult) -> Path:
     report_path = Path(out_path)
     report_path.parent.mkdir(parents=True, exist_ok=True)
+    name_map = dict(result.symbol_names)
+
+    def _stock_name(symbol: str) -> str:
+        return str(name_map.get(symbol, symbol))
 
     lines: list[str] = []
     lines.append("# V2 每日策略报告")
@@ -499,7 +503,7 @@ def write_v2_daily_report(out_path: str | Path, result: V2DailyRunResult) -> Pat
     else:
         for stock in result.composite_state.stocks:
             lines.append(
-                f"| {stock.symbol} | {stock.sector} | {_to_percent(stock.up_1d_prob)} | {_to_percent(stock.up_5d_prob)} | "
+                f"| {_stock_name(stock.symbol)} | {stock.sector} | {_to_percent(stock.up_1d_prob)} | {_to_percent(stock.up_5d_prob)} | "
                 f"{_to_percent(stock.up_20d_prob)} | {_to_float(stock.alpha_score, 3)} | {_to_percent(stock.excess_vs_sector_prob)} | "
                 f"{_to_percent(stock.tradeability_score)} | {_to_percent(result.policy_decision.symbol_target_weights.get(stock.symbol, 0.0))} | "
                 f"{_to_percent(result.policy_decision.desired_symbol_target_weights.get(stock.symbol, 0.0))} |"
@@ -527,7 +531,7 @@ def write_v2_daily_report(out_path: str | Path, result: V2DailyRunResult) -> Pat
     else:
         for action in result.trade_actions:
             lines.append(
-                f"| {action.symbol} | {action.action} | {_to_percent(action.current_weight)} | {_to_percent(action.target_weight)} | "
+                f"| {_stock_name(action.symbol)} | {action.action} | {_to_percent(action.current_weight)} | {_to_percent(action.target_weight)} | "
                 f"{_to_percent(action.delta_weight)} | {action.note or 'NA'} |"
             )
 

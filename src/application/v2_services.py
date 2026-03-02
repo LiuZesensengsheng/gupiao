@@ -3283,6 +3283,17 @@ def run_daily_v2_live(
     if current_holdings:
         equal_weight = 1.0 / float(len(current_holdings))
         current_weights = {item.symbol: float(equal_weight) for item in current_holdings}
+    symbol_names: dict[str, str] = {}
+    for item in current_holdings:
+        if getattr(item, "name", None):
+            symbol_names[str(item.symbol)] = str(item.name)
+    for item in stocks:
+        if getattr(item, "name", None):
+            symbol_names[str(item.symbol)] = str(item.name)
+    for row in stock_rows:
+        name = getattr(row, "name", "")
+        if name:
+            symbol_names[str(row.symbol)] = str(name)
 
     learned_policy = load_published_v2_policy_model(
         strategy_id=strategy_id,
@@ -3313,6 +3324,7 @@ def run_daily_v2_live(
         composite_state=composite_state,
         policy_decision=policy_decision,
         trade_actions=trade_actions,
+        symbol_names=symbol_names,
     )
     try:
         with cache_path.open("wb") as f:
@@ -3324,15 +3336,27 @@ def run_daily_v2_live(
 
 
 def summarize_daily_run(result: DailyRunResult) -> dict[str, object]:
+    def _display_name(symbol: str) -> str:
+        return str(result.symbol_names.get(symbol, symbol))
+
+    policy_payload = asdict(result.policy_decision)
+    policy_payload["symbol_target_weights"] = {
+        _display_name(symbol): weight
+        for symbol, weight in result.policy_decision.symbol_target_weights.items()
+    }
+    policy_payload["desired_symbol_target_weights"] = {
+        _display_name(symbol): weight
+        for symbol, weight in result.policy_decision.desired_symbol_target_weights.items()
+    }
     return {
         "strategy_id": result.snapshot.strategy_id,
         "strategy_mode": result.composite_state.strategy_mode,
         "risk_regime": result.composite_state.risk_regime,
         "market": asdict(result.composite_state.market),
-        "policy": asdict(result.policy_decision),
+        "policy": policy_payload,
         "trade_plan": [
             {
-                "symbol": action.symbol,
+                "stock": _display_name(action.symbol),
                 "action": action.action,
                 "current_weight": action.current_weight,
                 "target_weight": action.target_weight,
