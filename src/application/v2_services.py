@@ -308,20 +308,38 @@ def _build_date_slice_index(
 def _distributional_score(
     *,
     short_prob: float,
+    two_prob: float,
+    three_prob: float,
     five_prob: float,
     mid_prob: float,
     short_expected_ret: float,
     mid_expected_ret: float,
 ) -> float:
     base_score = float(
-        0.25 * float(short_prob)
-        + 0.35 * float(five_prob)
-        + 0.40 * float(mid_prob)
+        0.14 * float(short_prob)
+        + 0.18 * float(two_prob)
+        + 0.22 * float(three_prob)
+        + 0.28 * float(five_prob)
+        + 0.18 * float(mid_prob)
     )
     short_ret_score = float(np.clip(0.5 + float(short_expected_ret) / 0.06, 0.0, 1.0))
-    five_ret_score = float(np.clip(0.5 + (0.35 * float(short_expected_ret) + 0.65 * float(mid_expected_ret)) / 0.12, 0.0, 1.0))
+    two_ret_score = float(
+        np.clip(0.5 + (0.75 * float(short_expected_ret) + 0.25 * float(mid_expected_ret)) / 0.08, 0.0, 1.0)
+    )
+    three_ret_score = float(
+        np.clip(0.5 + (0.60 * float(short_expected_ret) + 0.40 * float(mid_expected_ret)) / 0.10, 0.0, 1.0)
+    )
+    five_ret_score = float(
+        np.clip(0.5 + (0.35 * float(short_expected_ret) + 0.65 * float(mid_expected_ret)) / 0.12, 0.0, 1.0)
+    )
     mid_ret_score = float(np.clip(0.5 + float(mid_expected_ret) / 0.20, 0.0, 1.0))
-    dist_score = float(0.20 * short_ret_score + 0.35 * five_ret_score + 0.45 * mid_ret_score)
+    dist_score = float(
+        0.14 * short_ret_score
+        + 0.18 * two_ret_score
+        + 0.22 * three_ret_score
+        + 0.24 * five_ret_score
+        + 0.22 * mid_ret_score
+    )
     return float(0.4 * base_score + 0.6 * dist_score)
 
 
@@ -351,14 +369,21 @@ def _status_score_penalty(status: str) -> float:
 
 def _alpha_score_components(stock: StockForecastState) -> dict[str, float]:
     base_alpha_score = float(getattr(stock, "alpha_score", 0.0))
+    up_1d = float(getattr(stock, "up_1d_prob", 0.5))
+    up_5d = float(getattr(stock, "up_5d_prob", 0.5))
+    up_20d = float(getattr(stock, "up_20d_prob", 0.5))
+    up_2d = float(getattr(stock, "up_2d_prob", 0.65 * up_1d + 0.35 * up_5d))
+    up_3d = float(getattr(stock, "up_3d_prob", 0.35 * up_1d + 0.65 * up_5d))
     if abs(base_alpha_score) <= 1e-12:
         base_components = {
-            "short": 0.20 * float(stock.up_1d_prob),
-            "five": 0.30 * float(stock.up_5d_prob),
-            "mid": 0.25 * float(stock.up_20d_prob),
+            "short": 0.12 * up_1d,
+            "two": 0.14 * up_2d,
+            "three": 0.17 * up_3d,
+            "five": 0.18 * up_5d,
+            "mid": 0.14 * up_20d,
             "excess": 0.15 * float(stock.excess_vs_sector_prob),
-            "tradeability": 0.10 * float(stock.tradeability_score),
-            "event": 0.05 * float(stock.event_impact_score),
+            "tradeability": 0.07 * float(stock.tradeability_score),
+            "event": 0.03 * float(stock.event_impact_score),
         }
         base_alpha_score = float(sum(base_components.values()))
     else:
@@ -366,8 +391,10 @@ def _alpha_score_components(stock: StockForecastState) -> dict[str, float]:
 
     horizon_dispersion = float(
         _clip(
-            0.55 * abs(float(stock.up_1d_prob) - float(stock.up_5d_prob))
-            + 0.45 * abs(float(stock.up_5d_prob) - float(stock.up_20d_prob)),
+            0.20 * abs(up_1d - up_2d)
+            + 0.25 * abs(up_2d - up_3d)
+            + 0.25 * abs(up_3d - up_5d)
+            + 0.30 * abs(up_5d - up_20d),
             0.0,
             1.0,
         )
@@ -396,6 +423,8 @@ def _build_stock_states_from_panel_slice(
     panel_row: pd.DataFrame,
     feature_cols: list[str],
     short_model: LogisticBinaryModel | MLPBinaryModel,
+    two_model: LogisticBinaryModel | MLPBinaryModel,
+    three_model: LogisticBinaryModel | MLPBinaryModel,
     five_model: LogisticBinaryModel | MLPBinaryModel,
     mid_model: LogisticBinaryModel | MLPBinaryModel,
     short_q_models: tuple[
@@ -417,6 +446,8 @@ def _build_stock_states_from_panel_slice(
         return [], pd.DataFrame()
 
     short_probs = short_model.predict_proba(panel_row, feature_cols)
+    two_probs = two_model.predict_proba(panel_row, feature_cols)
+    three_probs = three_model.predict_proba(panel_row, feature_cols)
     five_probs = five_model.predict_proba(panel_row, feature_cols)
     mid_probs = mid_model.predict_proba(panel_row, feature_cols)
     short_profiles = _predict_quantile_profiles(
@@ -437,6 +468,8 @@ def _build_stock_states_from_panel_slice(
     else:
         statuses = np.full(len(panel_row), "normal", dtype=object)
     realized_1d_arr = panel_row.get("excess_ret_1_vs_mkt", pd.Series(np.nan, index=panel_row.index)).astype(float).to_numpy()
+    realized_2d_arr = panel_row.get("excess_ret_2_vs_mkt", pd.Series(np.nan, index=panel_row.index)).astype(float).to_numpy()
+    realized_3d_arr = panel_row.get("excess_ret_3_vs_mkt", pd.Series(np.nan, index=panel_row.index)).astype(float).to_numpy()
     realized_5d_arr = panel_row.get("excess_ret_5_vs_mkt", pd.Series(np.nan, index=panel_row.index)).astype(float).to_numpy()
     realized_20d_arr = panel_row.get("excess_ret_20_vs_sector", pd.Series(np.nan, index=panel_row.index)).astype(float).to_numpy()
     short_expected_arr = short_profiles["expected_return"].to_numpy(dtype=float)
@@ -449,6 +482,8 @@ def _build_stock_states_from_panel_slice(
     for idx, symbol in enumerate(symbols):
         sector = sectors[idx]
         short_prob = float(short_probs[idx])
+        two_prob = float(two_probs[idx])
+        three_prob = float(three_probs[idx])
         five_prob = float(five_probs[idx])
         mid_prob = float(mid_probs[idx])
         short_expected_ret = float(short_expected_arr[idx])
@@ -459,12 +494,16 @@ def _build_stock_states_from_panel_slice(
                 "symbol": symbol,
                 "sector": sector,
                 "short_prob": short_prob,
+                "two_prob": two_prob,
+                "three_prob": three_prob,
                 "five_prob": five_prob,
                 "mid_prob": mid_prob,
                 "short_expected_ret": short_expected_ret,
                 "mid_expected_ret": mid_expected_ret,
                 "score": _distributional_score(
                     short_prob=short_prob,
+                    two_prob=two_prob,
+                    three_prob=three_prob,
                     five_prob=five_prob,
                     mid_prob=mid_prob,
                     short_expected_ret=short_expected_ret,
@@ -484,13 +523,25 @@ def _build_stock_states_from_panel_slice(
     for item in interim_rows:
         idx = int(item["idx"])
         short_prob = float(item["short_prob"])
+        two_prob = float(item["two_prob"])
+        three_prob = float(item["three_prob"])
         five_prob = float(item["five_prob"])
         mid_prob = float(item["mid_prob"])
         short_expected_ret = float(item["short_expected_ret"])
         mid_expected_ret = float(item["mid_expected_ret"])
         sector = str(item["sector"])
         status = str(statuses[idx] or "normal")
-        tradeability = _clip(1.0 - abs(short_prob - mid_prob), 0.0, 1.0)
+        tradeability = _clip(
+            1.0
+            - (
+                0.18 * abs(short_prob - two_prob)
+                + 0.22 * abs(two_prob - three_prob)
+                + 0.25 * abs(three_prob - five_prob)
+                + 0.35 * abs(five_prob - mid_prob)
+            ),
+            0.0,
+            1.0,
+        )
         tradeability = min(tradeability, _status_tradeability_limit(status))
         expected_anchor = float(np.clip(mid_expected_ret / 0.20, -0.5, 0.5))
         event_impact = float(_clip(0.5 + short_expected_ret / 0.06, 0.0, 1.0))
@@ -501,6 +552,8 @@ def _build_stock_states_from_panel_slice(
                 symbol=str(item["symbol"]),
                 sector=sector,
                 up_1d_prob=short_prob,
+                up_2d_prob=two_prob,
+                up_3d_prob=three_prob,
                 up_5d_prob=five_prob,
                 up_20d_prob=mid_prob,
                 excess_vs_sector_prob=float(
@@ -520,9 +573,13 @@ def _build_stock_states_from_panel_slice(
             )
         )
         realized_1d = np.nan
+        realized_2d = np.nan
+        realized_3d = np.nan
         realized_5d = np.nan
         realized_20d = np.nan
         realized_1d = float(realized_1d_arr[idx])
+        realized_2d = float(realized_2d_arr[idx])
+        realized_3d = float(realized_3d_arr[idx])
         realized_5d = float(realized_5d_arr[idx])
         realized_20d = float(realized_20d_arr[idx])
         scored_rows.append(
@@ -530,6 +587,8 @@ def _build_stock_states_from_panel_slice(
                 "symbol": str(item["symbol"]),
                 "score": float(item["score"]),
                 "realized_ret_1d": float(realized_1d),
+                "realized_ret_2d": float(realized_2d),
+                "realized_ret_3d": float(realized_3d),
                 "realized_ret_5d": float(realized_5d),
                 "realized_ret_20d": float(realized_20d),
             }
@@ -538,6 +597,8 @@ def _build_stock_states_from_panel_slice(
         key=lambda stock: (
             _distributional_score(
                 short_prob=stock.up_1d_prob,
+                two_prob=getattr(stock, "up_2d_prob", 0.5),
+                three_prob=getattr(stock, "up_3d_prob", 0.5),
                 five_prob=stock.up_5d_prob,
                 mid_prob=stock.up_20d_prob,
                 short_expected_ret=float(stock.event_impact_score - 0.5) * 0.06,
@@ -580,6 +641,8 @@ def _panel_slice_metrics(
 def _panel_horizon_metrics(scored_rows: pd.DataFrame) -> dict[str, dict[str, float]]:
     mapping = {
         "1d": "realized_ret_1d",
+        "2d": "realized_ret_2d",
+        "3d": "realized_ret_3d",
         "5d": "realized_ret_5d",
         "20d": "realized_ret_20d",
     }
@@ -674,6 +737,8 @@ def _build_market_and_cross_section_states(
     use_margin_features: bool,
     margin_market_file: str,
     market_short_prob: float,
+    market_two_prob: float | None,
+    market_three_prob: float | None,
     market_five_prob: float | None,
     market_mid_prob: float,
 ) -> tuple[MarketForecastState, CrossSectionForecastState]:
@@ -716,6 +781,16 @@ def _build_market_and_cross_section_states(
     market = MarketForecastState(
         as_of_date=str(latest["date"].date()),
         up_1d_prob=float(market_short_prob),
+        up_2d_prob=float(
+            market_two_prob
+            if market_two_prob is not None
+            else (0.65 * market_short_prob + 0.35 * (market_five_prob if market_five_prob is not None else market_mid_prob))
+        ),
+        up_3d_prob=float(
+            market_three_prob
+            if market_three_prob is not None
+            else (0.35 * market_short_prob + 0.65 * (market_five_prob if market_five_prob is not None else market_mid_prob))
+        ),
         up_5d_prob=float(
             market_five_prob if market_five_prob is not None else (0.6 * market_short_prob + 0.4 * market_mid_prob)
         ),
@@ -759,9 +834,23 @@ def _build_stock_states_from_rows(
     for row in rows:
         sector = sector_map.get(row.symbol, "其他")
         status = str(getattr(row, "tradability_status", "normal") or "normal")
+        two_prob = _safe_float(
+            getattr(row, "two_prob", 0.65 * float(row.short_prob) + 0.35 * float(getattr(row, "five_prob", row.mid_prob))),
+            0.5,
+        )
+        three_prob = _safe_float(
+            getattr(row, "three_prob", 0.35 * float(row.short_prob) + 0.65 * float(getattr(row, "five_prob", row.mid_prob))),
+            0.5,
+        )
         five_prob = _safe_float(getattr(row, "five_prob", 0.6 * float(row.short_prob) + 0.4 * float(row.mid_prob)), 0.5)
         tradeability = _clip(
-            1.0 - (0.55 * abs(float(row.short_prob) - five_prob) + 0.45 * abs(five_prob - float(row.mid_prob))),
+            1.0
+            - (
+                0.18 * abs(float(row.short_prob) - two_prob)
+                + 0.22 * abs(two_prob - three_prob)
+                + 0.25 * abs(three_prob - five_prob)
+                + 0.35 * abs(five_prob - float(row.mid_prob))
+            ),
             0.0,
             1.0,
         )
@@ -778,6 +867,8 @@ def _build_stock_states_from_rows(
                 symbol=row.symbol,
                 sector=sector,
                 up_1d_prob=float(row.short_prob),
+                up_2d_prob=float(two_prob),
+                up_3d_prob=float(three_prob),
                 up_5d_prob=float(five_prob),
                 up_20d_prob=float(row.mid_prob),
                 excess_vs_sector_prob=float(
@@ -796,6 +887,8 @@ def _build_stock_states_from_rows(
                 alpha_score=float(
                     _distributional_score(
                         short_prob=float(row.short_prob),
+                        two_prob=float(two_prob),
+                        three_prob=float(three_prob),
                         five_prob=float(five_prob),
                         mid_prob=float(row.mid_prob),
                         short_expected_ret=float(short_expected_ret),
@@ -1255,6 +1348,12 @@ def apply_policy(
     alpha_headroom = float(alpha_metrics["alpha_headroom"])
     alpha_breadth = float(alpha_metrics["breadth_ratio"])
     top_alpha = float(alpha_metrics["top_score"])
+    near_term_stack = float(
+        0.20 * float(market.up_1d_prob)
+        + 0.22 * float(getattr(market, "up_2d_prob", 0.5))
+        + 0.24 * float(getattr(market, "up_3d_prob", 0.5))
+        + 0.34 * float(market.up_5d_prob)
+    )
 
     if state.risk_regime == "risk_on":
         regime_floor = 0.45
@@ -1283,9 +1382,9 @@ def apply_policy(
     )
     target_exposure = float(alpha_base_exposure)
 
-    if market.up_20d_prob < 0.50:
+    if near_term_stack < 0.50:
         target_exposure *= 0.95
-        risk_notes.append("Market mid-term probability below 0.50: mild exposure trim.")
+        risk_notes.append("Near-term market stack below 0.50: mild exposure trim.")
     if market.drawdown_risk >= 0.50:
         target_exposure *= 0.90
         turnover_cap = min(turnover_cap, 0.22)
@@ -1297,9 +1396,9 @@ def apply_policy(
         target_exposure *= 0.90
         turnover_cap = min(turnover_cap, 0.24)
         risk_notes.append("High volatility regime: exposure trimmed, not capped aggressively.")
-    elif market.volatility_regime == "low" and state.risk_regime == "risk_on" and cross.breadth_strength > 0.15:
+    elif market.volatility_regime == "low" and state.risk_regime == "risk_on" and cross.breadth_strength > 0.15 and near_term_stack >= 0.56:
         target_exposure = min(1.0, target_exposure * 1.05)
-        risk_notes.append("Low volatility regime: exposure nudged up to target.")
+        risk_notes.append("Low volatility with strong near-term stack: exposure nudged up.")
     if cross.large_vs_small_bias < -0.05:
         target_position_count = min(target_position_count + 1, 5)
         risk_notes.append("Large-cap bias weak: diversify more positions.")
@@ -1743,6 +1842,8 @@ def _build_market_and_cross_section_from_prebuilt_frame(
     *,
     market_frame: pd.DataFrame,
     market_short_prob: float,
+    market_two_prob: float | None,
+    market_three_prob: float | None,
     market_five_prob: float | None,
     market_mid_prob: float,
 ) -> tuple[MarketForecastState, CrossSectionForecastState]:
@@ -1770,6 +1871,16 @@ def _build_market_and_cross_section_from_prebuilt_frame(
     market = MarketForecastState(
         as_of_date=str(latest["date"].date()),
         up_1d_prob=float(market_short_prob),
+        up_2d_prob=float(
+            market_two_prob
+            if market_two_prob is not None
+            else (0.65 * market_short_prob + 0.35 * (market_five_prob if market_five_prob is not None else market_mid_prob))
+        ),
+        up_3d_prob=float(
+            market_three_prob
+            if market_three_prob is not None
+            else (0.35 * market_short_prob + 0.65 * (market_five_prob if market_five_prob is not None else market_mid_prob))
+        ),
         up_5d_prob=float(
             market_five_prob if market_five_prob is not None else (0.6 * market_short_prob + 0.4 * market_mid_prob)
         ),
@@ -1972,7 +2083,13 @@ def _prepare_v2_backtest_data(
     market_frame = market_feat_base.merge(market_context.frame, on="date", how="left", validate="1:1")
     market_feature_cols = list(MARKET_FEATURE_COLUMNS) + list(market_context.feature_columns)
     market_valid = market_frame.dropna(
-        subset=market_feature_cols + ["mkt_target_1d_up", "mkt_target_5d_up", "mkt_target_20d_up"]
+        subset=market_feature_cols + [
+            "mkt_target_1d_up",
+            "mkt_target_2d_up",
+            "mkt_target_3d_up",
+            "mkt_target_5d_up",
+            "mkt_target_20d_up",
+        ]
     ).sort_values("date").copy()
     if market_valid.empty:
         return None
@@ -2097,6 +2214,16 @@ class LinearForecastBackend:
                 market_feature_cols,
                 "mkt_target_1d_up",
             )
+            market_two_model = LogisticBinaryModel(l2=float(settings["l2"])).fit(
+                market_train,
+                market_feature_cols,
+                "mkt_target_2d_up",
+            )
+            market_three_model = LogisticBinaryModel(l2=float(settings["l2"])).fit(
+                market_train,
+                market_feature_cols,
+                "mkt_target_3d_up",
+            )
             market_five_model = LogisticBinaryModel(l2=float(settings["l2"])).fit(
                 market_train,
                 market_feature_cols,
@@ -2115,6 +2242,16 @@ class LinearForecastBackend:
                 panel_train,
                 feature_cols,
                 "target_1d_excess_mkt_up",
+            )
+            panel_two_model = LogisticBinaryModel(l2=float(settings["l2"])).fit(
+                panel_train,
+                feature_cols,
+                "target_2d_excess_mkt_up",
+            )
+            panel_three_model = LogisticBinaryModel(l2=float(settings["l2"])).fit(
+                panel_train,
+                feature_cols,
+                "target_3d_excess_mkt_up",
             )
             panel_five_model = LogisticBinaryModel(l2=float(settings["l2"])).fit(
                 panel_train,
@@ -2148,11 +2285,15 @@ class LinearForecastBackend:
                 if market_row.empty:
                     continue
                 mkt_short = float(market_short_model.predict_proba(market_row, market_feature_cols)[0])
+                mkt_two = float(market_two_model.predict_proba(market_row, market_feature_cols)[0])
+                mkt_three = float(market_three_model.predict_proba(market_row, market_feature_cols)[0])
                 mkt_five = float(market_five_model.predict_proba(market_row, market_feature_cols)[0])
                 mkt_mid = float(market_mid_model.predict_proba(market_row, market_feature_cols)[0])
                 market_state, cross_section = _build_market_and_cross_section_from_prebuilt_frame(
                     market_frame=market_sorted.iloc[:market_end].copy(),
                     market_short_prob=mkt_short,
+                    market_two_prob=mkt_two,
+                    market_three_prob=mkt_three,
                     market_five_prob=mkt_five,
                     market_mid_prob=mkt_mid,
                 )
@@ -2162,6 +2303,8 @@ class LinearForecastBackend:
                     panel_row=panel_row,
                     feature_cols=feature_cols,
                     short_model=panel_short_model,
+                    two_model=panel_two_model,
+                    three_model=panel_three_model,
                     five_model=panel_five_model,
                     mid_model=panel_mid_model,
                     short_q_models=panel_short_q_models,
@@ -2275,6 +2418,16 @@ class DeepForecastBackend:
                 tensor_market_cols,
                 "mkt_target_1d_up",
             )
+            market_two_model = MLPBinaryModel(l2=float(settings["l2"])).fit(
+                market_train,
+                tensor_market_cols,
+                "mkt_target_2d_up",
+            )
+            market_three_model = MLPBinaryModel(l2=float(settings["l2"])).fit(
+                market_train,
+                tensor_market_cols,
+                "mkt_target_3d_up",
+            )
             market_five_model = MLPBinaryModel(l2=float(settings["l2"])).fit(
                 market_train,
                 tensor_market_cols,
@@ -2293,6 +2446,16 @@ class DeepForecastBackend:
                 panel_train,
                 tensor_panel_cols,
                 "target_1d_excess_mkt_up",
+            )
+            panel_two_model = MLPBinaryModel(l2=float(settings["l2"])).fit(
+                panel_train,
+                tensor_panel_cols,
+                "target_2d_excess_mkt_up",
+            )
+            panel_three_model = MLPBinaryModel(l2=float(settings["l2"])).fit(
+                panel_train,
+                tensor_panel_cols,
+                "target_3d_excess_mkt_up",
             )
             panel_five_model = MLPBinaryModel(l2=float(settings["l2"])).fit(
                 panel_train,
@@ -2326,12 +2489,16 @@ class DeepForecastBackend:
                 if market_row.empty:
                     continue
                 mkt_short = float(market_short_model.predict_proba(market_row, tensor_market_cols)[0])
+                mkt_two = float(market_two_model.predict_proba(market_row, tensor_market_cols)[0])
+                mkt_three = float(market_three_model.predict_proba(market_row, tensor_market_cols)[0])
                 mkt_five = float(market_five_model.predict_proba(market_row, tensor_market_cols)[0])
                 mkt_mid = float(market_mid_model.predict_proba(market_row, tensor_market_cols)[0])
                 market_hist_end = market_valid_bounds.get(date, (0, 0))[1]
                 market_state, cross_section = _build_market_and_cross_section_from_prebuilt_frame(
                     market_frame=market_valid_sorted.iloc[:market_hist_end].copy(),
                     market_short_prob=mkt_short,
+                    market_two_prob=mkt_two,
+                    market_three_prob=mkt_three,
                     market_five_prob=mkt_five,
                     market_mid_prob=mkt_mid,
                 )
@@ -2341,6 +2508,8 @@ class DeepForecastBackend:
                     panel_row=panel_row,
                     feature_cols=tensor_panel_cols,
                     short_model=panel_short_model,
+                    two_model=panel_two_model,
+                    three_model=panel_three_model,
                     five_model=panel_five_model,
                     mid_model=panel_mid_model,
                     short_q_models=panel_short_q_models,
@@ -2578,11 +2747,7 @@ def _execute_v2_backtest_trajectory(
     top_decile_returns: list[float] = []
     top_bottom_spreads: list[float] = []
     top_k_hit_rates: list[float] = []
-    horizon_metric_series: dict[str, dict[str, list[float]]] = {
-        "1d": {"rank_ic": [], "top_decile_return": [], "top_bottom_spread": [], "top_k_hit_rate": []},
-        "5d": {"rank_ic": [], "top_decile_return": [], "top_bottom_spread": [], "top_k_hit_rate": []},
-        "20d": {"rank_ic": [], "top_decile_return": [], "top_bottom_spread": [], "top_k_hit_rate": []},
-    }
+    horizon_metric_series: dict[str, dict[str, list[float]]] = {}
     out_dates: list[pd.Timestamp] = []
     prev_weights: dict[str, float] = {}
     prev_holding_days: dict[str, int] = {}
@@ -2595,8 +2760,12 @@ def _execute_v2_backtest_trajectory(
         top_bottom_spreads.append(float(step.horizon_metrics["20d"]["top_bottom_spread"]))
         top_k_hit_rates.append(float(step.horizon_metrics["20d"]["top_k_hit_rate"]))
         for horizon, metric_map in step.horizon_metrics.items():
+            horizon_bucket = horizon_metric_series.setdefault(
+                horizon,
+                {"rank_ic": [], "top_decile_return": [], "top_bottom_spread": [], "top_k_hit_rate": []},
+            )
             for name, value in metric_map.items():
-                horizon_metric_series[horizon][name].append(float(value))
+                horizon_bucket.setdefault(name, []).append(float(value))
 
         active_policy_spec = policy_spec
         if learned_policy is not None:
@@ -3401,6 +3570,8 @@ def run_daily_v2_live(
         use_margin_features=bool(settings["use_margin_features"]),
         margin_market_file=str(settings["margin_market_file"]),
         market_short_prob=float(market_forecast.short_prob),
+        market_two_prob=_safe_float(getattr(market_forecast, "two_prob", np.nan), np.nan),
+        market_three_prob=_safe_float(getattr(market_forecast, "three_prob", np.nan), np.nan),
         market_five_prob=float(market_forecast.five_prob),
         market_mid_prob=float(market_forecast.mid_prob),
     )

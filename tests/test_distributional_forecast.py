@@ -46,11 +46,17 @@ def test_build_features_adds_bucket_targets() -> None:
     feat = build_features(_make_price_frame())
 
     assert "target_1d_bucket" in feat.columns
+    assert "target_2d_up" in feat.columns
+    assert "target_3d_up" in feat.columns
     assert "target_5d_up" in feat.columns
     assert "target_20d_bucket" in feat.columns
+    valid_2d = feat["target_2d_up"].dropna()
+    valid_3d = feat["target_3d_up"].dropna()
     valid_5d = feat["target_5d_up"].dropna()
     valid_1d = feat["target_1d_bucket"].dropna()
     valid_20d = feat["target_20d_bucket"].dropna()
+    assert valid_2d.between(0, 1).all()
+    assert valid_3d.between(0, 1).all()
     assert valid_5d.between(0, 1).all()
     assert valid_1d.between(0, 4).all()
     assert valid_20d.between(0, 4).all()
@@ -92,6 +98,8 @@ def test_estimate_return_bucket_profile_produces_valid_distribution() -> None:
 def test_distributional_score_improves_when_five_day_signal_improves() -> None:
     weak_mid = _distributional_score(
         short_prob=0.52,
+        two_prob=0.53,
+        three_prob=0.54,
         five_prob=0.48,
         mid_prob=0.56,
         short_expected_ret=0.002,
@@ -99,6 +107,8 @@ def test_distributional_score_improves_when_five_day_signal_improves() -> None:
     )
     strong_mid = _distributional_score(
         short_prob=0.52,
+        two_prob=0.53,
+        three_prob=0.54,
         five_prob=0.66,
         mid_prob=0.56,
         short_expected_ret=0.002,

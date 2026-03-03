@@ -190,9 +190,13 @@ def build_features(df: pd.DataFrame) -> pd.DataFrame:
     out["hvbd_recent_5"] = hvbd_today.rolling(5).max()
 
     out["fwd_ret_1"] = close.shift(-1) / close - 1.0
+    out["fwd_ret_2"] = close.shift(-2) / close - 1.0
+    out["fwd_ret_3"] = close.shift(-3) / close - 1.0
     out["fwd_ret_5"] = close.shift(-5) / close - 1.0
     out["fwd_ret_20"] = close.shift(-20) / close - 1.0
     out["target_1d_up"] = np.where(out["fwd_ret_1"].notna(), (out["fwd_ret_1"] > 0).astype(float), np.nan)
+    out["target_2d_up"] = np.where(out["fwd_ret_2"].notna(), (out["fwd_ret_2"] > 0).astype(float), np.nan)
+    out["target_3d_up"] = np.where(out["fwd_ret_3"].notna(), (out["fwd_ret_3"] > 0).astype(float), np.nan)
     out["target_5d_up"] = np.where(out["fwd_ret_5"].notna(), (out["fwd_ret_5"] > 0).astype(float), np.nan)
     out["target_20d_up"] = np.where(out["fwd_ret_20"].notna(), (out["fwd_ret_20"] > 0).astype(float), np.nan)
     out["target_1d_bucket"] = pd.cut(
@@ -218,9 +222,13 @@ def make_market_feature_frame(df: pd.DataFrame) -> pd.DataFrame:
         "date",
         *BASE_FEATURE_COLUMNS,
         "fwd_ret_1",
+        "fwd_ret_2",
+        "fwd_ret_3",
         "fwd_ret_5",
         "fwd_ret_20",
         "target_1d_up",
+        "target_2d_up",
+        "target_3d_up",
         "target_5d_up",
         "target_20d_up",
         "target_1d_bucket",
@@ -231,9 +239,13 @@ def make_market_feature_frame(df: pd.DataFrame) -> pd.DataFrame:
     rename_map.update(
         {
             "fwd_ret_1": "mkt_fwd_ret_1",
+            "fwd_ret_2": "mkt_fwd_ret_2",
+            "fwd_ret_3": "mkt_fwd_ret_3",
             "fwd_ret_5": "mkt_fwd_ret_5",
             "fwd_ret_20": "mkt_fwd_ret_20",
             "target_1d_up": "mkt_target_1d_up",
+            "target_2d_up": "mkt_target_2d_up",
+            "target_3d_up": "mkt_target_3d_up",
             "target_5d_up": "mkt_target_5d_up",
             "target_20d_up": "mkt_target_20d_up",
             "target_1d_bucket": "mkt_target_1d_bucket",

@@ -16,6 +16,8 @@ class MarketForecastState:
     drawdown_risk: float
     volatility_regime: str
     liquidity_stress: float
+    up_2d_prob: float = 0.5
+    up_3d_prob: float = 0.5
 
 
 @dataclass(frozen=True)
@@ -40,6 +42,8 @@ class StockForecastState:
     tradeability_score: float
     alpha_score: float = 0.0
     tradability_status: str = "normal"
+    up_2d_prob: float = 0.5
+    up_3d_prob: float = 0.5
 
 
 @dataclass(frozen=True)

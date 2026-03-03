@@ -143,6 +143,35 @@ def test_compose_state_sorts_best_sector_and_stock_first() -> None:
     assert composite_state.stocks[0].symbol == "000630.SZ"
 
 
+def test_stock_policy_score_improves_when_two_and_three_day_signal_improve() -> None:
+    weak = StockForecastState(
+        symbol="AAA",
+        sector="科技",
+        up_1d_prob=0.55,
+        up_5d_prob=0.58,
+        up_20d_prob=0.61,
+        excess_vs_sector_prob=0.54,
+        event_impact_score=0.08,
+        tradeability_score=0.86,
+        up_2d_prob=0.49,
+        up_3d_prob=0.50,
+    )
+    strong = StockForecastState(
+        symbol="AAA",
+        sector="科技",
+        up_1d_prob=0.55,
+        up_5d_prob=0.58,
+        up_20d_prob=0.61,
+        excess_vs_sector_prob=0.54,
+        event_impact_score=0.08,
+        tradeability_score=0.86,
+        up_2d_prob=0.62,
+        up_3d_prob=0.66,
+    )
+
+    assert _stock_policy_score(strong) > _stock_policy_score(weak)
+
+
 def test_v2_policy_sector_budgets_are_bounded_by_target_exposure() -> None:
     market, sectors, stocks, cross_section = _make_demo_state()
     composite_state = compose_state(

@@ -130,6 +130,8 @@ def _attach_cross_section_features(frame: pd.DataFrame) -> tuple[pd.DataFrame, l
 def _attach_relative_targets(frame: pd.DataFrame) -> pd.DataFrame:
     out = frame.copy()
     out["excess_ret_1_vs_mkt"] = out["fwd_ret_1"] - out["mkt_fwd_ret_1"]
+    out["excess_ret_2_vs_mkt"] = out["fwd_ret_2"] - out["mkt_fwd_ret_2"]
+    out["excess_ret_3_vs_mkt"] = out["fwd_ret_3"] - out["mkt_fwd_ret_3"]
     out["excess_ret_5_vs_mkt"] = out["fwd_ret_5"] - out["mkt_fwd_ret_5"]
     out["excess_ret_20_vs_mkt"] = out["fwd_ret_20"] - out["mkt_fwd_ret_20"]
 
@@ -137,18 +139,32 @@ def _attach_relative_targets(frame: pd.DataFrame) -> pd.DataFrame:
         out.groupby(["date", "sector"], as_index=False, observed=True)
         .agg(
             sector_fwd_ret_1_mean=("fwd_ret_1", "mean"),
+            sector_fwd_ret_2_mean=("fwd_ret_2", "mean"),
+            sector_fwd_ret_3_mean=("fwd_ret_3", "mean"),
             sector_fwd_ret_5_mean=("fwd_ret_5", "mean"),
             sector_fwd_ret_20_mean=("fwd_ret_20", "mean"),
         )
     )
     out = out.merge(sector_forward, on=["date", "sector"], how="left", validate="m:1")
     out["excess_ret_1_vs_sector"] = out["fwd_ret_1"] - out["sector_fwd_ret_1_mean"]
+    out["excess_ret_2_vs_sector"] = out["fwd_ret_2"] - out["sector_fwd_ret_2_mean"]
+    out["excess_ret_3_vs_sector"] = out["fwd_ret_3"] - out["sector_fwd_ret_3_mean"]
     out["excess_ret_5_vs_sector"] = out["fwd_ret_5"] - out["sector_fwd_ret_5_mean"]
     out["excess_ret_20_vs_sector"] = out["fwd_ret_20"] - out["sector_fwd_ret_20_mean"]
 
     out["target_1d_excess_mkt_up"] = np.where(
         out["excess_ret_1_vs_mkt"].notna(),
         (out["excess_ret_1_vs_mkt"] > 0).astype(float),
+        np.nan,
+    )
+    out["target_2d_excess_mkt_up"] = np.where(
+        out["excess_ret_2_vs_mkt"].notna(),
+        (out["excess_ret_2_vs_mkt"] > 0).astype(float),
+        np.nan,
+    )
+    out["target_3d_excess_mkt_up"] = np.where(
+        out["excess_ret_3_vs_mkt"].notna(),
+        (out["excess_ret_3_vs_mkt"] > 0).astype(float),
         np.nan,
     )
     out["target_5d_excess_mkt_up"] = np.where(

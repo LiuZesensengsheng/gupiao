@@ -234,20 +234,38 @@ def estimate_return_bucket_profile(
 def _distributional_score(
     *,
     short_prob: float,
+    two_prob: float,
+    three_prob: float,
     five_prob: float,
     mid_prob: float,
     short_expected_ret: float,
     mid_expected_ret: float,
 ) -> float:
     base_score = float(
-        0.25 * float(short_prob)
-        + 0.35 * float(five_prob)
-        + 0.40 * float(mid_prob)
+        0.14 * float(short_prob)
+        + 0.18 * float(two_prob)
+        + 0.22 * float(three_prob)
+        + 0.28 * float(five_prob)
+        + 0.18 * float(mid_prob)
     )
     short_ret_score = float(np.clip(0.5 + float(short_expected_ret) / 0.06, 0.0, 1.0))
-    five_ret_score = float(np.clip(0.5 + (0.35 * float(short_expected_ret) + 0.65 * float(mid_expected_ret)) / 0.12, 0.0, 1.0))
+    two_ret_score = float(
+        np.clip(0.5 + (0.75 * float(short_expected_ret) + 0.25 * float(mid_expected_ret)) / 0.08, 0.0, 1.0)
+    )
+    three_ret_score = float(
+        np.clip(0.5 + (0.60 * float(short_expected_ret) + 0.40 * float(mid_expected_ret)) / 0.10, 0.0, 1.0)
+    )
+    five_ret_score = float(
+        np.clip(0.5 + (0.35 * float(short_expected_ret) + 0.65 * float(mid_expected_ret)) / 0.12, 0.0, 1.0)
+    )
     mid_ret_score = float(np.clip(0.5 + float(mid_expected_ret) / 0.20, 0.0, 1.0))
-    dist_score = float(0.20 * short_ret_score + 0.35 * five_ret_score + 0.45 * mid_ret_score)
+    dist_score = float(
+        0.14 * short_ret_score
+        + 0.18 * two_ret_score
+        + 0.22 * three_ret_score
+        + 0.24 * five_ret_score
+        + 0.22 * mid_ret_score
+    )
     return float(0.4 * base_score + 0.6 * dist_score)
 
 
@@ -343,6 +361,12 @@ def run_quant_pipeline(
     market_short_model = _fit_latest_model(
         market_feat, feature_cols=market_feature_cols, target_col="mkt_target_1d_up", l2=l2
     )
+    market_two_model = _fit_latest_model(
+        market_feat, feature_cols=market_feature_cols, target_col="mkt_target_2d_up", l2=l2
+    )
+    market_three_model = _fit_latest_model(
+        market_feat, feature_cols=market_feature_cols, target_col="mkt_target_3d_up", l2=l2
+    )
     market_five_model = _fit_latest_model(
         market_feat, feature_cols=market_feature_cols, target_col="mkt_target_5d_up", l2=l2
     )
@@ -357,6 +381,8 @@ def run_quant_pipeline(
         name=market_security.name,
         latest_date=pd.Timestamp(mkt_latest["date"]),
         short_prob=float(market_short_model.predict_proba(mkt_latest_df, market_feature_cols)[0]),
+        two_prob=float(market_two_model.predict_proba(mkt_latest_df, market_feature_cols)[0]),
+        three_prob=float(market_three_model.predict_proba(mkt_latest_df, market_feature_cols)[0]),
         five_prob=float(market_five_model.predict_proba(mkt_latest_df, market_feature_cols)[0]),
         mid_prob=float(market_mid_model.predict_proba(mkt_latest_df, market_feature_cols)[0]),
         short_eval=(
@@ -439,6 +465,8 @@ def run_quant_pipeline(
 
     _notify(f"开始拟合股票面板模型: rows={len(panel)}, features={len(feature_cols)}")
     panel_short_model = _fit_latest_model(panel, feature_cols=feature_cols, target_col="target_1d_excess_mkt_up", l2=l2)
+    panel_two_model = _fit_latest_model(panel, feature_cols=feature_cols, target_col="target_2d_excess_mkt_up", l2=l2)
+    panel_three_model = _fit_latest_model(panel, feature_cols=feature_cols, target_col="target_3d_excess_mkt_up", l2=l2)
     panel_five_model = _fit_latest_model(panel, feature_cols=feature_cols, target_col="target_5d_excess_mkt_up", l2=l2)
     panel_mid_model = _fit_latest_model(panel, feature_cols=feature_cols, target_col="target_20d_excess_sector_up", l2=l2)
     panel_short_q_models = _fit_quantile_quintet(
@@ -489,6 +517,8 @@ def run_quant_pipeline(
 
     _notify(f"开始批量股票打分: symbols={len(latest_panel)}")
     short_probs = panel_short_model.predict_proba(latest_panel, feature_cols=feature_cols)
+    two_probs = panel_two_model.predict_proba(latest_panel, feature_cols=feature_cols)
+    three_probs = panel_three_model.predict_proba(latest_panel, feature_cols=feature_cols)
     five_probs = panel_five_model.predict_proba(latest_panel, feature_cols=feature_cols)
     mid_probs = panel_mid_model.predict_proba(latest_panel, feature_cols=feature_cols)
 
@@ -508,12 +538,16 @@ def run_quant_pipeline(
             q_models=panel_mid_q_models,
         )
         short_prob = float(short_probs[idx])
+        two_prob = float(two_probs[idx])
+        three_prob = float(three_probs[idx])
         five_prob = float(five_probs[idx])
         mid_prob = float(mid_probs[idx])
         status = str(latest_row.get("tradability_status", "normal") or "normal")
         score = _adjust_score_for_status(
             _distributional_score(
                 short_prob=short_prob,
+                two_prob=two_prob,
+                three_prob=three_prob,
                 five_prob=five_prob,
                 mid_prob=mid_prob,
                 short_expected_ret=float(short_bucket.expected_return),
@@ -528,6 +562,8 @@ def run_quant_pipeline(
                 name=str(latest_row.get("name", symbol)),
                 latest_date=pd.Timestamp(latest_row["date"]),
                 short_prob=short_prob,
+                two_prob=two_prob,
+                three_prob=three_prob,
                 five_prob=five_prob,
                 mid_prob=mid_prob,
                 score=score,

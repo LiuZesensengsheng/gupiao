@@ -59,7 +59,7 @@ def _append_horizon_metrics_table(
     lines.append("|---|---|---:|---:|---:|---:|")
     wrote = False
     for label, summary in summaries:
-        for horizon in ["1d", "5d", "20d"]:
+        for horizon in ["1d", "2d", "3d", "5d", "20d"]:
             metrics = summary.horizon_metrics.get(horizon, {})
             if not metrics:
                 continue
@@ -461,6 +461,8 @@ def write_v2_daily_report(out_path: str | Path, result: V2DailyRunResult) -> Pat
     lines.append("| 指标 | 数值 |")
     lines.append("|---|---:|")
     lines.append(f"| 1日上涨概率 | {_to_percent(result.composite_state.market.up_1d_prob)} |")
+    lines.append(f"| 2日上涨概率 | {_to_percent(result.composite_state.market.up_2d_prob)} |")
+    lines.append(f"| 3日上涨概率 | {_to_percent(result.composite_state.market.up_3d_prob)} |")
     lines.append(f"| 5日上涨概率 | {_to_percent(result.composite_state.market.up_5d_prob)} |")
     lines.append(f"| 20日上涨概率 | {_to_percent(result.composite_state.market.up_20d_prob)} |")
     lines.append(f"| 趋势状态 | {result.composite_state.market.trend_state} |")
@@ -496,14 +498,14 @@ def write_v2_daily_report(out_path: str | Path, result: V2DailyRunResult) -> Pat
     lines.append("")
     lines.append("## 个股目标仓位")
     lines.append("")
-    lines.append("| 股票 | 板块 | 1日概率 | 5日概率 | 20日概率 | Alpha分数 | 板块内超额 | 交易性 | 可执行目标 | 理想目标 |")
-    lines.append("|---|---|---:|---:|---:|---:|---:|---:|---:|---:|")
+    lines.append("| 股票 | 板块 | 1日概率 | 2日概率 | 3日概率 | 5日概率 | 20日概率 | Alpha分数 | 板块内超额 | 交易性 | 可执行目标 | 理想目标 |")
+    lines.append("|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|")
     if not result.composite_state.stocks:
-        lines.append("| 无数据 | NA | NA | NA | NA | NA | NA | NA | NA | NA |")
+        lines.append("| 无数据 | NA | NA | NA | NA | NA | NA | NA | NA | NA | NA | NA |")
     else:
         for stock in result.composite_state.stocks:
             lines.append(
-                f"| {_stock_name(stock.symbol)} | {stock.sector} | {_to_percent(stock.up_1d_prob)} | {_to_percent(stock.up_5d_prob)} | "
+                f"| {_stock_name(stock.symbol)} | {stock.sector} | {_to_percent(stock.up_1d_prob)} | {_to_percent(stock.up_2d_prob)} | {_to_percent(stock.up_3d_prob)} | {_to_percent(stock.up_5d_prob)} | "
                 f"{_to_percent(stock.up_20d_prob)} | {_to_float(stock.alpha_score, 3)} | {_to_percent(stock.excess_vs_sector_prob)} | "
                 f"{_to_percent(stock.tradeability_score)} | {_to_percent(result.policy_decision.symbol_target_weights.get(stock.symbol, 0.0))} | "
                 f"{_to_percent(result.policy_decision.desired_symbol_target_weights.get(stock.symbol, 0.0))} |"

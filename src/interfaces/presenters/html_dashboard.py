@@ -1110,6 +1110,8 @@ def write_v2_daily_dashboard(out_path: str | Path, result: V2DailyRunResult) -> 
             "<tr>"
             f"<td><div class='sym'>{escape(_stock_name(stock.symbol))}</div><div class='code'>{escape(stock.sector)}</div></td>"
             f"<td>{_pct(stock.up_1d_prob)}</td>"
+            f"<td>{_pct(stock.up_2d_prob)}</td>"
+            f"<td>{_pct(stock.up_3d_prob)}</td>"
             f"<td>{_pct(stock.up_5d_prob)}</td>"
             f"<td>{_pct(stock.up_20d_prob)}</td>"
             f"<td class='score' style='color:{_score_color(stock.alpha_score - 0.5)}'>{_num(stock.alpha_score, 3)}</td>"
@@ -1286,6 +1288,8 @@ def write_v2_daily_dashboard(out_path: str | Path, result: V2DailyRunResult) -> 
         <h2>大盘状态</h2>
         <table>
           <tr><th>1日上涨概率</th><td>{_pct(result.composite_state.market.up_1d_prob)}</td></tr>
+          <tr><th>2日上涨概率</th><td>{_pct(result.composite_state.market.up_2d_prob)}</td></tr>
+          <tr><th>3日上涨概率</th><td>{_pct(result.composite_state.market.up_3d_prob)}</td></tr>
           <tr><th>5日上涨概率</th><td>{_pct(result.composite_state.market.up_5d_prob)}</td></tr>
           <tr><th>20日上涨概率</th><td>{_pct(result.composite_state.market.up_20d_prob)}</td></tr>
           <tr><th>趋势状态</th><td>{escape(_v2_cn_trend_state(result.composite_state.market.trend_state))}</td></tr>
@@ -1320,8 +1324,8 @@ def write_v2_daily_dashboard(out_path: str | Path, result: V2DailyRunResult) -> 
       <div class="card">
         <h2>个股目标仓位</h2>
         <table>
-          <thead><tr><th>股票</th><th>1日</th><th>5日</th><th>20日</th><th>Alpha</th><th>板块内超额</th><th>交易性</th><th>可执行目标</th><th>理想目标</th></tr></thead>
-          <tbody>{''.join(stock_rows) or '<tr><td colspan="7">无数据</td></tr>'}</tbody>
+          <thead><tr><th>股票</th><th>1日</th><th>2日</th><th>3日</th><th>5日</th><th>20日</th><th>Alpha</th><th>板块内超额</th><th>交易性</th><th>可执行目标</th><th>理想目标</th></tr></thead>
+          <tbody>{''.join(stock_rows) or '<tr><td colspan="11">无数据</td></tr>'}</tbody>
         </table>
       </div>
     </section>
@@ -1436,7 +1440,7 @@ def write_v2_research_dashboard(
         ("校准", calibration.calibrated),
         ("学习", learning.learned),
     ]:
-        for horizon in ["1d", "5d", "20d"]:
+        for horizon in ["1d", "2d", "3d", "5d", "20d"]:
             metrics = summary.horizon_metrics.get(horizon, {})
             if not metrics:
                 continue
