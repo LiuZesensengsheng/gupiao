@@ -296,6 +296,86 @@ def test_stock_policy_score_penalizes_fragile_high_risk_setup() -> None:
     assert _stock_policy_score(steady) > _stock_policy_score(fragile)
 
 
+def test_v2_policy_trims_exposure_when_cross_sectional_alpha_is_weak() -> None:
+    market, sectors, _, cross_section = _make_demo_state()
+    weak_stocks = [
+        StockForecastState("A1", "有色", 0.50, 0.51, 0.52, 0.49, 0.02, 0.78, alpha_score=0.53),
+        StockForecastState("A2", "化工", 0.49, 0.50, 0.51, 0.48, 0.01, 0.76, alpha_score=0.52),
+        StockForecastState("A3", "科技", 0.48, 0.49, 0.50, 0.47, 0.00, 0.74, alpha_score=0.51),
+    ]
+    composite_state = compose_state(
+        market=market,
+        sectors=sectors,
+        stocks=weak_stocks,
+        cross_section=cross_section,
+    )
+
+    decision = apply_policy(
+        PolicyInput(
+            composite_state=composite_state,
+            current_weights={},
+            current_cash=1.0,
+            total_equity=1.0,
+        )
+    )
+
+    assert decision.target_exposure < 0.85
+    assert any("Cross-sectional alpha weak" in note for note in decision.risk_notes)
+
+
+def test_v2_policy_boosts_exposure_and_sector_budget_for_strong_alpha() -> None:
+    market = MarketForecastState(
+        as_of_date="2026-03-01",
+        up_1d_prob=0.48,
+        up_5d_prob=0.49,
+        up_20d_prob=0.48,
+        trend_state="range",
+        drawdown_risk=0.30,
+        volatility_regime="normal",
+        liquidity_stress=0.25,
+    )
+    sectors = [
+        SectorForecastState("有色", 0.54, 0.57, 0.06, 0.28, 0.18),
+        SectorForecastState("化工", 0.54, 0.57, 0.06, 0.28, 0.18),
+    ]
+    strong_stocks = [
+        StockForecastState("A1", "有色", 0.62, 0.66, 0.70, 0.62, 0.72, 0.93, alpha_score=0.68),
+        StockForecastState("A2", "有色", 0.60, 0.64, 0.67, 0.60, 0.68, 0.90, alpha_score=0.64),
+        StockForecastState("B1", "化工", 0.54, 0.56, 0.58, 0.51, 0.45, 0.84, alpha_score=0.56),
+        StockForecastState("B2", "化工", 0.53, 0.55, 0.57, 0.50, 0.42, 0.82, alpha_score=0.55),
+    ]
+    cross_section = CrossSectionForecastState(
+        as_of_date="2026-03-01",
+        large_vs_small_bias=0.02,
+        growth_vs_value_bias=0.01,
+        fund_flow_strength=0.10,
+        margin_risk_on_score=0.08,
+        breadth_strength=0.18,
+        leader_participation=0.61,
+        weak_stock_ratio=0.28,
+    )
+    composite_state = compose_state(
+        market=market,
+        sectors=sectors,
+        stocks=strong_stocks,
+        cross_section=cross_section,
+    )
+
+    decision = apply_policy(
+        PolicyInput(
+            composite_state=composite_state,
+            current_weights={},
+            current_cash=1.0,
+            total_equity=1.0,
+        )
+    )
+
+    assert decision.target_exposure > 0.45
+    assert decision.target_position_count >= 4
+    assert decision.desired_sector_budgets["有色"] > decision.desired_sector_budgets["化工"]
+    assert any("Cross-sectional alpha strong" in note for note in decision.risk_notes)
+
+
 def test_summarize_daily_run_returns_structured_summary() -> None:
     market, sectors, stocks, cross_section = _make_demo_state()
     composite_state = compose_state(

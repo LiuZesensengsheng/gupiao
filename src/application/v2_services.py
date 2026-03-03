@@ -866,6 +866,78 @@ def _ranked_sector_budgets(sectors: Iterable[SectorForecastState], *, target_exp
     return {item.sector: float(target_exposure) * score / total for item, score in zip(rows, raw)}
 
 
+def _alpha_opportunity_metrics(stocks: Iterable[StockForecastState]) -> dict[str, float]:
+    actionable = [
+        stock for stock in stocks
+        if _is_actionable_status(getattr(stock, "tradability_status", "normal"))
+    ]
+    if not actionable:
+        return {
+            "top_score": 0.0,
+            "avg_top3": 0.0,
+            "median_score": 0.0,
+            "breadth_ratio": 0.0,
+            "strong_count": 0.0,
+            "alpha_headroom": 0.0,
+        }
+    scores = sorted((_stock_policy_score(stock) for stock in actionable), reverse=True)
+    top_slice = scores[: min(3, len(scores))]
+    top_score = float(scores[0])
+    avg_top3 = float(sum(top_slice) / max(1, len(top_slice)))
+    median_score = float(np.median(scores))
+    strong_cut = max(0.56, median_score + 0.03)
+    strong_count = int(sum(1 for score in scores if score >= strong_cut))
+    breadth_ratio = float(strong_count / max(1, len(scores)))
+    alpha_headroom = float(max(0.0, avg_top3 - max(0.54, median_score)))
+    return {
+        "top_score": top_score,
+        "avg_top3": avg_top3,
+        "median_score": median_score,
+        "breadth_ratio": breadth_ratio,
+        "strong_count": float(strong_count),
+        "alpha_headroom": alpha_headroom,
+    }
+
+
+def _ranked_sector_budgets_with_alpha(
+    *,
+    sectors: Iterable[SectorForecastState],
+    stocks: Iterable[StockForecastState],
+    target_exposure: float,
+) -> dict[str, float]:
+    sector_rows = list(sectors)
+    if not sector_rows:
+        return {}
+    stock_rows = [
+        stock for stock in stocks
+        if _is_actionable_status(getattr(stock, "tradability_status", "normal"))
+    ]
+    sector_alpha: dict[str, list[float]] = {}
+    for stock in stock_rows:
+        sector_alpha.setdefault(str(stock.sector), []).append(_stock_policy_score(stock))
+
+    raw_scores: list[float] = []
+    for item in sector_rows:
+        base_score = max(0.0, float(item.up_20d_prob) - 0.50) + max(0.0, float(item.relative_strength))
+        stock_scores = sorted(sector_alpha.get(item.sector, []), reverse=True)
+        if stock_scores:
+            top_slice = stock_scores[: min(2, len(stock_scores))]
+            alpha_top = float(sum(top_slice) / max(1, len(top_slice)))
+            alpha_breadth = float(sum(1 for score in stock_scores if score >= 0.56) / max(1, len(stock_scores)))
+            alpha_score = max(0.0, alpha_top - 0.50) + 0.25 * alpha_breadth
+        else:
+            alpha_score = 0.0
+        raw_scores.append(0.55 * base_score + 0.45 * alpha_score)
+
+    total = float(sum(raw_scores))
+    if total <= 1e-9:
+        return _ranked_sector_budgets(sector_rows, target_exposure=target_exposure)
+    return {
+        item.sector: float(target_exposure) * float(score) / total
+        for item, score in zip(sector_rows, raw_scores)
+    }
+
+
 def _cap_sector_budgets(
     *,
     sector_budgets: dict[str, float],
@@ -1150,6 +1222,7 @@ def apply_policy(
     turnover_cap = float(policy_spec.risk_off_turnover_cap)
     intraday_t_allowed = False
     risk_notes: list[str] = []
+    alpha_metrics = _alpha_opportunity_metrics(state.stocks)
 
     if state.risk_regime == "risk_on":
         target_exposure = float(policy_spec.risk_on_exposure)
@@ -1187,6 +1260,30 @@ def apply_policy(
         turnover_cap = min(turnover_cap, 0.24)
         risk_notes.append("Growth style weak: turnover capped conservatively.")
 
+    alpha_headroom = float(alpha_metrics["alpha_headroom"])
+    alpha_breadth = float(alpha_metrics["breadth_ratio"])
+    top_alpha = float(alpha_metrics["top_score"])
+    if alpha_headroom <= 0.01 or alpha_breadth < 0.05:
+        target_exposure *= 0.85
+        target_position_count = max(1, target_position_count - 1)
+        turnover_cap = min(turnover_cap, 0.20)
+        risk_notes.append("Cross-sectional alpha weak: exposure trimmed.")
+    elif (
+        alpha_headroom >= 0.02
+        and alpha_breadth >= 0.08
+        and cross.breadth_strength >= 0.10
+        and market.liquidity_stress <= 0.60
+    ):
+        alpha_boost = min(0.12, 0.70 * alpha_headroom + 0.18 * alpha_breadth)
+        target_exposure = min(1.0, target_exposure + alpha_boost)
+        if top_alpha >= 0.62:
+            target_position_count = min(6, target_position_count + 1)
+        risk_notes.append("Cross-sectional alpha strong: exposure boosted.")
+
+    if top_alpha >= 0.64 and cross.breadth_strength >= 0.12 and state.risk_regime != "risk_off":
+        turnover_cap = min(0.45, turnover_cap + 0.03)
+        risk_notes.append("Top alpha concentration supports measured rotation.")
+
     target_exposure = _clip(target_exposure, 0.0, 1.0)
     max_single_position = 0.35
     if market.volatility_regime == "high":
@@ -1195,7 +1292,15 @@ def apply_policy(
         max_single_position = min(max_single_position, 0.22)
     if cross.growth_vs_value_bias < -0.08:
         max_single_position = min(max_single_position, 0.20)
-    desired_sector_budgets = _ranked_sector_budgets(state.sectors[: max(1, target_position_count)], target_exposure=target_exposure)
+    if alpha_breadth >= 0.12 and alpha_headroom >= 0.02:
+        target_position_count = max(target_position_count, 2)
+        max_single_position = min(max_single_position, 0.18 if state.risk_regime == "risk_off" else 0.22)
+        risk_notes.append("Alpha breadth strong: concentration reduced across more names.")
+    desired_sector_budgets = _ranked_sector_budgets_with_alpha(
+        sectors=state.sectors[: max(1, target_position_count)],
+        stocks=state.stocks,
+        target_exposure=target_exposure,
+    )
     desired_sector_budgets, sector_cap_notes = _cap_sector_budgets(
         sector_budgets=desired_sector_budgets,
         target_exposure=target_exposure,
