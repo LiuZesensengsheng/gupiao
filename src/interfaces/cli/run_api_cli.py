@@ -889,9 +889,13 @@ def run_sync_data(settings: dict[str, Any]) -> int:
         universe_min_amount=max(0.0, float(settings["universe_min_amount"])),
         universe_exclude_st=_parse_bool(settings["universe_exclude_st"]),
     )
+    if result.resumed:
+        print(f"[OK] Resumed from checkpoint: {result.resume_completed} symbols already completed")
     print(f"[OK] Universe source: {result.universe_source}")
     print(f"[OK] Universe size: {result.universe_size} (requested {result.requested_universe_size})")
     print(f"[OK] Downloaded: {result.downloaded}, skipped: {result.skipped}, failed: {result.failed}, attempted: {result.attempted}")
+    if result.checkpoint_file:
+        print(f"[OK] Resume checkpoint saved: {Path(result.checkpoint_file).resolve()}")
     if result.universe_file:
         print(f"[OK] Universe file written: {Path(result.universe_file).resolve()}")
     if result.failed_symbols:

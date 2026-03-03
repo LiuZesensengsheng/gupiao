@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import re
 import time
@@ -26,6 +27,7 @@ INDEX_SECURITIES: tuple[Security, ...] = (
 )
 _SYMBOL_FILE_PATTERN = re.compile(r"^(\d{6}\.(SH|SZ))\.csv$", re.IGNORECASE)
 _INDEX_SYMBOL_SET = {x.symbol for x in INDEX_SECURITIES} | {"000905.SH", "000852.SH"}
+_SYNC_STATE_DIRNAME = ".sync_state"
 
 
 @dataclass(frozen=True)
@@ -39,6 +41,9 @@ class DataSyncResult:
     failed_symbols: list[str]
     universe_source: str
     universe_file: str
+    resumed: bool = False
+    resume_completed: int = 0
+    checkpoint_file: str = ""
 
 
 def _safe_symbol(value: str) -> str | None:
@@ -257,6 +262,80 @@ def _is_fresh_enough(path: Path, target_end: pd.Timestamp) -> bool:
     return latest >= (target_end - pd.Timedelta(days=5))
 
 
+def _sync_checkpoint_path(
+    *,
+    data_dir: str,
+    source: str,
+    start: str,
+    end: str,
+    target_end: pd.Timestamp,
+    force_refresh: bool,
+    rows: Sequence[Security],
+) -> Path:
+    signature_payload = {
+        "source": str(source).strip(),
+        "start": str(start).strip(),
+        "end": str(end).strip(),
+        "target_end": target_end.strftime("%Y-%m-%d"),
+        "force_refresh": bool(force_refresh),
+        "symbols": [normalize_symbol(sec.symbol).symbol for sec in rows],
+    }
+    payload = json.dumps(signature_payload, ensure_ascii=False, sort_keys=True).encode("utf-8")
+    digest = hashlib.sha1(payload).hexdigest()[:16]
+    return Path(data_dir) / _SYNC_STATE_DIRNAME / f"sync_{digest}.json"
+
+
+def _load_sync_checkpoint(path: Path) -> set[str]:
+    if not path.exists():
+        return set()
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return set()
+    if not isinstance(payload, dict):
+        return set()
+    raw = payload.get("completed_symbols", [])
+    if not isinstance(raw, list):
+        return set()
+    out: set[str] = set()
+    for item in raw:
+        symbol = _safe_symbol(str(item))
+        if symbol is not None:
+            out.add(symbol)
+    return out
+
+
+def _write_sync_checkpoint(
+    path: Path,
+    *,
+    completed_symbols: set[str],
+    total: int,
+    source: str,
+    target_end: pd.Timestamp,
+) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    payload = {
+        "updated_at": pd.Timestamp.now().isoformat(),
+        "source": str(source).strip(),
+        "target_end": target_end.strftime("%Y-%m-%d"),
+        "total": int(total),
+        "completed_symbols": sorted(completed_symbols),
+    }
+    tmp_path = path.with_suffix(path.suffix + ".tmp")
+    tmp_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    tmp_path.replace(path)
+
+
+def _should_print_progress(*, idx: int, total: int, progress_every: int, force: bool = False) -> bool:
+    if force:
+        return True
+    if idx <= 1 or idx >= total:
+        return True
+    if progress_every <= 1:
+        return True
+    return idx % progress_every == 0
+
+
 def sync_market_data(
     *,
     source: str,
@@ -290,17 +369,56 @@ def sync_market_data(
     today = pd.Timestamp.today().normalize()
     end_ts = pd.Timestamp(end).normalize()
     target_end = min(today, end_ts)
+    total = len(rows)
+    progress_every = 1 if total <= 20 else 10
+    checkpoint_path = _sync_checkpoint_path(
+        data_dir=data_dir,
+        source=source,
+        start=start,
+        end=end,
+        target_end=target_end,
+        force_refresh=force_refresh,
+        rows=rows,
+    )
+    completed_symbols = _load_sync_checkpoint(checkpoint_path)
+    resume_completed = len(completed_symbols)
+    resumed = resume_completed > 0
+
+    print(
+        f"[SYNC] 开始同步: total={total}, source={str(source).strip() or 'auto'}, "
+        f"target_end={target_end.strftime('%Y-%m-%d')}"
+    )
+    if resumed:
+        print(
+            f"[SYNC] 检测到断点续传检查点: 已完成 {resume_completed}/{total}, "
+            f"将跳过已完成标的 -> {checkpoint_path.resolve()}"
+        )
 
     downloaded = 0
     skipped = 0
     failed = 0
     attempts = 0
     failed_symbols: list[str] = []
-    for sec in rows:
+    for idx, sec in enumerate(rows, start=1):
         symbol = normalize_symbol(sec.symbol).symbol
+        if symbol in completed_symbols:
+            continue
         path = Path(data_dir) / f"{symbol}.csv"
         if not force_refresh and _is_fresh_enough(path, target_end=target_end):
             skipped += 1
+            completed_symbols.add(symbol)
+            _write_sync_checkpoint(
+                checkpoint_path,
+                completed_symbols=completed_symbols,
+                total=total,
+                source=source,
+                target_end=target_end,
+            )
+            if _should_print_progress(idx=idx, total=total, progress_every=progress_every):
+                print(
+                    f"[SYNC] {idx}/{total} {symbol} | downloaded={downloaded} skipped={skipped} "
+                    f"failed={failed} done={len(completed_symbols)}/{total}"
+                )
             continue
         attempts += 1
         try:
@@ -315,13 +433,44 @@ def sync_market_data(
                 raise DataError(f"{symbol}: empty dataframe after load")
             df.to_csv(path, index=False)
             downloaded += 1
-        except Exception:
+            completed_symbols.add(symbol)
+            _write_sync_checkpoint(
+                checkpoint_path,
+                completed_symbols=completed_symbols,
+                total=total,
+                source=source,
+                target_end=target_end,
+            )
+            if _should_print_progress(idx=idx, total=total, progress_every=progress_every):
+                print(
+                    f"[SYNC] {idx}/{total} {symbol} | downloaded={downloaded} skipped={skipped} "
+                    f"failed={failed} done={len(completed_symbols)}/{total}"
+                )
+        except Exception as exc:
             failed += 1
             failed_symbols.append(symbol)
+            print(
+                f"[WARN] [SYNC] {idx}/{total} {symbol} 同步失败: {exc} | "
+                f"downloaded={downloaded} skipped={skipped} failed={failed} done={len(completed_symbols)}/{total}"
+            )
             if failed >= max(1, int(max_failures)):
+                print(
+                    f"[WARN] [SYNC] 已达到失败上限 {max(1, int(max_failures))}，"
+                    f"断点已保留，可直接重跑继续 -> {checkpoint_path.resolve()}"
+                )
                 break
         if int(sleep_ms) > 0:
             time.sleep(float(sleep_ms) / 1000.0)
+
+    checkpoint_file = ""
+    if len(completed_symbols) >= total:
+        if checkpoint_path.exists():
+            checkpoint_path.unlink()
+    else:
+        checkpoint_file = str(checkpoint_path)
+        print(
+            f"[SYNC] 当前已完成 {len(completed_symbols)}/{total}，保留断点供下次继续 -> {checkpoint_path.resolve()}"
+        )
 
     universe_path = ""
     if str(write_universe_file).strip():
@@ -338,4 +487,7 @@ def sync_market_data(
         failed_symbols=failed_symbols[:20],
         universe_source=universe_source,
         universe_file=universe_path,
+        resumed=resumed,
+        resume_completed=resume_completed,
+        checkpoint_file=checkpoint_file,
     )
