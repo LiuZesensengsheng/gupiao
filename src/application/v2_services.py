@@ -1118,9 +1118,11 @@ def _finalize_target_weights(
     *,
     desired_weights: dict[str, float],
     current_weights: dict[str, float],
+    current_holding_days: dict[str, int],
     stocks: list[StockForecastState],
     target_exposure: float,
     min_trade_delta: float,
+    min_holding_days: int,
 ) -> tuple[dict[str, float], list[str]]:
     adjusted = {symbol: max(0.0, float(weight)) for symbol, weight in desired_weights.items()}
     state_map = {item.symbol: item for item in stocks}
@@ -1158,6 +1160,14 @@ def _finalize_target_weights(
                 locked_symbols.add(symbol)
                 notes.append(f"{symbol}: data insufficient, add-on blocked.")
                 continue
+        holding_days = int(max(0, current_holding_days.get(symbol, 0)))
+        if current > 1e-9 and holding_days < int(min_holding_days) and target < current - 1e-9:
+            adjusted[symbol] = current
+            locked_symbols.add(symbol)
+            notes.append(
+                f"{symbol}: minimum holding window active ({holding_days}/{int(min_holding_days)}d), sell blocked."
+            )
+            continue
 
     for symbol in sorted(set(adjusted) | set(current_weights)):
         current = max(0.0, float(current_weights.get(symbol, 0.0)))
@@ -1207,6 +1217,24 @@ def _sector_budgets_from_weights(
     return out
 
 
+def _advance_holding_days(
+    *,
+    prev_holding_days: dict[str, int],
+    prev_weights: dict[str, float],
+    next_weights: dict[str, float],
+) -> dict[str, int]:
+    out: dict[str, int] = {}
+    for symbol, weight in next_weights.items():
+        if float(weight) <= 1e-9:
+            continue
+        prev_weight = max(0.0, float(prev_weights.get(symbol, 0.0)))
+        if prev_weight > 1e-9:
+            out[symbol] = int(max(1, int(prev_holding_days.get(symbol, 0)) + 1))
+        else:
+            out[symbol] = 1
+    return out
+
+
 def apply_policy(
     policy_input: PolicyInput,
     *,
@@ -1216,40 +1244,59 @@ def apply_policy(
     state = policy_input.composite_state
     market = state.market
     cross = state.cross_section
+    min_holding_days = 5
 
-    target_exposure = float(policy_spec.risk_off_exposure)
-    target_position_count = int(policy_spec.risk_off_positions)
+    target_exposure = 0.0
+    target_position_count = 1
     turnover_cap = float(policy_spec.risk_off_turnover_cap)
     intraday_t_allowed = False
     risk_notes: list[str] = []
     alpha_metrics = _alpha_opportunity_metrics(state.stocks)
+    alpha_headroom = float(alpha_metrics["alpha_headroom"])
+    alpha_breadth = float(alpha_metrics["breadth_ratio"])
+    top_alpha = float(alpha_metrics["top_score"])
 
     if state.risk_regime == "risk_on":
-        target_exposure = float(policy_spec.risk_on_exposure)
+        regime_floor = 0.45
         target_position_count = int(policy_spec.risk_on_positions)
         turnover_cap = float(policy_spec.risk_on_turnover_cap)
         intraday_t_allowed = state.strategy_mode == "range_rotation"
     elif state.risk_regime == "cautious":
-        target_exposure = float(policy_spec.cautious_exposure)
+        regime_floor = 0.35
         target_position_count = int(policy_spec.cautious_positions)
         turnover_cap = float(policy_spec.cautious_turnover_cap)
     else:
-        risk_notes.append("Risk-off regime: exposure capped aggressively.")
+        regime_floor = 0.25
+        target_position_count = int(policy_spec.risk_off_positions)
+        turnover_cap = float(policy_spec.risk_off_turnover_cap)
+        risk_notes.append("Risk-off regime: hard floor reduced, but not forced into deep cash.")
+
+    alpha_base_exposure = float(
+        _clip(
+            0.25
+            + 1.60 * alpha_headroom
+            + 0.55 * alpha_breadth
+            + 0.35 * max(0.0, top_alpha - 0.55),
+            regime_floor,
+            0.95,
+        )
+    )
+    target_exposure = float(alpha_base_exposure)
 
     if market.up_20d_prob < 0.50:
-        target_exposure = min(target_exposure, 0.45)
-        risk_notes.append("Market mid-term probability below 0.50.")
+        target_exposure *= 0.95
+        risk_notes.append("Market mid-term probability below 0.50: mild exposure trim.")
     if market.drawdown_risk >= 0.50:
-        target_exposure = min(target_exposure, 0.35)
-        turnover_cap = min(turnover_cap, 0.18)
-        risk_notes.append("Drawdown risk elevated.")
+        target_exposure *= 0.90
+        turnover_cap = min(turnover_cap, 0.22)
+        risk_notes.append("Drawdown risk elevated: mild exposure trim.")
     if cross.fund_flow_strength < 0.0:
-        target_exposure *= 0.85
-        risk_notes.append("Fund flow weak.")
+        target_exposure *= 0.94
+        risk_notes.append("Fund flow weak: mild exposure trim.")
     if market.volatility_regime == "high":
-        target_exposure *= 0.80
-        turnover_cap = min(turnover_cap, 0.20)
-        risk_notes.append("High volatility regime: exposure scaled to volatility target.")
+        target_exposure *= 0.90
+        turnover_cap = min(turnover_cap, 0.24)
+        risk_notes.append("High volatility regime: exposure trimmed, not capped aggressively.")
     elif market.volatility_regime == "low" and state.risk_regime == "risk_on" and cross.breadth_strength > 0.15:
         target_exposure = min(1.0, target_exposure * 1.05)
         risk_notes.append("Low volatility regime: exposure nudged up to target.")
@@ -1260,13 +1307,10 @@ def apply_policy(
         turnover_cap = min(turnover_cap, 0.24)
         risk_notes.append("Growth style weak: turnover capped conservatively.")
 
-    alpha_headroom = float(alpha_metrics["alpha_headroom"])
-    alpha_breadth = float(alpha_metrics["breadth_ratio"])
-    top_alpha = float(alpha_metrics["top_score"])
     if alpha_headroom <= 0.01 or alpha_breadth < 0.05:
-        target_exposure *= 0.85
+        target_exposure *= 0.90
         target_position_count = max(1, target_position_count - 1)
-        turnover_cap = min(turnover_cap, 0.20)
+        turnover_cap = min(turnover_cap, 0.22)
         risk_notes.append("Cross-sectional alpha weak: exposure trimmed.")
     elif (
         alpha_headroom >= 0.02
@@ -1277,14 +1321,14 @@ def apply_policy(
         alpha_boost = min(0.12, 0.70 * alpha_headroom + 0.18 * alpha_breadth)
         target_exposure = min(1.0, target_exposure + alpha_boost)
         if top_alpha >= 0.62:
-            target_position_count = min(6, target_position_count + 1)
+            target_position_count = min(5, target_position_count + 1)
         risk_notes.append("Cross-sectional alpha strong: exposure boosted.")
 
     if top_alpha >= 0.64 and cross.breadth_strength >= 0.12 and state.risk_regime != "risk_off":
         turnover_cap = min(0.45, turnover_cap + 0.03)
         risk_notes.append("Top alpha concentration supports measured rotation.")
 
-    target_exposure = _clip(target_exposure, 0.0, 1.0)
+    target_exposure = _clip(target_exposure, regime_floor, 1.0)
     max_single_position = 0.35
     if market.volatility_regime == "high":
         max_single_position = min(max_single_position, 0.24)
@@ -1296,6 +1340,7 @@ def apply_policy(
         target_position_count = max(target_position_count, 2)
         max_single_position = min(max_single_position, 0.18 if state.risk_regime == "risk_off" else 0.22)
         risk_notes.append("Alpha breadth strong: concentration reduced across more names.")
+    target_position_count = int(np.clip(target_position_count, 1, 5))
     desired_sector_budgets = _ranked_sector_budgets_with_alpha(
         sectors=state.sectors[: max(1, target_position_count)],
         stocks=state.stocks,
@@ -1317,9 +1362,11 @@ def apply_policy(
     symbol_target_weights, execution_notes = _finalize_target_weights(
         desired_weights=desired_symbol_target_weights,
         current_weights=policy_input.current_weights,
+        current_holding_days=policy_input.current_holding_days,
         stocks=state.stocks,
         target_exposure=target_exposure,
         min_trade_delta=min(0.02, 0.25 * float(turnover_cap)),
+        min_holding_days=min_holding_days,
     )
     risk_notes.extend(execution_notes)
     sector_budgets = _sector_budgets_from_weights(
@@ -2538,6 +2585,7 @@ def _execute_v2_backtest_trajectory(
     }
     out_dates: list[pd.Timestamp] = []
     prev_weights: dict[str, float] = {}
+    prev_holding_days: dict[str, int] = {}
     prev_cash = 1.0
     learning_rows: list[dict[str, float]] = []
 
@@ -2562,6 +2610,7 @@ def _execute_v2_backtest_trajectory(
                 current_weights=prev_weights,
                 current_cash=max(0.0, prev_cash),
                 total_equity=1.0,
+                current_holding_days=prev_holding_days,
             ),
             policy_spec=active_policy_spec,
         )
@@ -2599,7 +2648,13 @@ def _execute_v2_backtest_trajectory(
         fill_ratios.append(fill_ratio)
         slippage_cost_bps.append(slip_bps)
         out_dates.append(step.next_date)
+        old_weights = dict(prev_weights)
         prev_weights = next_weights
+        prev_holding_days = _advance_holding_days(
+            prev_holding_days=prev_holding_days,
+            prev_weights=old_weights,
+            next_weights=next_weights,
+        )
         prev_cash = next_cash
 
         if capture_learning_rows:
@@ -3417,6 +3472,7 @@ def run_daily_v2_live(
             current_weights=current_weights,
             current_cash=max(0.0, 1.0 - sum(current_weights.values())),
             total_equity=1.0,
+            current_holding_days={symbol: 5 for symbol in current_weights},
         ),
         policy_spec=active_policy_spec,
     )

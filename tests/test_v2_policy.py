@@ -81,7 +81,7 @@ def test_v2_policy_returns_bounded_exposure_and_weights() -> None:
     )
 
     assert 0.0 <= decision.target_exposure <= 1.0
-    assert 1 <= decision.target_position_count <= 4
+    assert 1 <= decision.target_position_count <= 5
     assert sum(decision.symbol_target_weights.values()) <= decision.target_exposure + 1e-9
     assert all(weight >= 0.0 for weight in decision.symbol_target_weights.values())
 
@@ -266,7 +266,7 @@ def test_v2_policy_tightens_single_name_cap_under_high_volatility() -> None:
     )
 
     assert all(weight <= 0.24 + 1e-9 for weight in decision.symbol_target_weights.values())
-    assert any("volatility target" in note for note in decision.risk_notes)
+    assert any("High volatility regime" in note for note in decision.risk_notes)
 
 
 def test_stock_policy_score_penalizes_fragile_high_risk_setup() -> None:
@@ -573,6 +573,37 @@ def test_v2_policy_blocks_new_entry_when_data_is_insufficient() -> None:
     assert "AAA" not in decision.sector_budgets
     assert any("new entry blocked" in note for note in decision.risk_notes)
     assert any("new entry blocked" in note for note in decision.execution_notes)
+
+
+def test_v2_policy_blocks_sell_within_minimum_holding_window() -> None:
+    market, _, _, cross_section = _make_demo_state()
+    sectors = [
+        SectorForecastState("强", 0.60, 0.66, 0.18, 0.22, 0.18),
+        SectorForecastState("弱", 0.45, 0.47, -0.06, 0.40, 0.16),
+    ]
+    stocks = [
+        StockForecastState("AAA", "弱", 0.48, 0.49, 0.50, 0.46, 0.20, 0.84, alpha_score=0.51),
+        StockForecastState("BBB", "强", 0.62, 0.66, 0.70, 0.60, 0.72, 0.92, alpha_score=0.68),
+    ]
+    composite_state = compose_state(
+        market=market,
+        sectors=sectors,
+        stocks=stocks,
+        cross_section=cross_section,
+    )
+
+    decision = apply_policy(
+        PolicyInput(
+            composite_state=composite_state,
+            current_weights={"AAA": 0.18},
+            current_cash=0.82,
+            total_equity=1.0,
+            current_holding_days={"AAA": 3},
+        )
+    )
+
+    assert decision.symbol_target_weights["AAA"] == pytest.approx(0.18)
+    assert any("minimum holding window active" in note for note in decision.risk_notes)
 
 
 def test_v2_policy_suppresses_small_rebalance_gap() -> None:

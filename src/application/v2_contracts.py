@@ -70,6 +70,7 @@ class PolicyInput:
     current_weights: Dict[str, float]
     current_cash: float
     total_equity: float
+    current_holding_days: Dict[str, int] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
