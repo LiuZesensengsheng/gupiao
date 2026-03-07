@@ -40,6 +40,9 @@ def build_parser() -> argparse.ArgumentParser:
     daily.add_argument("--artifact-root", default="artifacts/v2", help="Published artifact root for learned policy snapshots")
     daily.add_argument("--cache-root", default="artifacts/v2/cache", help="On-disk cache root for daily-run results")
     daily.add_argument("--refresh-cache", action="store_true", help="Ignore existing daily-run cache and rebuild")
+    daily.add_argument("--run-id", default=None, help="Pinned research run_id to consume")
+    daily.add_argument("--snapshot-path", default=None, help="Pinned research manifest path (file or directory)")
+    daily.add_argument("--allow-retrain", action="store_true", help="Allow daily-run to retrain forecasts (default: false)")
 
     research = sub.add_parser("research-run", help="Print the V2 research workflow stages")
     research.add_argument("--strategy", default="swing_v2", help="Target strategy id")
@@ -56,6 +59,10 @@ def build_parser() -> argparse.ArgumentParser:
     research.add_argument("--light", action="store_true", help="Run baseline-only light research mode")
     research.add_argument("--skip-calibration", action="store_true", help="Skip policy calibration stage")
     research.add_argument("--skip-learning", action="store_true", help="Skip learned policy stage")
+    research.add_argument("--split-mode", default="purged_wf", choices=["purged_wf", "simple"], help="Research split mode")
+    research.add_argument("--embargo-days", type=int, default=20, help="Embargo days for purged walk-forward split")
+    research.add_argument("--publish-forecast-models", dest="publish_forecast_models", action="store_true", default=True, help="Publish forecast-layer metadata and frozen state snapshot")
+    research.add_argument("--no-publish-forecast-models", dest="publish_forecast_models", action="store_false", help="Skip publishing forecast-layer metadata")
 
     return parser
 
@@ -92,6 +99,9 @@ def main() -> int:
             artifact_root=str(args.artifact_root),
             cache_root=str(args.cache_root),
             refresh_cache=bool(args.refresh_cache),
+            run_id=args.run_id,
+            snapshot_path=args.snapshot_path,
+            allow_retrain=bool(args.allow_retrain),
         )
         published_model = load_published_v2_policy_model(
             strategy_id=str(args.strategy),
@@ -127,6 +137,8 @@ def main() -> int:
             cache_root=str(args.cache_root),
             refresh_cache=bool(args.refresh_cache),
             forecast_backend=str(args.forecast_backend),
+            split_mode=str(args.split_mode),
+            embargo_days=int(args.embargo_days),
         )
         artifacts = None
         if not skip_learning:
@@ -140,6 +152,11 @@ def main() -> int:
                 baseline=baseline,
                 calibration=calibration,
                 learning=learning,
+                cache_root=str(args.cache_root),
+                forecast_backend=str(args.forecast_backend),
+                publish_forecast_models=bool(args.publish_forecast_models),
+                split_mode=str(args.split_mode),
+                embargo_days=int(args.embargo_days),
             )
         report_path = write_v2_research_report(
             str(args.report),
@@ -161,10 +178,23 @@ def main() -> int:
         print(f"[V2] research dashboard: {Path(dashboard_path).resolve()}")
         if artifacts is not None:
             print(f"[V2] research artifacts: {Path(str(artifacts['run_dir'])).resolve()}")
+            print(f"[V2] research run_id: {artifacts.get('run_id', '')}")
+            print(f"[V2] release gate passed: {artifacts.get('release_gate_passed', 'false')}")
         else:
             print("[V2] 轻量模式: 已跳过研究产物发布")
         print("[V2] research baseline backtest:")
-        print(json.dumps(summarize_v2_backtest(baseline), ensure_ascii=False, indent=2))
+        print(
+            json.dumps(
+                summarize_v2_backtest(
+                    baseline,
+                    run_id=None if artifacts is None else str(artifacts.get("run_id", "")),
+                    snapshot_hash=None if artifacts is None else str(artifacts.get("snapshot_hash", "")),
+                    config_hash=None if artifacts is None else str(artifacts.get("config_hash", "")),
+                ),
+                ensure_ascii=False,
+                indent=2,
+            )
+        )
         print("[V2] policy calibration:")
         print(json.dumps(summarize_v2_calibration(calibration), ensure_ascii=False, indent=2))
         print("[V2] learned policy:")

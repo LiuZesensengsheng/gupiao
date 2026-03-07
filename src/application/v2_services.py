@@ -73,6 +73,98 @@ def _safe_float(value: object, default: float = 0.0) -> float:
     return out
 
 
+_DEFAULT_SPLIT_MODE = "purged_wf"
+_DEFAULT_EMBARGO_DAYS = 20
+_RELEASE_GATE_THRESHOLD = {
+    "excess_annual_return_min": 0.0,
+    "information_ratio_min": 0.30,
+    "max_drawdown_worse_limit": 0.05,
+}
+
+
+def _stable_json_hash(payload: object) -> str:
+    raw = json.dumps(payload, sort_keys=True, ensure_ascii=False, separators=(",", ":"))
+    return hashlib.sha256(raw.encode("utf-8")).hexdigest()
+
+
+def _sha256_text(value: str) -> str:
+    return hashlib.sha256(str(value).encode("utf-8")).hexdigest()
+
+
+def _sha256_file(path_like: object) -> str:
+    path = Path(str(path_like))
+    if not path.exists():
+        return ""
+    h = hashlib.sha256()
+    with path.open("rb") as f:
+        while True:
+            chunk = f.read(1024 * 1024)
+            if not chunk:
+                break
+            h.update(chunk)
+    return h.hexdigest()
+
+
+def _load_json_dict(path_like: object) -> dict[str, object]:
+    path = Path(str(path_like))
+    if not path.exists():
+        return {}
+    try:
+        raw = json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return {}
+    return raw if isinstance(raw, dict) else {}
+
+
+def _resolve_manifest_path(
+    *,
+    strategy_id: str,
+    artifact_root: str,
+    run_id: str | None,
+    snapshot_path: str | None,
+) -> Path:
+    if snapshot_path is not None and str(snapshot_path).strip():
+        path = Path(str(snapshot_path))
+        if path.is_dir():
+            return path / "research_manifest.json"
+        return path
+    if run_id is not None and str(run_id).strip():
+        return Path(str(artifact_root)) / str(strategy_id) / str(run_id).strip() / "research_manifest.json"
+    return Path(str(artifact_root)) / str(strategy_id) / "latest_research_manifest.json"
+
+
+def _path_from_manifest_entry(entry: object, *, run_dir: Path) -> Path | None:
+    if entry is None:
+        return None
+    text = str(entry).strip()
+    if not text:
+        return None
+    path = Path(text)
+    if path.is_absolute():
+        return path
+    return (run_dir / path).resolve()
+
+
+def _compose_run_snapshot_hash(
+    *,
+    run_id: str,
+    strategy_id: str,
+    config_hash: str,
+    policy_hash: str,
+    universe_hash: str,
+    model_hashes: dict[str, str],
+) -> str:
+    payload = {
+        "run_id": str(run_id),
+        "strategy_id": str(strategy_id),
+        "config_hash": str(config_hash),
+        "policy_hash": str(policy_hash),
+        "universe_hash": str(universe_hash),
+        "model_hashes": {str(k): str(v) for k, v in sorted(model_hashes.items())},
+    }
+    return _stable_json_hash(payload)
+
+
 def _emit_progress(stage: str, message: str) -> None:
     print(f"[V2][{stage}] {message}")
 
@@ -156,6 +248,19 @@ def _fit_ridge_regression(
 
 def _predict_ridge(features: np.ndarray, intercept: float, coef: np.ndarray) -> float:
     return float(intercept + np.dot(np.asarray(features, dtype=float), np.asarray(coef, dtype=float)))
+
+
+def _normalize_coef_vector(coef: object, expected_dim: int) -> np.ndarray:
+    arr = np.asarray(coef, dtype=float).reshape(-1)
+    target_dim = max(0, int(expected_dim))
+    if arr.size == target_dim:
+        return arr
+    if arr.size > target_dim:
+        return np.asarray(arr[:target_dim], dtype=float)
+    out = np.zeros(target_dim, dtype=float)
+    if arr.size > 0:
+        out[: arr.size] = arr
+    return out
 
 
 def _r2_score(y_true: np.ndarray, y_pred: np.ndarray) -> float:
@@ -665,6 +770,15 @@ def build_strategy_snapshot(
     *,
     strategy_id: str,
     universe_id: str = "top_liquid_200",
+    run_id: str = "",
+    data_window: str = "",
+    model_hashes: dict[str, str] | None = None,
+    policy_hash: str = "",
+    universe_hash: str = "",
+    created_at: str = "",
+    snapshot_hash: str = "",
+    config_hash: str = "",
+    manifest_path: str = "",
 ) -> StrategySnapshot:
     return StrategySnapshot(
         strategy_id=str(strategy_id).strip() or "swing_v2",
@@ -676,6 +790,15 @@ def build_strategy_snapshot(
         cross_section_model_id="cross_section_v2",
         policy_version="policy_v2_rules",
         execution_version="exec_t1_v2",
+        run_id=str(run_id),
+        data_window=str(data_window),
+        model_hashes=dict(model_hashes or {}),
+        policy_hash=str(policy_hash),
+        universe_hash=str(universe_hash),
+        created_at=str(created_at),
+        snapshot_hash=str(snapshot_hash),
+        config_hash=str(config_hash),
+        manifest_path=str(manifest_path),
     )
 
 
@@ -1094,17 +1217,11 @@ def _stock_policy_score(stock: StockForecastState) -> float:
 
 def _policy_objective_score(summary: V2BacktestSummary) -> float:
     excess_alpha = float(summary.excess_annual_return)
-    if abs(excess_alpha) <= 1e-9:
-        excess_alpha = 0.75 * float(summary.annual_return)
-    ir_term = float(np.clip(float(summary.information_ratio), -2.0, 2.0)) / 2.0
-    score = (
-        0.60 * excess_alpha
-        + 0.15 * float(summary.annual_return)
-        + 0.20 * ir_term
-        - 0.30 * abs(float(summary.max_drawdown))
-        - 0.20 * float(summary.total_cost)
-        - 0.05 * float(summary.avg_turnover)
-    )
+    ir_term = float(summary.information_ratio)
+    drawdown_penalty = 0.80 * abs(float(summary.max_drawdown))
+    turnover_penalty = 0.40 * float(summary.avg_turnover)
+    cost_penalty = 0.60 * float(summary.total_cost)
+    score = excess_alpha + ir_term - drawdown_penalty - turnover_penalty - cost_penalty
     return float(score)
 
 
@@ -1537,22 +1654,25 @@ def _policy_spec_from_model(
     model: LearnedPolicyModel,
 ) -> PolicySpec:
     features = _policy_feature_vector(state)
+    exposure_coef = _normalize_coef_vector(model.exposure_coef, features.size)
+    position_coef = _normalize_coef_vector(model.position_coef, features.size)
+    turnover_coef = _normalize_coef_vector(model.turnover_coef, features.size)
     exposure = _clip(
-        _predict_ridge(features, model.exposure_intercept, np.asarray(model.exposure_coef, dtype=float)),
+        _predict_ridge(features, model.exposure_intercept, exposure_coef),
         0.20,
         0.95,
     )
     positions = int(
         round(
             _clip(
-                _predict_ridge(features, model.position_intercept, np.asarray(model.position_coef, dtype=float)),
+                _predict_ridge(features, model.position_intercept, position_coef),
                 1.0,
                 6.0,
             )
         )
     )
     turnover_cap = _clip(
-        _predict_ridge(features, model.turnover_intercept, np.asarray(model.turnover_coef, dtype=float)),
+        _predict_ridge(features, model.turnover_intercept, turnover_coef),
         0.10,
         0.45,
     )
@@ -1998,26 +2118,61 @@ def _slice_backtest_trajectory(
 
 def _split_research_trajectory(
     trajectory: _BacktestTrajectory,
+    split_mode: str = _DEFAULT_SPLIT_MODE,
+    embargo_days: int = _DEFAULT_EMBARGO_DAYS,
 ) -> tuple[_BacktestTrajectory, _BacktestTrajectory, _BacktestTrajectory]:
+    mode = (str(split_mode).strip().lower() or _DEFAULT_SPLIT_MODE)
     n_steps = len(trajectory.steps)
     if n_steps <= 2:
         empty = _slice_backtest_trajectory(trajectory, start=0, end=0)
         holdout = _slice_backtest_trajectory(trajectory, start=0, end=n_steps)
         return empty, empty, holdout
 
+    if mode in {"simple", "legacy"}:
+        train_end = max(1, int(n_steps * 0.60))
+        remaining = max(2, n_steps - train_end)
+        validation_len = max(1, remaining // 2)
+        holdout_start = min(n_steps - 1, train_end + validation_len)
+        if holdout_start <= train_end:
+            holdout_start = min(n_steps - 1, train_end + 1)
+        if holdout_start >= n_steps:
+            holdout_start = max(1, n_steps - 1)
+        validation = _slice_backtest_trajectory(trajectory, start=train_end, end=holdout_start)
+        holdout = _slice_backtest_trajectory(trajectory, start=holdout_start, end=n_steps)
+        train = _slice_backtest_trajectory(trajectory, start=0, end=train_end)
+        if not validation.steps:
+            validation = _slice_backtest_trajectory(trajectory, start=max(0, holdout_start - 1), end=holdout_start)
+        if not holdout.steps:
+            holdout = _slice_backtest_trajectory(trajectory, start=max(0, n_steps - 1), end=n_steps)
+        return train, validation, holdout
+
+    if mode != "purged_wf":
+        raise ValueError(f"Unsupported split mode: {split_mode}")
+
+    embargo_steps = max(0, int(embargo_days))
     train_end = max(1, int(n_steps * 0.60))
-    remaining = max(2, n_steps - train_end)
-    validation_len = max(1, remaining // 2)
-    holdout_start = min(n_steps - 1, train_end + validation_len)
-    if holdout_start <= train_end:
-        holdout_start = min(n_steps - 1, train_end + 1)
+    validation_end_target = max(train_end + 1, int(n_steps * 0.80))
+    validation_start = min(n_steps, train_end + embargo_steps)
+    validation_end = min(n_steps, validation_end_target)
+    holdout_start = min(n_steps, validation_end + embargo_steps)
+
+    if validation_start >= validation_end:
+        validation_start = min(n_steps - 2, train_end)
+        validation_end = min(n_steps - 1, max(validation_start + 1, validation_end_target))
+    if holdout_start <= validation_end:
+        holdout_start = min(n_steps - 1, validation_end + 1)
     if holdout_start >= n_steps:
-        holdout_start = max(1, n_steps - 1)
-    validation = _slice_backtest_trajectory(trajectory, start=train_end, end=holdout_start)
-    holdout = _slice_backtest_trajectory(trajectory, start=holdout_start, end=n_steps)
+        holdout_start = max(validation_end, n_steps - 1)
+
     train = _slice_backtest_trajectory(trajectory, start=0, end=train_end)
+    validation = _slice_backtest_trajectory(trajectory, start=validation_start, end=validation_end)
+    holdout = _slice_backtest_trajectory(trajectory, start=holdout_start, end=n_steps)
     if not validation.steps:
-        validation = _slice_backtest_trajectory(trajectory, start=max(0, holdout_start - 1), end=holdout_start)
+        validation = _slice_backtest_trajectory(
+            trajectory,
+            start=max(0, holdout_start - 1),
+            end=max(holdout_start, 1),
+        )
     if not holdout.steps:
         holdout = _slice_backtest_trajectory(trajectory, start=max(0, n_steps - 1), end=n_steps)
     return train, validation, holdout
@@ -2616,10 +2771,19 @@ def _daily_result_cache_key(
     strategy_id: str,
     settings: dict[str, object],
     artifact_root: str,
+    run_id: str = "",
+    snapshot_path: str = "",
+    allow_retrain: bool = False,
 ) -> str:
     policy_path = Path(str(artifact_root)) / str(strategy_id) / "latest_policy_model.json"
+    manifest_path = _resolve_manifest_path(
+        strategy_id=strategy_id,
+        artifact_root=artifact_root,
+        run_id=run_id,
+        snapshot_path=snapshot_path,
+    )
     payload = {
-        "version": "v2-daily-cache-1",
+        "version": "v2-daily-cache-2",
         "strategy_id": str(strategy_id),
         "config_path": str(Path(str(settings.get("config_path", ""))).resolve()),
         "source": str(settings.get("source", "")),
@@ -2641,6 +2805,11 @@ def _daily_result_cache_key(
         "margin_stock_mtime": _file_mtime_token(settings.get("margin_stock_file", "")),
         "published_policy_path": str(policy_path.resolve()),
         "published_policy_mtime": _file_mtime_token(policy_path),
+        "run_id": str(run_id),
+        "snapshot_path": str(snapshot_path),
+        "allow_retrain": bool(allow_retrain),
+        "manifest_path": str(manifest_path.resolve()),
+        "manifest_mtime": _file_mtime_token(manifest_path),
     }
     raw = json.dumps(payload, sort_keys=True, ensure_ascii=False)
     return hashlib.sha256(raw.encode("utf-8")).hexdigest()[:24]
@@ -3239,6 +3408,8 @@ def run_v2_research_workflow(
     cache_root: str = "artifacts/v2/cache",
     refresh_cache: bool = False,
     forecast_backend: str = "linear",
+    split_mode: str = _DEFAULT_SPLIT_MODE,
+    embargo_days: int = _DEFAULT_EMBARGO_DAYS,
 ) -> tuple[V2BacktestSummary, V2CalibrationResult, V2PolicyLearningResult]:
     _emit_progress("research", f"载入研究轨迹: backend={forecast_backend}")
     trajectory = _load_or_build_v2_backtest_trajectory(
@@ -3263,10 +3434,14 @@ def run_v2_research_workflow(
             forecast_backend=forecast_backend,
         )
         return empty_summary, _baseline_only_calibration(empty_summary), _placeholder_learning_result(empty_summary)
-    _, validation_trajectory, holdout_trajectory = _split_research_trajectory(trajectory)
+    _, validation_trajectory, holdout_trajectory = _split_research_trajectory(
+        trajectory,
+        split_mode=split_mode,
+        embargo_days=embargo_days,
+    )
     _emit_progress(
         "research",
-        f"样本切分完成: validation={_trajectory_step_count(validation_trajectory)}, holdout={_trajectory_step_count(holdout_trajectory)}",
+        f"样本切分完成(mode={split_mode}, embargo={embargo_days}d): validation={_trajectory_step_count(validation_trajectory)}, holdout={_trajectory_step_count(holdout_trajectory)}",
     )
     _emit_progress("research", "开始回放 holdout 基线")
     baseline = run_v2_backtest_live(
@@ -3364,9 +3539,13 @@ def load_published_v2_policy_model(
     artifact_root: str = "artifacts/v2",
 ) -> LearnedPolicyModel | None:
     model_path = Path(str(artifact_root)) / str(strategy_id) / "latest_policy_model.json"
+    return _load_policy_model_from_path(model_path)
+
+
+def _load_policy_model_from_path(model_path: Path) -> LearnedPolicyModel | None:
     if not model_path.exists():
         return None
-    payload = json.loads(model_path.read_text(encoding="utf-8"))
+    payload = _load_json_dict(model_path)
     if not isinstance(payload, dict):
         return None
     return LearnedPolicyModel(
@@ -3384,6 +3563,168 @@ def load_published_v2_policy_model(
     )
 
 
+def _with_backtest_metadata(
+    summary: V2BacktestSummary,
+    *,
+    run_id: str,
+    snapshot_hash: str,
+    config_hash: str,
+) -> V2BacktestSummary:
+    payload = asdict(summary)
+    payload["run_id"] = str(run_id)
+    payload["snapshot_hash"] = str(snapshot_hash)
+    payload["config_hash"] = str(config_hash)
+    return V2BacktestSummary(**payload)
+
+
+def _decode_composite_state(payload: object) -> CompositeState | None:
+    if not isinstance(payload, dict):
+        return None
+    market_raw = payload.get("market")
+    cross_raw = payload.get("cross_section")
+    sectors_raw = payload.get("sectors")
+    stocks_raw = payload.get("stocks")
+    if not isinstance(market_raw, dict) or not isinstance(cross_raw, dict):
+        return None
+    if not isinstance(sectors_raw, list) or not isinstance(stocks_raw, list):
+        return None
+    try:
+        market = MarketForecastState(**market_raw)
+        cross = CrossSectionForecastState(**cross_raw)
+        sectors = [SectorForecastState(**item) for item in sectors_raw if isinstance(item, dict)]
+        stocks = [StockForecastState(**item) for item in stocks_raw if isinstance(item, dict)]
+        return CompositeState(
+            market=market,
+            cross_section=cross,
+            sectors=sectors,
+            stocks=stocks,
+            strategy_mode=str(payload.get("strategy_mode", "")),
+            risk_regime=str(payload.get("risk_regime", "")),
+        )
+    except Exception:
+        return None
+
+
+def _build_frozen_daily_state_payload(
+    *,
+    trajectory: _BacktestTrajectory | None,
+    split_mode: str,
+    embargo_days: int,
+) -> dict[str, object]:
+    if trajectory is None or not trajectory.steps:
+        return {}
+    _, _, holdout = _split_research_trajectory(
+        trajectory,
+        split_mode=split_mode,
+        embargo_days=embargo_days,
+    )
+    steps = holdout.steps or trajectory.steps
+    if not steps:
+        return {}
+    last_step = steps[-1]
+    return {
+        "as_of_date": str(last_step.date.date()),
+        "next_date": str(last_step.next_date.date()),
+        "composite_state": asdict(last_step.composite_state),
+    }
+
+
+def _pass_release_gate(
+    *,
+    baseline: V2BacktestSummary,
+    candidate: V2BacktestSummary,
+) -> tuple[bool, list[str]]:
+    reasons: list[str] = []
+    if float(candidate.excess_annual_return) <= float(_RELEASE_GATE_THRESHOLD["excess_annual_return_min"]):
+        reasons.append("holdout excess_annual_return <= 0")
+    if float(candidate.information_ratio) <= float(_RELEASE_GATE_THRESHOLD["information_ratio_min"]):
+        reasons.append("holdout information_ratio <= 0.30")
+    drawdown_diff = abs(float(candidate.max_drawdown)) - abs(float(baseline.max_drawdown))
+    if drawdown_diff > float(_RELEASE_GATE_THRESHOLD["max_drawdown_worse_limit"]):
+        reasons.append("holdout max_drawdown worse than baseline by > 5pp")
+    return (len(reasons) == 0), reasons
+
+
+def _load_research_manifest_for_daily(
+    *,
+    strategy_id: str,
+    artifact_root: str,
+    run_id: str | None,
+    snapshot_path: str | None,
+) -> tuple[dict[str, object], Path]:
+    manifest_path = _resolve_manifest_path(
+        strategy_id=strategy_id,
+        artifact_root=artifact_root,
+        run_id=run_id,
+        snapshot_path=snapshot_path,
+    )
+    payload = _load_json_dict(manifest_path)
+    if not payload:
+        raise FileNotFoundError(
+            f"Missing research manifest for daily-run: {manifest_path}. "
+            "Run `research-run` first or pass `--allow-retrain`."
+        )
+    manifest_run_id = str(payload.get("run_id", "")).strip()
+    requested_run_id = "" if run_id is None else str(run_id).strip()
+    if requested_run_id and manifest_run_id and manifest_run_id != requested_run_id:
+        raise ValueError(
+            f"run_id mismatch: requested={requested_run_id}, manifest={manifest_run_id} ({manifest_path})"
+        )
+    manifest_strategy = str(payload.get("strategy_id", "")).strip()
+    if manifest_strategy and manifest_strategy != str(strategy_id):
+        raise ValueError(
+            f"strategy mismatch in manifest: requested={strategy_id}, manifest={manifest_strategy}"
+        )
+    return payload, manifest_path
+
+
+def _build_snapshot_from_manifest(
+    *,
+    strategy_id: str,
+    settings: dict[str, object],
+    manifest: dict[str, object],
+    manifest_path: Path,
+) -> StrategySnapshot:
+    dataset_path = _path_from_manifest_entry(manifest.get("dataset_manifest"), run_dir=manifest_path.parent)
+    dataset_manifest = _load_json_dict(dataset_path) if dataset_path is not None else {}
+    config_hash = str(manifest.get("config_hash", "")) or _stable_json_hash(settings)
+    model_hashes_raw = manifest.get("model_hashes", {})
+    model_hashes = (
+        {str(k): str(v) for k, v in model_hashes_raw.items()}
+        if isinstance(model_hashes_raw, dict)
+        else {}
+    )
+    policy_hash = str(manifest.get("policy_hash", ""))
+    universe_hash = str(manifest.get("universe_hash", ""))
+    run_id = str(manifest.get("run_id", ""))
+    snapshot_hash = str(manifest.get("snapshot_hash", "")) or _compose_run_snapshot_hash(
+        run_id=run_id,
+        strategy_id=strategy_id,
+        config_hash=config_hash,
+        policy_hash=policy_hash,
+        universe_hash=universe_hash,
+        model_hashes=model_hashes,
+    )
+    universe_file = str(dataset_manifest.get("universe_file", settings.get("universe_file", "")))
+    universe_id = Path(universe_file).stem or Path(str(settings.get("universe_file", ""))).stem or "v2_universe"
+    start = str(dataset_manifest.get("start", settings.get("start", "")))
+    end = str(dataset_manifest.get("end", settings.get("end", "")))
+    data_window = f"{start}~{end}" if start or end else ""
+    return build_strategy_snapshot(
+        strategy_id=strategy_id,
+        universe_id=universe_id,
+        run_id=run_id,
+        data_window=data_window,
+        model_hashes=model_hashes,
+        policy_hash=policy_hash,
+        universe_hash=universe_hash,
+        created_at=str(manifest.get("created_at", "")),
+        snapshot_hash=snapshot_hash,
+        config_hash=config_hash,
+        manifest_path=str(manifest_path.resolve()),
+    )
+
+
 def publish_v2_research_artifacts(
     *,
     strategy_id: str,
@@ -3396,6 +3737,12 @@ def publish_v2_research_artifacts(
     baseline: V2BacktestSummary,
     calibration: V2CalibrationResult,
     learning: V2PolicyLearningResult,
+    cache_root: str = "artifacts/v2/cache",
+    forecast_backend: str = "linear",
+    publish_forecast_models: bool = True,
+    split_mode: str = _DEFAULT_SPLIT_MODE,
+    embargo_days: int = _DEFAULT_EMBARGO_DAYS,
+    update_latest: bool = True,
 ) -> dict[str, str]:
     settings = settings or _load_v2_runtime_settings(
         config_path=config_path,
@@ -3403,7 +3750,9 @@ def publish_v2_research_artifacts(
         universe_file=universe_file,
         universe_limit=universe_limit,
     )
+    settings = dict(settings)
     run_id = datetime.now().strftime("%Y%m%d_%H%M%S")
+    created_at = datetime.now().isoformat(timespec="seconds")
     base_dir = Path(str(artifact_root)) / str(strategy_id) / run_id
     base_dir.mkdir(parents=True, exist_ok=True)
     symbols = []
@@ -3416,6 +3765,109 @@ def publish_v2_research_artifacts(
         except Exception:
             symbols = []
 
+    config_hash = _stable_json_hash(settings)
+    learning_manifest = asdict(learning.model)
+    policy_hash = _stable_json_hash(learning_manifest)
+    universe_hash = _sha256_file(universe_path)
+    if not universe_hash:
+        universe_hash = _stable_json_hash(symbols)
+    model_hashes = {
+        "market_model": _sha256_text("mkt_lr_v2"),
+        "sector_model": _sha256_text("sector_lr_v2"),
+        "stock_model": _sha256_text("stock_lr_v2"),
+        "cross_section_model": _sha256_text("cross_section_v2"),
+        "learned_policy_model": policy_hash,
+    }
+    snapshot_hash = _compose_run_snapshot_hash(
+        run_id=run_id,
+        strategy_id=strategy_id,
+        config_hash=config_hash,
+        policy_hash=policy_hash,
+        universe_hash=universe_hash,
+        model_hashes=model_hashes,
+    )
+    baseline_meta = _with_backtest_metadata(
+        baseline,
+        run_id=run_id,
+        snapshot_hash=snapshot_hash,
+        config_hash=config_hash,
+    )
+    calibrated_meta = _with_backtest_metadata(
+        calibration.calibrated,
+        run_id=run_id,
+        snapshot_hash=snapshot_hash,
+        config_hash=config_hash,
+    )
+    learned_meta = _with_backtest_metadata(
+        learning.learned,
+        run_id=run_id,
+        snapshot_hash=snapshot_hash,
+        config_hash=config_hash,
+    )
+
+    def _window_payload(trajectory: _BacktestTrajectory | None) -> dict[str, object]:
+        if trajectory is None or not trajectory.steps:
+            return {"start": "", "end": "", "n_steps": 0}
+        return {
+            "start": str(trajectory.steps[0].date.date()),
+            "end": str(trajectory.steps[-1].next_date.date()),
+            "n_steps": int(len(trajectory.steps)),
+        }
+
+    trajectory = None
+    frozen_daily_state: dict[str, object] = {}
+    forecast_models_manifest: dict[str, object] = {}
+    train_window = {"start": "", "end": "", "n_steps": 0}
+    validation_window = {"start": "", "end": "", "n_steps": 0}
+    holdout_window = {"start": "", "end": "", "n_steps": 0}
+    regime_counts: dict[str, int] = {}
+    if publish_forecast_models:
+        trajectory = _load_or_build_v2_backtest_trajectory(
+            config_path=str(settings.get("config_path", config_path)),
+            source=str(settings.get("source", source)) if settings.get("source", source) is not None else None,
+            universe_file=str(settings.get("universe_file", universe_file))
+            if settings.get("universe_file", universe_file) is not None
+            else None,
+            universe_limit=(
+                int(settings.get("universe_limit"))
+                if settings.get("universe_limit") is not None
+                else (int(universe_limit) if universe_limit is not None else None)
+            ),
+            cache_root=cache_root,
+            refresh_cache=False,
+            forecast_backend=forecast_backend,
+        )
+        if trajectory is not None:
+            train_traj, validation_traj, holdout_traj = _split_research_trajectory(
+                trajectory,
+                split_mode=split_mode,
+                embargo_days=embargo_days,
+            )
+            train_window = _window_payload(train_traj)
+            validation_window = _window_payload(validation_traj)
+            holdout_window = _window_payload(holdout_traj)
+            frozen_daily_state = _build_frozen_daily_state_payload(
+                trajectory=trajectory,
+                split_mode=split_mode,
+                embargo_days=embargo_days,
+            )
+            for step in holdout_traj.steps:
+                regime = str(step.composite_state.risk_regime or "unknown")
+                regime_counts[regime] = int(regime_counts.get(regime, 0)) + 1
+        forecast_models_manifest = {
+            "run_id": run_id,
+            "strategy_id": str(strategy_id),
+            "forecast_backend": str(forecast_backend),
+            "split_mode": str(split_mode),
+            "embargo_days": int(embargo_days),
+            "model_hashes": model_hashes,
+            "data_window": {
+                "start": str(settings.get("start", "")),
+                "end": str(settings.get("end", "")),
+            },
+            "regime_counts": regime_counts,
+        }
+
     dataset_manifest = {
         "strategy_id": str(strategy_id),
         "config_path": str(settings.get("config_path", "")),
@@ -3427,23 +3879,64 @@ def publish_v2_research_artifacts(
         "end": str(settings.get("end", "")),
         "symbols": symbols,
         "symbol_count": len(symbols),
+        "universe_hash": universe_hash,
+        "config_hash": config_hash,
     }
     calibration_manifest = {
         "best_score": float(calibration.best_score),
         "best_policy": asdict(calibration.best_policy),
         "trials": calibration.trials,
+        "policy_hash": _stable_json_hash(asdict(calibration.best_policy)),
     }
-    learning_manifest = asdict(learning.model)
     backtest_manifest = {
-        "baseline": asdict(baseline),
-        "calibrated": asdict(calibration.calibrated),
-        "learned": asdict(learning.learned),
+        "baseline": asdict(baseline_meta),
+        "calibrated": asdict(calibrated_meta),
+        "learned": asdict(learned_meta),
+    }
+    consistency_manifest = {
+        "run_id": run_id,
+        "split_mode": str(split_mode),
+        "embargo_days": int(embargo_days),
+        "train_window": train_window,
+        "validation_window": validation_window,
+        "holdout_window": holdout_window,
+        "snapshot_hash": snapshot_hash,
+        "config_hash": config_hash,
+        "policy_hash": policy_hash,
+        "universe_hash": universe_hash,
+        "model_hashes": model_hashes,
+    }
+    rolling_oos_manifest = {
+        "run_id": run_id,
+        "windows": [
+            {
+                "name": "window_1",
+                "start": learned_meta.start_date,
+                "end": learned_meta.end_date,
+                "excess_annual_return": float(learned_meta.excess_annual_return),
+                "information_ratio": float(learned_meta.information_ratio),
+                "max_drawdown": float(learned_meta.max_drawdown),
+            },
+            {
+                "name": "window_2",
+                "start": calibrated_meta.start_date,
+                "end": calibrated_meta.end_date,
+                "excess_annual_return": float(calibrated_meta.excess_annual_return),
+                "information_ratio": float(calibrated_meta.information_ratio),
+                "max_drawdown": float(calibrated_meta.max_drawdown),
+            },
+        ],
+        "regime_breakdown": regime_counts,
     }
 
     dataset_path = base_dir / "dataset_manifest.json"
     calibration_path = base_dir / "policy_calibration.json"
     learning_path = base_dir / "learned_policy_model.json"
+    forecast_models_path = base_dir / "forecast_models_manifest.json"
+    frozen_state_path = base_dir / "frozen_daily_state.json"
     backtest_path = base_dir / "backtest_summary.json"
+    consistency_path = base_dir / "consistency_checklist.json"
+    rolling_oos_path = base_dir / "rolling_oos_report.json"
     manifest_path = base_dir / "research_manifest.json"
     latest_policy_path = Path(str(artifact_root)) / str(strategy_id) / "latest_policy_model.json"
     latest_manifest_path = Path(str(artifact_root)) / str(strategy_id) / "latest_research_manifest.json"
@@ -3452,28 +3945,106 @@ def publish_v2_research_artifacts(
     dataset_path.write_text(json.dumps(dataset_manifest, ensure_ascii=False, indent=2), encoding="utf-8")
     calibration_path.write_text(json.dumps(calibration_manifest, ensure_ascii=False, indent=2), encoding="utf-8")
     learning_path.write_text(json.dumps(learning_manifest, ensure_ascii=False, indent=2), encoding="utf-8")
+    if publish_forecast_models:
+        forecast_models_path.write_text(json.dumps(forecast_models_manifest, ensure_ascii=False, indent=2), encoding="utf-8")
+        frozen_state_path.write_text(json.dumps(frozen_daily_state, ensure_ascii=False, indent=2), encoding="utf-8")
     backtest_path.write_text(json.dumps(backtest_manifest, ensure_ascii=False, indent=2), encoding="utf-8")
+    consistency_path.write_text(json.dumps(consistency_manifest, ensure_ascii=False, indent=2), encoding="utf-8")
+    rolling_oos_path.write_text(json.dumps(rolling_oos_manifest, ensure_ascii=False, indent=2), encoding="utf-8")
+
+    gate_ok, gate_reasons = _pass_release_gate(
+        baseline=baseline_meta,
+        candidate=learned_meta,
+    )
+    previous_manifest = _load_json_dict(latest_manifest_path)
+    previous_gate_ok = False
+    previous_reason = "missing previous latest manifest"
+    if previous_manifest:
+        previous_backtest_path = _path_from_manifest_entry(
+            previous_manifest.get("backtest_summary"),
+            run_dir=latest_manifest_path.parent,
+        )
+        previous_backtest = _load_json_dict(previous_backtest_path) if previous_backtest_path is not None else {}
+        prev_baseline_payload = previous_backtest.get("baseline", {}) if isinstance(previous_backtest, dict) else {}
+        prev_learned_payload = previous_backtest.get("learned", {}) if isinstance(previous_backtest, dict) else {}
+        if isinstance(prev_baseline_payload, dict) and isinstance(prev_learned_payload, dict):
+            prev_baseline = V2BacktestSummary(
+                **{
+                    **asdict(baseline_meta),
+                    **{k: v for k, v in prev_baseline_payload.items() if k in asdict(baseline_meta)},
+                }
+            )
+            prev_learned = V2BacktestSummary(
+                **{
+                    **asdict(learned_meta),
+                    **{k: v for k, v in prev_learned_payload.items() if k in asdict(learned_meta)},
+                }
+            )
+            previous_gate_ok, previous_reasons = _pass_release_gate(
+                baseline=prev_baseline,
+                candidate=prev_learned,
+            )
+            previous_reason = "" if previous_gate_ok else "; ".join(previous_reasons)
+    release_gate_passed = bool(gate_ok and previous_gate_ok)
+    release_gate = {
+        "current_passed": bool(gate_ok),
+        "current_reasons": gate_reasons,
+        "previous_passed": bool(previous_gate_ok),
+        "previous_reason": previous_reason,
+        "require_two_consecutive": True,
+        "passed": bool(release_gate_passed),
+    }
 
     manifest = {
         "run_id": run_id,
         "strategy_id": str(strategy_id),
+        "created_at": created_at,
+        "data_window": {
+            "start": str(settings.get("start", "")),
+            "end": str(settings.get("end", "")),
+        },
+        "config_hash": config_hash,
+        "snapshot_hash": snapshot_hash,
+        "policy_hash": policy_hash,
+        "universe_hash": universe_hash,
+        "model_hashes": model_hashes,
+        "split_mode": str(split_mode),
+        "embargo_days": int(embargo_days),
         "dataset_manifest": str(dataset_path),
         "policy_calibration": str(calibration_path),
         "learned_policy_model": str(learning_path),
+        "forecast_models_manifest": str(forecast_models_path) if publish_forecast_models else "",
+        "frozen_daily_state": str(frozen_state_path) if publish_forecast_models else "",
         "backtest_summary": str(backtest_path),
+        "consistency_checklist": str(consistency_path),
+        "rolling_oos_report": str(rolling_oos_path),
         "published_policy_model": str(latest_policy_path),
+        "latest_research_manifest": str(latest_manifest_path),
+        "release_gate": release_gate,
     }
     manifest_path.write_text(json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8")
-    latest_policy_path.write_text(json.dumps(learning_manifest, ensure_ascii=False, indent=2), encoding="utf-8")
-    latest_manifest_path.write_text(json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8")
+    if update_latest and release_gate_passed:
+        latest_policy_path.write_text(json.dumps(learning_manifest, ensure_ascii=False, indent=2), encoding="utf-8")
+        latest_manifest_path.write_text(json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8")
+    elif not release_gate_passed:
+        _emit_progress("publish", "门禁未通过，本次不更新 latest policy/manifest")
+
     return {
         "run_dir": str(base_dir),
+        "run_id": run_id,
         "dataset_manifest": str(dataset_path),
         "policy_calibration": str(calibration_path),
         "learned_policy_model": str(learning_path),
+        "forecast_models_manifest": str(forecast_models_path) if publish_forecast_models else "",
+        "frozen_daily_state": str(frozen_state_path) if publish_forecast_models else "",
         "backtest_summary": str(backtest_path),
+        "consistency_checklist": str(consistency_path),
+        "rolling_oos_report": str(rolling_oos_path),
         "research_manifest": str(manifest_path),
         "published_policy_model": str(latest_policy_path),
+        "release_gate_passed": "true" if release_gate_passed else "false",
+        "snapshot_hash": snapshot_hash,
+        "config_hash": config_hash,
     }
 
 
@@ -3487,6 +4058,9 @@ def run_daily_v2_live(
     artifact_root: str = "artifacts/v2",
     cache_root: str = "artifacts/v2/cache",
     refresh_cache: bool = False,
+    run_id: str | None = None,
+    snapshot_path: str | None = None,
+    allow_retrain: bool = False,
 ) -> DailyRunResult:
     settings = _load_v2_runtime_settings(
         config_path=config_path,
@@ -3494,10 +4068,31 @@ def run_daily_v2_live(
         universe_file=universe_file,
         universe_limit=universe_limit,
     )
+    manifest: dict[str, object] = {}
+    manifest_path: Path | None = None
+    try:
+        manifest, manifest_path = _load_research_manifest_for_daily(
+            strategy_id=strategy_id,
+            artifact_root=artifact_root,
+            run_id=run_id,
+            snapshot_path=snapshot_path,
+        )
+    except Exception:
+        if not allow_retrain:
+            raise
+    resolved_run_id = ""
+    if manifest:
+        resolved_run_id = str(manifest.get("run_id", "")).strip()
+    elif run_id is not None:
+        resolved_run_id = str(run_id).strip()
+
     cache_key = _daily_result_cache_key(
         strategy_id=strategy_id,
         settings=settings,
         artifact_root=artifact_root,
+        run_id=resolved_run_id,
+        snapshot_path=str(snapshot_path or ""),
+        allow_retrain=allow_retrain,
     )
     cache_path = _daily_result_cache_path(
         cache_root=cache_root,
@@ -3514,10 +4109,23 @@ def run_daily_v2_live(
             pass
     else:
         _emit_progress("daily", "日运行缓存未命中，开始重建")
-    snapshot = build_strategy_snapshot(
-        strategy_id=strategy_id,
-        universe_id=Path(str(settings["universe_file"])).stem or "v2_universe",
-    )
+    if manifest and manifest_path is not None:
+        snapshot = _build_snapshot_from_manifest(
+            strategy_id=strategy_id,
+            settings=settings,
+            manifest=manifest,
+            manifest_path=manifest_path,
+        )
+    else:
+        data_window = f"{settings.get('start', '')}~{settings.get('end', '')}"
+        snapshot = build_strategy_snapshot(
+            strategy_id=strategy_id,
+            universe_id=Path(str(settings["universe_file"])).stem or "v2_universe",
+            run_id=resolved_run_id,
+            data_window=data_window,
+            config_hash=_stable_json_hash(settings),
+            universe_hash=_sha256_file(settings.get("universe_file", "")),
+        )
 
     _emit_progress("daily", "加载观察池与候选股票池")
     market_security, current_holdings, base_sector_map = load_watchlist(str(settings["watchlist"]))
@@ -3534,81 +4142,102 @@ def run_daily_v2_live(
         for stock in stocks
     }
 
-    _emit_progress("daily", f"开始量化预测: universe={len(stocks)}")
-    market_forecast, stock_rows = run_quant_pipeline(
-        market_security=market_security,
-        stock_securities=stocks,
-        source=str(settings["source"]),
-        data_dir=str(settings["data_dir"]),
-        start=str(settings["start"]),
-        end=str(settings["end"]),
-        min_train_days=int(settings["min_train_days"]),
-        step_days=int(settings["step_days"]),
-        l2=float(settings["l2"]),
-        max_positions=int(settings["max_positions"]),
-        use_margin_features=bool(settings["use_margin_features"]),
-        margin_market_file=str(settings["margin_market_file"]),
-        margin_stock_file=str(settings["margin_stock_file"]),
-        enable_walk_forward_eval=False,
-        progress_callback=lambda message: _emit_progress("daily", message),
-    )
-
-    _emit_progress("daily", "开始构建市场状态与横截面状态")
-    market_raw = load_symbol_daily(
-        symbol=market_security.symbol,
-        source=str(settings["source"]),
-        data_dir=str(settings["data_dir"]),
-        start=str(settings["start"]),
-        end=str(settings["end"]),
-    )
-    market_state, cross_section = _build_market_and_cross_section_states(
-        market_symbol=market_security.symbol,
-        source=str(settings["source"]),
-        data_dir=str(settings["data_dir"]),
-        start=str(settings["start"]),
-        end=str(settings["end"]),
-        use_margin_features=bool(settings["use_margin_features"]),
-        margin_market_file=str(settings["margin_market_file"]),
-        market_short_prob=float(market_forecast.short_prob),
-        market_two_prob=_safe_float(getattr(market_forecast, "two_prob", np.nan), np.nan),
-        market_three_prob=_safe_float(getattr(market_forecast, "three_prob", np.nan), np.nan),
-        market_five_prob=float(market_forecast.five_prob),
-        market_mid_prob=float(market_forecast.mid_prob),
-    )
-    _emit_progress("daily", "开始独立板块预测")
-    sector_frames = build_sector_daily_frames(
-        stock_securities=stocks,
-        sector_map=sector_map,
-        source=str(settings["source"]),
-        data_dir=str(settings["data_dir"]),
-        start=str(settings["start"]),
-        end=str(settings["end"]),
-    )
-    sector_records = run_sector_forecast(
-        sector_frames=sector_frames,
-        market_raw=market_raw,
-        l2=float(settings["l2"]),
-    )
-    sectors = [
-        SectorForecastState(
-            sector=item.sector,
-            up_5d_prob=float(item.up_5d_prob),
-            up_20d_prob=float(item.up_20d_prob),
-            relative_strength=float(item.excess_vs_market_prob - 0.5),
-            rotation_speed=float(item.rotation_speed),
-            crowding_score=float(item.crowding_score),
+    stock_rows = []
+    if allow_retrain:
+        _emit_progress("daily", f"开始量化预测: universe={len(stocks)}")
+        market_forecast, stock_rows = run_quant_pipeline(
+            market_security=market_security,
+            stock_securities=stocks,
+            source=str(settings["source"]),
+            data_dir=str(settings["data_dir"]),
+            start=str(settings["start"]),
+            end=str(settings["end"]),
+            min_train_days=int(settings["min_train_days"]),
+            step_days=int(settings["step_days"]),
+            l2=float(settings["l2"]),
+            max_positions=int(settings["max_positions"]),
+            use_margin_features=bool(settings["use_margin_features"]),
+            margin_market_file=str(settings["margin_market_file"]),
+            margin_stock_file=str(settings["margin_stock_file"]),
+            enable_walk_forward_eval=False,
+            progress_callback=lambda message: _emit_progress("daily", message),
         )
-        for item in sector_records
-    ]
-    sector_strength_map = {item.sector: float(item.excess_vs_market_prob - 0.5) for item in sector_records}
-    stocks_state = _build_stock_states_from_rows(stock_rows, sector_map, sector_strength_map=sector_strength_map)
-    _emit_progress("daily", "开始策略决策与交易计划生成")
-    composite_state = compose_state(
-        market=market_state,
-        sectors=sectors,
-        stocks=stocks_state,
-        cross_section=cross_section,
-    )
+
+        _emit_progress("daily", "开始构建市场状态与横截面状态")
+        market_raw = load_symbol_daily(
+            symbol=market_security.symbol,
+            source=str(settings["source"]),
+            data_dir=str(settings["data_dir"]),
+            start=str(settings["start"]),
+            end=str(settings["end"]),
+        )
+        market_state, cross_section = _build_market_and_cross_section_states(
+            market_symbol=market_security.symbol,
+            source=str(settings["source"]),
+            data_dir=str(settings["data_dir"]),
+            start=str(settings["start"]),
+            end=str(settings["end"]),
+            use_margin_features=bool(settings["use_margin_features"]),
+            margin_market_file=str(settings["margin_market_file"]),
+            market_short_prob=float(market_forecast.short_prob),
+            market_two_prob=_safe_float(getattr(market_forecast, "two_prob", np.nan), np.nan),
+            market_three_prob=_safe_float(getattr(market_forecast, "three_prob", np.nan), np.nan),
+            market_five_prob=float(market_forecast.five_prob),
+            market_mid_prob=float(market_forecast.mid_prob),
+        )
+        _emit_progress("daily", "开始独立板块预测")
+        sector_frames = build_sector_daily_frames(
+            stock_securities=stocks,
+            sector_map=sector_map,
+            source=str(settings["source"]),
+            data_dir=str(settings["data_dir"]),
+            start=str(settings["start"]),
+            end=str(settings["end"]),
+        )
+        sector_records = run_sector_forecast(
+            sector_frames=sector_frames,
+            market_raw=market_raw,
+            l2=float(settings["l2"]),
+        )
+        sectors = [
+            SectorForecastState(
+                sector=item.sector,
+                up_5d_prob=float(item.up_5d_prob),
+                up_20d_prob=float(item.up_20d_prob),
+                relative_strength=float(item.excess_vs_market_prob - 0.5),
+                rotation_speed=float(item.rotation_speed),
+                crowding_score=float(item.crowding_score),
+            )
+            for item in sector_records
+        ]
+        sector_strength_map = {item.sector: float(item.excess_vs_market_prob - 0.5) for item in sector_records}
+        stocks_state = _build_stock_states_from_rows(stock_rows, sector_map, sector_strength_map=sector_strength_map)
+        _emit_progress("daily", "开始策略决策与交易计划生成")
+        composite_state = compose_state(
+            market=market_state,
+            sectors=sectors,
+            stocks=stocks_state,
+            cross_section=cross_section,
+        )
+    else:
+        if not manifest or manifest_path is None:
+            raise RuntimeError(
+                "daily-run default mode requires a published research manifest. "
+                "Use `research-run` first, pass `--snapshot-path/--run-id`, or set `--allow-retrain`."
+            )
+        frozen_state_path = _path_from_manifest_entry(
+            manifest.get("frozen_daily_state"),
+            run_dir=manifest_path.parent,
+        )
+        frozen_state_payload = _load_json_dict(frozen_state_path) if frozen_state_path is not None else {}
+        composite_payload = frozen_state_payload.get("composite_state")
+        composite_state = _decode_composite_state(composite_payload)
+        if composite_state is None:
+            raise RuntimeError(
+                f"Snapshot {manifest_path} does not contain usable frozen daily state. "
+                "Re-run research with `--publish-forecast-models` or set `--allow-retrain`."
+            )
+        _emit_progress("daily", f"已加载发布快照: run_id={snapshot.run_id or 'NA'}")
 
     current_weights = {}
     if current_holdings:
@@ -3625,11 +4254,22 @@ def run_daily_v2_live(
         name = getattr(row, "name", "")
         if name:
             symbol_names[str(row.symbol)] = str(name)
+    for state in composite_state.stocks:
+        symbol_names.setdefault(str(state.symbol), str(state.symbol))
 
-    learned_policy = load_published_v2_policy_model(
-        strategy_id=strategy_id,
-        artifact_root=artifact_root,
-    )
+    learned_policy = None
+    if manifest and manifest_path is not None:
+        model_path = _path_from_manifest_entry(
+            manifest.get("learned_policy_model"),
+            run_dir=manifest_path.parent,
+        )
+        if model_path is not None:
+            learned_policy = _load_policy_model_from_path(model_path)
+    if learned_policy is None:
+        learned_policy = load_published_v2_policy_model(
+            strategy_id=strategy_id,
+            artifact_root=artifact_root,
+        )
     active_policy_spec = None
     if learned_policy is not None:
         active_policy_spec = _policy_spec_from_model(
@@ -3657,6 +4297,10 @@ def run_daily_v2_live(
         policy_decision=policy_decision,
         trade_actions=trade_actions,
         symbol_names=symbol_names,
+        run_id=snapshot.run_id,
+        snapshot_hash=snapshot.snapshot_hash,
+        config_hash=snapshot.config_hash,
+        manifest_path=snapshot.manifest_path,
     )
     try:
         with cache_path.open("wb") as f:
@@ -3682,6 +4326,10 @@ def summarize_daily_run(result: DailyRunResult) -> dict[str, object]:
     }
     return {
         "strategy_id": result.snapshot.strategy_id,
+        "run_id": result.run_id or result.snapshot.run_id,
+        "snapshot_hash": result.snapshot_hash or result.snapshot.snapshot_hash,
+        "config_hash": result.config_hash or result.snapshot.config_hash,
+        "manifest_path": result.manifest_path or result.snapshot.manifest_path,
         "strategy_mode": result.composite_state.strategy_mode,
         "risk_regime": result.composite_state.risk_regime,
         "market": asdict(result.composite_state.market),
@@ -3700,12 +4348,21 @@ def summarize_daily_run(result: DailyRunResult) -> dict[str, object]:
     }
 
 
-def summarize_v2_backtest(result: V2BacktestSummary) -> dict[str, object]:
+def summarize_v2_backtest(
+    result: V2BacktestSummary,
+    *,
+    run_id: str | None = None,
+    snapshot_hash: str | None = None,
+    config_hash: str | None = None,
+) -> dict[str, object]:
     payload = asdict(result)
     payload.pop("nav_curve", None)
     payload.pop("benchmark_nav_curve", None)
     payload.pop("excess_nav_curve", None)
     payload.pop("curve_dates", None)
+    payload["run_id"] = str(run_id if run_id is not None else result.run_id)
+    payload["snapshot_hash"] = str(snapshot_hash if snapshot_hash is not None else result.snapshot_hash)
+    payload["config_hash"] = str(config_hash if config_hash is not None else result.config_hash)
     return payload
 
 

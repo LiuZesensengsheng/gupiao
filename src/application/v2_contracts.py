@@ -117,6 +117,15 @@ class StrategySnapshot:
     cross_section_model_id: str
     policy_version: str
     execution_version: str
+    run_id: str = ""
+    data_window: str = ""
+    model_hashes: Dict[str, str] = field(default_factory=dict)
+    policy_hash: str = ""
+    universe_hash: str = ""
+    created_at: str = ""
+    snapshot_hash: str = ""
+    config_hash: str = ""
+    manifest_path: str = ""
 
 
 @dataclass(frozen=True)
@@ -126,6 +135,10 @@ class DailyRunResult:
     policy_decision: PolicyDecision
     trade_actions: List[TradeAction]
     symbol_names: Dict[str, str] = field(default_factory=dict)
+    run_id: str = ""
+    snapshot_hash: str = ""
+    config_hash: str = ""
+    manifest_path: str = ""
 
 
 @dataclass(frozen=True)
@@ -159,6 +172,9 @@ class V2BacktestSummary:
     benchmark_nav_curve: List[float] = field(default_factory=list)
     excess_nav_curve: List[float] = field(default_factory=list)
     curve_dates: List[str] = field(default_factory=list)
+    run_id: str = ""
+    snapshot_hash: str = ""
+    config_hash: str = ""
 
 
 @dataclass(frozen=True)

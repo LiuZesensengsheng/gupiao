@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import pandas as pd
 import pytest
 
@@ -435,6 +436,9 @@ def test_summarize_daily_run_returns_structured_summary() -> None:
 
     summary = summarize_daily_run(result)
     assert summary["strategy_id"] == "swing_v2"
+    assert "run_id" in summary
+    assert "snapshot_hash" in summary
+    assert "config_hash" in summary
     assert summary["strategy_mode"] == result.composite_state.strategy_mode
     assert summary["risk_regime"] == result.composite_state.risk_regime
     assert "market" in summary
@@ -806,12 +810,14 @@ def test_run_daily_v2_live_reuses_cache_without_retraining(monkeypatch: pytest.M
         artifact_root=str(tmp_path / "artifacts"),
         cache_root=str(tmp_path / "cache"),
         refresh_cache=True,
+        allow_retrain=True,
     )
     second = run_daily_v2_live(
         strategy_id="swing_v2",
         artifact_root=str(tmp_path / "artifacts"),
         cache_root=str(tmp_path / "cache"),
         refresh_cache=False,
+        allow_retrain=True,
     )
 
     assert calls["quant"] == 1
@@ -819,3 +825,219 @@ def test_run_daily_v2_live_reuses_cache_without_retraining(monkeypatch: pytest.M
     assert len(second.trade_actions) == len(first.trade_actions)
     assert any(stage == "daily" and "量化预测测试进度" in message for stage, message in progress)
     assert any(stage == "daily" and "命中日运行缓存" in message for stage, message in progress)
+
+
+def test_run_daily_v2_live_default_mode_uses_snapshot_without_retraining(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path,
+) -> None:
+    market, sectors, stocks, cross_section = _make_demo_state()
+    composite_state = compose_state(
+        market=market,
+        sectors=sectors,
+        stocks=stocks,
+        cross_section=cross_section,
+    )
+    decision = apply_policy(
+        PolicyInput(
+            composite_state=composite_state,
+            current_weights={},
+            current_cash=1.0,
+            total_equity=1.0,
+        )
+    )
+    run_id = "20260303_124920"
+    run_dir = tmp_path / "artifacts" / "swing_v2" / run_id
+    run_dir.mkdir(parents=True, exist_ok=True)
+    learned_policy = {
+        "feature_names": [],
+        "exposure_intercept": 0.6,
+        "exposure_coef": [],
+        "position_intercept": 3.0,
+        "position_coef": [],
+        "turnover_intercept": 0.2,
+        "turnover_coef": [],
+        "train_rows": 0,
+        "train_r2_exposure": 0.0,
+        "train_r2_positions": 0.0,
+        "train_r2_turnover": 0.0,
+    }
+    (run_dir / "learned_policy_model.json").write_text(json.dumps(learned_policy), encoding="utf-8")
+    frozen_state = {
+        "as_of_date": "2026-03-01",
+        "next_date": "2026-03-02",
+        "composite_state": {
+            "market": {
+                "as_of_date": "2026-03-01",
+                "up_1d_prob": 0.57,
+                "up_5d_prob": 0.59,
+                "up_20d_prob": 0.61,
+                "trend_state": "trend",
+                "drawdown_risk": 0.28,
+                "volatility_regime": "normal",
+                "liquidity_stress": 0.22,
+                "up_2d_prob": 0.55,
+                "up_3d_prob": 0.56,
+            },
+            "cross_section": {
+                "as_of_date": "2026-03-01",
+                "large_vs_small_bias": 0.08,
+                "growth_vs_value_bias": -0.04,
+                "fund_flow_strength": 0.16,
+                "margin_risk_on_score": 0.14,
+                "breadth_strength": 0.21,
+                "leader_participation": 0.63,
+                "weak_stock_ratio": 0.29,
+            },
+            "sectors": [
+                {
+                    "sector": "有色",
+                    "up_5d_prob": 0.58,
+                    "up_20d_prob": 0.62,
+                    "relative_strength": 0.18,
+                    "rotation_speed": 0.42,
+                    "crowding_score": 0.31,
+                }
+            ],
+            "stocks": [
+                {
+                    "symbol": "000630.SZ",
+                    "sector": "有色",
+                    "up_1d_prob": 0.58,
+                    "up_5d_prob": 0.60,
+                    "up_20d_prob": 0.64,
+                    "excess_vs_sector_prob": 0.55,
+                    "event_impact_score": 0.10,
+                    "tradeability_score": 0.88,
+                    "alpha_score": 0.75,
+                    "tradability_status": "normal",
+                    "up_2d_prob": 0.59,
+                    "up_3d_prob": 0.60,
+                }
+            ],
+            "strategy_mode": "trend_follow",
+            "risk_regime": "risk_on",
+        },
+    }
+    (run_dir / "frozen_daily_state.json").write_text(json.dumps(frozen_state), encoding="utf-8")
+    manifest = {
+        "run_id": run_id,
+        "strategy_id": "swing_v2",
+        "config_hash": "cfg_hash_1",
+        "snapshot_hash": "snap_hash_1",
+        "policy_hash": "policy_hash_1",
+        "universe_hash": "universe_hash_1",
+        "model_hashes": {"stock_model": "stock_hash_1"},
+        "dataset_manifest": str(run_dir / "dataset_manifest.json"),
+        "learned_policy_model": str(run_dir / "learned_policy_model.json"),
+        "frozen_daily_state": str(run_dir / "frozen_daily_state.json"),
+    }
+    (run_dir / "dataset_manifest.json").write_text(
+        json.dumps({"universe_file": "config/universe_smoke_5.json", "start": "2024-01-01", "end": "2026-03-01"}),
+        encoding="utf-8",
+    )
+    (tmp_path / "artifacts" / "swing_v2" / "latest_research_manifest.json").write_text(
+        json.dumps(manifest),
+        encoding="utf-8",
+    )
+    (run_dir / "research_manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
+
+    watchlist_path = tmp_path / "watchlist.json"
+    universe_path = tmp_path / "universe.json"
+    margin_market_path = tmp_path / "margin_market.csv"
+    margin_stock_path = tmp_path / "margin_stock.csv"
+    watchlist_path.write_text("[]", encoding="utf-8")
+    universe_path.write_text("[]", encoding="utf-8")
+    margin_market_path.write_text("", encoding="utf-8")
+    margin_stock_path.write_text("", encoding="utf-8")
+    settings = {
+        "config_path": "config/api.json",
+        "watchlist": str(watchlist_path),
+        "source": "local",
+        "data_dir": "data",
+        "start": "2024-01-01",
+        "end": "2026-03-01",
+        "min_train_days": 240,
+        "step_days": 20,
+        "l2": 0.8,
+        "max_positions": 5,
+        "use_margin_features": False,
+        "margin_market_file": str(margin_market_path),
+        "margin_stock_file": str(margin_stock_path),
+        "universe_file": str(universe_path),
+        "universe_limit": 5,
+    }
+
+    monkeypatch.setattr("src.application.v2_services._load_v2_runtime_settings", lambda **_: settings)
+    monkeypatch.setattr(
+        "src.application.v2_services.load_watchlist",
+        lambda *_: (Security("000001.SH", "指数"), [], {}),
+    )
+    monkeypatch.setattr(
+        "src.application.v2_services.build_candidate_universe",
+        lambda **_: type("Universe", (), {"rows": [Security("000630.SZ", "样例股", "有色")]})(),
+    )
+    monkeypatch.setattr(
+        "src.application.v2_services.run_quant_pipeline",
+        lambda **_: (_ for _ in ()).throw(AssertionError("run_quant_pipeline should not be called in snapshot mode")),
+    )
+    monkeypatch.setattr("src.application.v2_services.apply_policy", lambda *_, **__: decision)
+
+    result = run_daily_v2_live(
+        strategy_id="swing_v2",
+        artifact_root=str(tmp_path / "artifacts"),
+        cache_root=str(tmp_path / "cache"),
+        run_id=run_id,
+    )
+
+    assert result.run_id == run_id
+    assert result.snapshot.run_id == run_id
+    assert result.snapshot_hash == "snap_hash_1"
+
+
+def test_run_daily_v2_live_fails_when_run_id_mismatches_manifest(monkeypatch: pytest.MonkeyPatch, tmp_path) -> None:
+    watchlist_path = tmp_path / "watchlist.json"
+    universe_path = tmp_path / "universe.json"
+    margin_market_path = tmp_path / "margin_market.csv"
+    margin_stock_path = tmp_path / "margin_stock.csv"
+    watchlist_path.write_text("[]", encoding="utf-8")
+    universe_path.write_text("[]", encoding="utf-8")
+    margin_market_path.write_text("", encoding="utf-8")
+    margin_stock_path.write_text("", encoding="utf-8")
+    settings = {
+        "config_path": "config/api.json",
+        "watchlist": str(watchlist_path),
+        "source": "local",
+        "data_dir": "data",
+        "start": "2024-01-01",
+        "end": "2026-03-01",
+        "min_train_days": 240,
+        "step_days": 20,
+        "l2": 0.8,
+        "max_positions": 5,
+        "use_margin_features": False,
+        "margin_market_file": str(margin_market_path),
+        "margin_stock_file": str(margin_stock_path),
+        "universe_file": str(universe_path),
+        "universe_limit": 5,
+    }
+    manifest_path = tmp_path / "artifacts" / "swing_v2" / "mismatch" / "research_manifest.json"
+    manifest_path.parent.mkdir(parents=True, exist_ok=True)
+    manifest_path.write_text(
+        json.dumps(
+            {
+                "run_id": "run_a",
+                "strategy_id": "swing_v2",
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr("src.application.v2_services._load_v2_runtime_settings", lambda **_: settings)
+
+    with pytest.raises(ValueError, match="run_id mismatch"):
+        run_daily_v2_live(
+            strategy_id="swing_v2",
+            artifact_root=str(tmp_path / "artifacts"),
+            run_id="run_b",
+            snapshot_path=str(manifest_path),
+        )

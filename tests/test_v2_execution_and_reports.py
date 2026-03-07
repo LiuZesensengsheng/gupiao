@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import asdict
 from pathlib import Path
 
 import pandas as pd
@@ -668,6 +669,47 @@ def test_v2_markdown_reports_keep_key_chinese_sections(tmp_path: Path) -> None:
     assert "验证集试验明细" in research_text
     assert "验证集年化" in research_text
     assert "留出集复核结果" in research_text
+
+
+def test_v2_research_report_fails_on_artifact_run_id_mismatch(tmp_path: Path) -> None:
+    baseline = _make_backtest(0.24)
+    baseline = baseline.__class__(**{**asdict(baseline), "run_id": "run_a"})
+    calibrated = _make_backtest(0.26)
+    calibrated = calibrated.__class__(**{**asdict(calibrated), "run_id": "run_a"})
+    learned = _make_backtest(0.20)
+    learned = learned.__class__(**{**asdict(learned), "run_id": "run_a"})
+
+    with pytest.raises(ValueError, match="artifact run_id mismatch"):
+        write_v2_research_report(
+            tmp_path / "research_mismatch.md",
+            strategy_id="swing_v2",
+            baseline=baseline,
+            calibration=V2CalibrationResult(
+                best_policy=PolicySpec(),
+                best_score=0.12,
+                baseline=baseline,
+                calibrated=calibrated,
+                trials=[],
+            ),
+            learning=V2PolicyLearningResult(
+                model=LearnedPolicyModel(
+                    feature_names=["x1"],
+                    exposure_intercept=0.5,
+                    exposure_coef=[0.1],
+                    position_intercept=2.0,
+                    position_coef=[0.1],
+                    turnover_intercept=0.2,
+                    turnover_coef=[0.05],
+                    train_rows=64,
+                    train_r2_exposure=0.20,
+                    train_r2_positions=0.18,
+                    train_r2_turnover=0.12,
+                ),
+                baseline=baseline,
+                learned=learned,
+            ),
+            artifacts={"run_id": "run_b"},
+        )
 
 
 def test_v2_html_dashboards_keep_key_chinese_sections(tmp_path: Path) -> None:

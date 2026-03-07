@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import json
+from dataclasses import asdict
 from pathlib import Path
 
 import pandas as pd
@@ -18,6 +20,8 @@ from src.application.v2_contracts import (
     V2PolicyLearningResult,
 )
 from src.application.v2_services import (
+    _BacktestTrajectory,
+    _TrajectoryStep,
     _build_date_slice_index,
     calibrate_v2_policy,
     _load_or_build_v2_backtest_trajectory,
@@ -25,6 +29,7 @@ from src.application.v2_services import (
     _policy_objective_score,
     _policy_spec_from_model,
     _predict_quantile_profiles,
+    _split_research_trajectory,
     _tensorize_temporal_frame,
     load_published_v2_policy_model,
     publish_v2_research_artifacts,
@@ -83,6 +88,8 @@ def _make_backtest(total_return: float, annual_return: float) -> V2BacktestSumma
         trade_days=140,
         avg_fill_ratio=0.76,
         avg_slippage_bps=2.4,
+        excess_annual_return=0.06,
+        information_ratio=0.55,
         nav_curve=[1.0, 1.05, 1.10],
         curve_dates=["2024-01-01", "2024-06-01", "2024-12-31"],
     )
@@ -155,6 +162,23 @@ def test_publish_artifacts_writes_and_loads_latest_policy(tmp_path: Path) -> Non
         calibrated=calibrated,
         trials=[],
     )
+    previous_run = tmp_path / "swing_v2" / "20260301_101010"
+    previous_run.mkdir(parents=True, exist_ok=True)
+    prev_backtest = {
+        "baseline": asdict(baseline),
+        "learned": asdict(learned),
+    }
+    (previous_run / "backtest_summary.json").write_text(json.dumps(prev_backtest), encoding="utf-8")
+    (tmp_path / "swing_v2" / "latest_research_manifest.json").write_text(
+        json.dumps(
+            {
+                "run_id": "20260301_101010",
+                "strategy_id": "swing_v2",
+                "backtest_summary": str(previous_run / "backtest_summary.json"),
+            }
+        ),
+        encoding="utf-8",
+    )
 
     paths = publish_v2_research_artifacts(
         strategy_id="swing_v2",
@@ -178,6 +202,7 @@ def test_publish_artifacts_writes_and_loads_latest_policy(tmp_path: Path) -> Non
     assert loaded is not None
     assert loaded.train_rows == 88
     assert loaded.exposure_coef == [0.1, 0.2]
+    assert paths["release_gate_passed"] == "true"
 
 
 def test_backtest_summary_carries_cross_section_metrics() -> None:
@@ -325,7 +350,7 @@ def test_research_workflow_light_mode_skips_heavy_stages(monkeypatch: pytest.Mon
     def fake_load(**_: object) -> object:
         return trajectory_sentinel
 
-    def fake_split(trajectory: object) -> tuple[object, object, object]:
+    def fake_split(trajectory: object, *args: object, **kwargs: object) -> tuple[object, object, object]:
         assert trajectory is trajectory_sentinel
         return train_sentinel, validation_sentinel, holdout_sentinel
 
@@ -372,7 +397,7 @@ def test_research_workflow_emits_stage_progress(monkeypatch: pytest.MonkeyPatch,
     monkeypatch.setattr("src.application.v2_services._load_or_build_v2_backtest_trajectory", lambda **_: trajectory_sentinel)
     monkeypatch.setattr(
         "src.application.v2_services._split_research_trajectory",
-        lambda trajectory: (train_sentinel, validation_sentinel, holdout_sentinel),
+        lambda trajectory, *args, **kwargs: (train_sentinel, validation_sentinel, holdout_sentinel),
     )
     monkeypatch.setattr("src.application.v2_services.run_v2_backtest_live", lambda **_: baseline)
 
@@ -402,7 +427,7 @@ def test_research_workflow_reuses_single_trajectory_for_all_stages(monkeypatch: 
     def fake_load(**_: object) -> object:
         return trajectory_sentinel
 
-    def fake_split(trajectory: object) -> tuple[object, object, object]:
+    def fake_split(trajectory: object, *args: object, **kwargs: object) -> tuple[object, object, object]:
         assert trajectory is trajectory_sentinel
         return train_sentinel, validation_sentinel, holdout_sentinel
 
@@ -483,7 +508,7 @@ def test_research_workflow_passes_deep_backend(monkeypatch: pytest.MonkeyPatch, 
     def fake_load(**_: object) -> object:
         return trajectory_sentinel
 
-    def fake_split(trajectory: object) -> tuple[object, object, object]:
+    def fake_split(trajectory: object, *args: object, **kwargs: object) -> tuple[object, object, object]:
         assert trajectory is trajectory_sentinel
         return train_sentinel, validation_sentinel, holdout_sentinel
 
@@ -540,6 +565,37 @@ def test_load_or_build_v2_backtest_trajectory_uses_disk_cache(monkeypatch: pytes
     assert first == built_trajectory
     assert second == built_trajectory
     assert seen["build_calls"] == 1
+
+
+def test_split_research_trajectory_purged_mode_applies_embargo() -> None:
+    state = _make_state()
+    steps = []
+    base_date = pd.Timestamp("2024-01-01")
+    for idx in range(120):
+        step_date = base_date + pd.Timedelta(days=idx)
+        next_date = step_date + pd.Timedelta(days=1)
+        steps.append(
+            _TrajectoryStep(
+                date=step_date,
+                next_date=next_date,
+                composite_state=state,
+                stock_states=[],
+                horizon_metrics={},
+            )
+        )
+    trajectory = _BacktestTrajectory(prepared=object(), steps=steps)
+
+    train, validation, holdout = _split_research_trajectory(
+        trajectory,
+        split_mode="purged_wf",
+        embargo_days=20,
+    )
+
+    assert train.steps
+    assert validation.steps
+    assert holdout.steps
+    assert (validation.steps[0].date - train.steps[-1].date).days >= 20
+    assert (holdout.steps[0].date - validation.steps[-1].date).days >= 20
 
 
 def test_predict_quantile_profiles_vectorizes_and_keeps_monotonic_order() -> None:

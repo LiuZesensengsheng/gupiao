@@ -451,7 +451,15 @@ def write_v2_daily_report(out_path: str | Path, result: V2DailyRunResult) -> Pat
     lines.append("# V2 每日策略报告")
     lines.append("")
     lines.append(f"- 策略ID: {result.snapshot.strategy_id}")
+    lines.append(f"- artifact run_id: {result.run_id or result.snapshot.run_id or 'NA'}")
     lines.append(f"- 股票池: {result.snapshot.universe_id}")
+    if result.snapshot.data_window:
+        lines.append(f"- 数据窗口: {result.snapshot.data_window}")
+    if result.snapshot.manifest_path:
+        lines.append(f"- source manifest path: {result.snapshot.manifest_path}")
+    if result.snapshot.snapshot_hash or result.snapshot.config_hash:
+        lines.append(f"- snapshot_hash: {result.snapshot.snapshot_hash or result.snapshot_hash or 'NA'}")
+        lines.append(f"- config_hash: {result.snapshot.config_hash or result.config_hash or 'NA'}")
     lines.append(f"- 数据日期: {result.composite_state.market.as_of_date}")
     lines.append(f"- 策略模式: {result.composite_state.strategy_mode}")
     lines.append(f"- 风险状态: {result.composite_state.risk_regime}")
@@ -552,11 +560,34 @@ def write_v2_research_report(
 ) -> Path:
     report_path = Path(out_path)
     report_path.parent.mkdir(parents=True, exist_ok=True)
+    if artifacts is not None:
+        artifact_run_id = str(artifacts.get("run_id", "")).strip()
+        summary_run_ids = {
+            str(run_id).strip()
+            for run_id in [
+                baseline.run_id,
+                calibration.baseline.run_id,
+                calibration.calibrated.run_id,
+                learning.baseline.run_id,
+                learning.learned.run_id,
+            ]
+            if str(run_id).strip()
+        }
+        if artifact_run_id and summary_run_ids and any(run_id != artifact_run_id for run_id in summary_run_ids):
+            raise ValueError(
+                f"artifact run_id mismatch: artifact={artifact_run_id}, summaries={sorted(summary_run_ids)}"
+            )
 
     lines: list[str] = []
     lines.append("# V2 研究回测报告")
     lines.append("")
     lines.append(f"- 策略ID: {strategy_id}")
+    if artifacts is not None:
+        lines.append(f"- artifact run_id: {artifacts.get('run_id', 'NA')}")
+        lines.append(f"- source manifest path: {artifacts.get('research_manifest', 'NA')}")
+        lines.append(f"- snapshot_hash: {artifacts.get('snapshot_hash', 'NA')}")
+        lines.append(f"- config_hash: {artifacts.get('config_hash', 'NA')}")
+        lines.append(f"- release gate passed: {artifacts.get('release_gate_passed', 'false')}")
     lines.append("")
     lines.append("## 基线回测（留出集 Holdout）")
     lines.append("")
