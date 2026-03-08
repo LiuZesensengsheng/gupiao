@@ -78,7 +78,16 @@ def _append_horizon_metrics_table(
 def _metrics_line(metrics: BinaryMetrics) -> str:
     auc_text = f"{metrics.auc:.3f}" if not pd.isna(metrics.auc) else "NA"
     brier_text = f"{metrics.brier:.3f}" if not pd.isna(metrics.brier) else "NA"
-    return f"n={metrics.n}, acc={_to_percent(metrics.accuracy)}, auc={auc_text}, brier={brier_text}"
+    line = f"n={metrics.n}, acc={_to_percent(metrics.accuracy)}, auc={auc_text}, brier={brier_text}"
+    if metrics.calibration_method and not pd.isna(metrics.calibrated_brier):
+        cal_auc_text = f"{metrics.calibrated_auc:.3f}" if not pd.isna(metrics.calibrated_auc) else "NA"
+        line += (
+            f", cal={metrics.calibration_method}"
+            f", acc=>{_to_percent(metrics.calibrated_accuracy)}"
+            f", auc=>{cal_auc_text}"
+            f", brier=>{metrics.calibrated_brier:.3f}"
+        )
+    return line
 
 
 def _bt_line(metrics: BacktestMetrics) -> str:

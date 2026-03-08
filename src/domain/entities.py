@@ -20,10 +20,20 @@ class BinaryMetrics:
     brier: float
     auc: float
     base_rate: float
+    calibrated_accuracy: float = np.nan
+    calibrated_brier: float = np.nan
+    calibrated_auc: float = np.nan
+    calibration_method: str = ""
 
     @staticmethod
     def empty() -> "BinaryMetrics":
-        return BinaryMetrics(n=0, accuracy=np.nan, brier=np.nan, auc=np.nan, base_rate=np.nan)
+        return BinaryMetrics(
+            n=0,
+            accuracy=np.nan,
+            brier=np.nan,
+            auc=np.nan,
+            base_rate=np.nan,
+        )
 
 
 @dataclass
@@ -39,6 +49,7 @@ class ForecastRow:
     mid_drivers: list[str]
     short_eval: BinaryMetrics
     mid_eval: BinaryMetrics
+    five_eval: BinaryMetrics = field(default_factory=BinaryMetrics.empty)
     short_expected_ret: float = np.nan
     mid_expected_ret: float = np.nan
     short_q10: float = np.nan
@@ -73,6 +84,7 @@ class MarketForecast:
     mid_prob: float
     short_eval: BinaryMetrics
     mid_eval: BinaryMetrics
+    five_eval: BinaryMetrics = field(default_factory=BinaryMetrics.empty)
     short_expected_ret: float = np.nan
     mid_expected_ret: float = np.nan
     short_q10: float = np.nan

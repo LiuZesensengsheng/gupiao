@@ -68,6 +68,44 @@ def _fit_latest_model(
     return model
 
 
+def _walk_forward_prediction_frame(
+    df: pd.DataFrame,
+    feature_cols: list[str],
+    target_col: str,
+    l2: float,
+    min_train_days: int,
+    step_days: int,
+) -> pd.DataFrame:
+    frame = df.dropna(subset=feature_cols + [target_col]).sort_values("date").copy()
+    if frame.empty:
+        return pd.DataFrame(columns=["date", "y_true", "raw_prob"])
+
+    dates = frame["date"].drop_duplicates().sort_values().tolist()
+    if len(dates) <= min_train_days:
+        return pd.DataFrame(columns=["date", "y_true", "raw_prob"])
+
+    parts: list[pd.DataFrame] = []
+    for i in range(min_train_days, len(dates), step_days):
+        train_dates = dates[:i]
+        test_dates = dates[i : i + step_days]
+        if not test_dates:
+            break
+        train = frame[frame["date"].isin(train_dates)]
+        test = frame[frame["date"].isin(test_dates)].copy()
+        if train.empty or test.empty:
+            continue
+        model = LogisticBinaryModel(l2=l2)
+        model.fit(train, feature_cols=feature_cols, target_col=target_col)
+        test["raw_prob"] = model.predict_proba(test, feature_cols=feature_cols)
+        test["y_true"] = test[target_col].astype(float)
+        parts.append(test[["date", "y_true", "raw_prob"]].copy())
+    if not parts:
+        return pd.DataFrame(columns=["date", "y_true", "raw_prob"])
+    out = pd.concat(parts, ignore_index=True)
+    out["date"] = pd.to_datetime(out["date"], errors="coerce")
+    return out.dropna(subset=["date"]).sort_values("date").reset_index(drop=True)
+
+
 def _walk_forward_eval(
     df: pd.DataFrame,
     feature_cols: list[str],
@@ -76,37 +114,150 @@ def _walk_forward_eval(
     min_train_days: int,
     step_days: int,
 ) -> BinaryMetrics:
-    frame = df.dropna(subset=feature_cols + [target_col]).sort_values("date").copy()
-    if frame.empty:
+    pred_frame = _walk_forward_prediction_frame(
+        df,
+        feature_cols=feature_cols,
+        target_col=target_col,
+        l2=l2,
+        min_train_days=min_train_days,
+        step_days=step_days,
+    )
+    if pred_frame.empty:
         return BinaryMetrics.empty()
+    return binary_metrics(
+        pred_frame["y_true"].to_numpy(dtype=float),
+        pred_frame["raw_prob"].to_numpy(dtype=float),
+    )
 
-    dates = frame["date"].drop_duplicates().sort_values().tolist()
-    if len(dates) <= min_train_days:
-        return BinaryMetrics.empty()
 
-    all_prob: list[float] = []
-    all_true: list[float] = []
+@dataclass(frozen=True)
+class _ProbabilityCalibrationResult:
+    latest_probs: np.ndarray
+    metrics: BinaryMetrics
+    method: str
 
-    for i in range(min_train_days, len(dates), step_days):
-        train_dates = dates[:i]
-        test_dates = dates[i : i + step_days]
-        if not test_dates:
-            break
 
-        train = frame[frame["date"].isin(train_dates)]
-        test = frame[frame["date"].isin(test_dates)]
-        if train.empty or test.empty:
-            continue
+def _fit_platt_calibrator(prob: np.ndarray, y_true: np.ndarray) -> LogisticBinaryModel:
+    clipped = np.clip(np.asarray(prob, dtype=float), 1e-6, 1.0 - 1e-6)
+    calib = pd.DataFrame(
+        {
+            "raw_logit": np.log(clipped / (1.0 - clipped)),
+            "y": np.asarray(y_true, dtype=float),
+        }
+    )
+    return LogisticBinaryModel(l2=1e-3, max_iter=200).fit(calib, ["raw_logit"], "y")
 
-        model = LogisticBinaryModel(l2=l2)
-        model.fit(train, feature_cols=feature_cols, target_col=target_col)
-        prob = model.predict_proba(test, feature_cols=feature_cols)
-        all_prob.extend(prob.tolist())
-        all_true.extend(test[target_col].astype(float).tolist())
 
-    if not all_true:
-        return BinaryMetrics.empty()
-    return binary_metrics(np.asarray(all_true), np.asarray(all_prob))
+def _predict_platt_calibrator(model: LogisticBinaryModel, prob: np.ndarray) -> np.ndarray:
+    clipped = np.clip(np.asarray(prob, dtype=float), 1e-6, 1.0 - 1e-6)
+    frame = pd.DataFrame({"raw_logit": np.log(clipped / (1.0 - clipped))})
+    return model.predict_proba(frame, ["raw_logit"])
+
+
+def _fit_isotonic_calibrator(prob: np.ndarray, y_true: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+    order = np.argsort(np.asarray(prob, dtype=float), kind="mergesort")
+    x = np.asarray(prob, dtype=float)[order]
+    y = np.asarray(y_true, dtype=float)[order]
+    values = y.astype(float).tolist()
+    weights = [1.0] * len(values)
+    left = x.astype(float).tolist()
+    right = x.astype(float).tolist()
+    idx = 0
+    while idx < len(values) - 1:
+        if values[idx] / weights[idx] > values[idx + 1] / weights[idx + 1]:
+            values[idx] += values[idx + 1]
+            weights[idx] += weights[idx + 1]
+            right[idx] = right[idx + 1]
+            del values[idx + 1]
+            del weights[idx + 1]
+            del left[idx + 1]
+            del right[idx + 1]
+            if idx > 0:
+                idx -= 1
+        else:
+            idx += 1
+    centers = np.asarray([(lo + hi) * 0.5 for lo, hi in zip(left, right)], dtype=float)
+    calibrated = np.asarray([value / weight for value, weight in zip(values, weights)], dtype=float)
+    return centers, np.clip(calibrated, 1e-6, 1.0 - 1e-6)
+
+
+def _predict_isotonic_calibrator(calibrator: tuple[np.ndarray, np.ndarray], prob: np.ndarray) -> np.ndarray:
+    centers, calibrated = calibrator
+    clipped = np.clip(np.asarray(prob, dtype=float), 1e-6, 1.0 - 1e-6)
+    if centers.size == 0:
+        return clipped
+    if centers.size == 1:
+        return np.full_like(clipped, calibrated[0], dtype=float)
+    return np.clip(
+        np.interp(clipped, centers, calibrated, left=calibrated[0], right=calibrated[-1]),
+        1e-6,
+        1.0 - 1e-6,
+    )
+
+
+def _calibrate_latest_probabilities(
+    *,
+    pred_frame: pd.DataFrame,
+    latest_prob: np.ndarray,
+) -> _ProbabilityCalibrationResult:
+    raw_latest = np.clip(np.asarray(latest_prob, dtype=float), 1e-6, 1.0 - 1e-6)
+    if pred_frame.empty or len(pred_frame) < 80:
+        metrics = BinaryMetrics.empty()
+        return _ProbabilityCalibrationResult(latest_probs=raw_latest, metrics=metrics, method="none")
+    y_true = pred_frame["y_true"].to_numpy(dtype=float)
+    raw_prob = np.clip(pred_frame["raw_prob"].to_numpy(dtype=float), 1e-6, 1.0 - 1e-6)
+    if int((y_true == 1.0).sum()) == 0 or int((y_true == 0.0).sum()) == 0:
+        metrics = binary_metrics(y_true, raw_prob)
+        metrics.calibration_method = "none"
+        return _ProbabilityCalibrationResult(latest_probs=raw_latest, metrics=metrics, method="none")
+
+    split_idx = max(20, int(len(pred_frame) * 0.70))
+    split_idx = min(split_idx, len(pred_frame) - 20)
+    if split_idx <= 0 or split_idx >= len(pred_frame):
+        split_idx = len(pred_frame) // 2
+    fit_prob = raw_prob[:split_idx]
+    fit_y = y_true[:split_idx]
+    val_prob = raw_prob[split_idx:]
+    val_y = y_true[split_idx:]
+    raw_val_metrics = binary_metrics(val_y, val_prob)
+    raw_metrics = binary_metrics(y_true, raw_prob)
+
+    candidates: list[tuple[str, np.ndarray]] = []
+    platt_model = _fit_platt_calibrator(fit_prob, fit_y)
+    candidates.append(("platt", _predict_platt_calibrator(platt_model, val_prob)))
+    iso_model = _fit_isotonic_calibrator(fit_prob, fit_y)
+    candidates.append(("isotonic", _predict_isotonic_calibrator(iso_model, val_prob)))
+
+    best_method = "none"
+    best_val_brier = float(raw_val_metrics.brier)
+    for method, calibrated_val in candidates:
+        metrics = binary_metrics(val_y, calibrated_val)
+        if np.isfinite(metrics.brier) and metrics.brier + 1e-9 < best_val_brier:
+            best_val_brier = float(metrics.brier)
+            best_method = method
+
+    if best_method == "platt":
+        full_model = _fit_platt_calibrator(raw_prob, y_true)
+        calibrated_all = _predict_platt_calibrator(full_model, raw_prob)
+        calibrated_latest = _predict_platt_calibrator(full_model, raw_latest)
+    elif best_method == "isotonic":
+        full_model = _fit_isotonic_calibrator(raw_prob, y_true)
+        calibrated_all = _predict_isotonic_calibrator(full_model, raw_prob)
+        calibrated_latest = _predict_isotonic_calibrator(full_model, raw_latest)
+    else:
+        calibrated_all = raw_prob
+        calibrated_latest = raw_latest
+
+    calibrated_metrics = binary_metrics(y_true, calibrated_all)
+    raw_metrics.calibrated_accuracy = float(calibrated_metrics.accuracy)
+    raw_metrics.calibrated_brier = float(calibrated_metrics.brier)
+    raw_metrics.calibrated_auc = float(calibrated_metrics.auc)
+    raw_metrics.calibration_method = best_method
+    return _ProbabilityCalibrationResult(
+        latest_probs=np.asarray(calibrated_latest, dtype=float),
+        metrics=raw_metrics,
+        method=best_method,
+    )
 
 
 def _latest_row_with_features(df: pd.DataFrame, feature_cols: list[str]) -> pd.Series:
@@ -375,37 +526,64 @@ def run_quant_pipeline(
     )
     mkt_latest = _latest_row_with_features(market_feat, market_feature_cols)
     mkt_latest_df = pd.DataFrame([mkt_latest])
+    market_short_pred_frame = _walk_forward_prediction_frame(
+        market_feat,
+        feature_cols=market_feature_cols,
+        target_col="mkt_target_1d_up",
+        l2=l2,
+        min_train_days=min_train_days,
+        step_days=step_days,
+    )
+    market_five_pred_frame = _walk_forward_prediction_frame(
+        market_feat,
+        feature_cols=market_feature_cols,
+        target_col="mkt_target_5d_up",
+        l2=l2,
+        min_train_days=min_train_days,
+        step_days=step_days,
+    )
+    market_mid_pred_frame = _walk_forward_prediction_frame(
+        market_feat,
+        feature_cols=market_feature_cols,
+        target_col="mkt_target_20d_up",
+        l2=l2,
+        min_train_days=min_train_days,
+        step_days=step_days,
+    )
+    market_short_cal = _calibrate_latest_probabilities(
+        pred_frame=market_short_pred_frame,
+        latest_prob=np.asarray(market_short_model.predict_proba(mkt_latest_df, market_feature_cols), dtype=float),
+    )
+    market_five_cal = _calibrate_latest_probabilities(
+        pred_frame=market_five_pred_frame,
+        latest_prob=np.asarray(market_five_model.predict_proba(mkt_latest_df, market_feature_cols), dtype=float),
+    )
+    market_mid_cal = _calibrate_latest_probabilities(
+        pred_frame=market_mid_pred_frame,
+        latest_prob=np.asarray(market_mid_model.predict_proba(mkt_latest_df, market_feature_cols), dtype=float),
+    )
 
     market_forecast = MarketForecast(
         symbol=normalize_symbol(market_security.symbol).symbol,
         name=market_security.name,
         latest_date=pd.Timestamp(mkt_latest["date"]),
-        short_prob=float(market_short_model.predict_proba(mkt_latest_df, market_feature_cols)[0]),
+        short_prob=float(market_short_cal.latest_probs[0]),
         two_prob=float(market_two_model.predict_proba(mkt_latest_df, market_feature_cols)[0]),
         three_prob=float(market_three_model.predict_proba(mkt_latest_df, market_feature_cols)[0]),
-        five_prob=float(market_five_model.predict_proba(mkt_latest_df, market_feature_cols)[0]),
-        mid_prob=float(market_mid_model.predict_proba(mkt_latest_df, market_feature_cols)[0]),
+        five_prob=float(market_five_cal.latest_probs[0]),
+        mid_prob=float(market_mid_cal.latest_probs[0]),
         short_eval=(
-            _walk_forward_eval(
-                market_feat,
-                feature_cols=market_feature_cols,
-                target_col="mkt_target_1d_up",
-                l2=l2,
-                min_train_days=min_train_days,
-                step_days=step_days,
-            )
+            market_short_cal.metrics
             if enable_walk_forward_eval
             else BinaryMetrics.empty()
         ),
         mid_eval=(
-            _walk_forward_eval(
-                market_feat,
-                feature_cols=market_feature_cols,
-                target_col="mkt_target_20d_up",
-                l2=l2,
-                min_train_days=min_train_days,
-                step_days=step_days,
-            )
+            market_mid_cal.metrics
+            if enable_walk_forward_eval
+            else BinaryMetrics.empty()
+        ),
+        five_eval=(
+            market_five_cal.metrics
             if enable_walk_forward_eval
             else BinaryMetrics.empty()
         ),
@@ -462,6 +640,8 @@ def run_quant_pipeline(
 
     if panel.empty or not feature_cols:
         raise DataError("No valid stock rows with complete panel features for selected universe.")
+    if panel_bundle.notes:
+        _notify(f"面板诊断: {len(panel_bundle.notes)} 条，当前特征数={len(feature_cols)}")
 
     _notify(f"开始拟合股票面板模型: rows={len(panel)}, features={len(feature_cols)}")
     panel_short_model = _fit_latest_model(panel, feature_cols=feature_cols, target_col="target_1d_excess_mkt_up", l2=l2)
@@ -482,29 +662,29 @@ def run_quant_pipeline(
         l2=l2,
     )
 
-    panel_short_eval = (
-        _walk_forward_eval(
-            panel,
-            feature_cols=feature_cols,
-            target_col="target_1d_excess_mkt_up",
-            l2=l2,
-            min_train_days=min_train_days,
-            step_days=step_days,
-        )
-        if enable_walk_forward_eval
-        else BinaryMetrics.empty()
+    panel_short_pred_frame = _walk_forward_prediction_frame(
+        panel,
+        feature_cols=feature_cols,
+        target_col="target_1d_excess_mkt_up",
+        l2=l2,
+        min_train_days=min_train_days,
+        step_days=step_days,
     )
-    panel_mid_eval = (
-        _walk_forward_eval(
-            panel,
-            feature_cols=feature_cols,
-            target_col="target_20d_excess_sector_up",
-            l2=l2,
-            min_train_days=min_train_days,
-            step_days=step_days,
-        )
-        if enable_walk_forward_eval
-        else BinaryMetrics.empty()
+    panel_five_pred_frame = _walk_forward_prediction_frame(
+        panel,
+        feature_cols=feature_cols,
+        target_col="target_5d_excess_mkt_up",
+        l2=l2,
+        min_train_days=min_train_days,
+        step_days=step_days,
+    )
+    panel_mid_pred_frame = _walk_forward_prediction_frame(
+        panel,
+        feature_cols=feature_cols,
+        target_col="target_20d_excess_sector_up",
+        l2=l2,
+        min_train_days=min_train_days,
+        step_days=step_days,
     )
 
     latest_dates = panel.groupby("symbol", observed=True)["date"].max().rename("latest_date")
@@ -521,6 +701,24 @@ def run_quant_pipeline(
     three_probs = panel_three_model.predict_proba(latest_panel, feature_cols=feature_cols)
     five_probs = panel_five_model.predict_proba(latest_panel, feature_cols=feature_cols)
     mid_probs = panel_mid_model.predict_proba(latest_panel, feature_cols=feature_cols)
+    panel_short_cal = _calibrate_latest_probabilities(
+        pred_frame=panel_short_pred_frame,
+        latest_prob=np.asarray(short_probs, dtype=float),
+    )
+    panel_five_cal = _calibrate_latest_probabilities(
+        pred_frame=panel_five_pred_frame,
+        latest_prob=np.asarray(five_probs, dtype=float),
+    )
+    panel_mid_cal = _calibrate_latest_probabilities(
+        pred_frame=panel_mid_pred_frame,
+        latest_prob=np.asarray(mid_probs, dtype=float),
+    )
+    short_probs = panel_short_cal.latest_probs
+    five_probs = panel_five_cal.latest_probs
+    mid_probs = panel_mid_cal.latest_probs
+    panel_short_eval = panel_short_cal.metrics if enable_walk_forward_eval else BinaryMetrics.empty()
+    panel_five_eval = panel_five_cal.metrics if enable_walk_forward_eval else BinaryMetrics.empty()
+    panel_mid_eval = panel_mid_cal.metrics if enable_walk_forward_eval else BinaryMetrics.empty()
 
     stock_rows: list[ForecastRow] = []
     for idx, (_, latest_row) in enumerate(latest_panel.iterrows()):
@@ -571,6 +769,7 @@ def run_quant_pipeline(
                 mid_drivers=panel_mid_model.top_drivers(latest_row, top_n=3),
                 short_eval=panel_short_eval,
                 mid_eval=panel_mid_eval,
+                five_eval=panel_five_eval,
                 short_expected_ret=float(short_bucket.expected_return),
                 mid_expected_ret=float(mid_bucket.expected_return),
                 short_q10=float(short_bucket.q10),
@@ -613,5 +812,10 @@ def run_quant_pipeline(
     for idx, weight in zip(tradable_indices, tradable_weights):
         stock_rows[idx].suggested_weight = float(weight)
     stock_rows.sort(key=lambda x: x.score, reverse=True)
+    if enable_walk_forward_eval:
+        _notify(
+            "概率校准完成: "
+            f"1d={panel_short_cal.method}, 5d={panel_five_cal.method}, 20d={panel_mid_cal.method}"
+        )
     _notify(f"量化预测完成: actionable={len(tradable_rows)}, total={len(stock_rows)}")
     return market_forecast, stock_rows

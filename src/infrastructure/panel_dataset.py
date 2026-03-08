@@ -47,6 +47,11 @@ MIN_HISTORY_ROWS = 80
 HALT_GAP_DAYS = 3
 DELIST_GAP_DAYS = 20
 
+FEATURE_MIN_COVERAGE = 0.90
+FEATURE_MAX_DRIFT_SCORE = 1.75
+FEATURE_MAX_ABS_SHIFT = 1.0
+FEATURE_MIN_STD = 1e-6
+
 
 def _infer_symbol_status(
     *,
@@ -195,6 +200,56 @@ def _attach_relative_targets(frame: pd.DataFrame) -> pd.DataFrame:
     return out
 
 
+def _select_stable_feature_columns(
+    frame: pd.DataFrame,
+    feature_cols: Sequence[str],
+) -> tuple[list[str], list[str]]:
+    if frame.empty:
+        return list(feature_cols), []
+    date_series = pd.Series(pd.to_datetime(frame["date"], errors="coerce")).dropna().drop_duplicates().sort_values()
+    dates = pd.to_datetime(date_series.tolist())
+    if len(dates) < 40:
+        return list(feature_cols), []
+    window = max(20, int(len(dates) * 0.30))
+    early_dates = set(pd.to_datetime(dates[:window]).tolist())
+    late_dates = set(pd.to_datetime(dates[-window:]).tolist())
+    selected: list[str] = []
+    notes: list[str] = []
+    diagnostics: list[tuple[str, float, float]] = []
+    for col in feature_cols:
+        if col not in frame.columns:
+            continue
+        series = pd.to_numeric(frame[col], errors="coerce")
+        coverage = float(series.notna().mean())
+        std = float(series.std(ddof=0))
+        if coverage < FEATURE_MIN_COVERAGE:
+            notes.append(f"drop feature {col}: low coverage={coverage:.2f}")
+            continue
+        if not np.isfinite(std) or std < FEATURE_MIN_STD:
+            notes.append(f"drop feature {col}: near-zero variance")
+            continue
+        early_mean = float(series[frame["date"].isin(early_dates)].mean())
+        late_mean = float(series[frame["date"].isin(late_dates)].mean())
+        abs_shift = abs(late_mean - early_mean)
+        drift_score = abs_shift / max(std, FEATURE_MIN_STD)
+        if not np.isfinite(drift_score):
+            notes.append(f"drop feature {col}: invalid drift estimate")
+            continue
+        diagnostics.append((col, coverage, drift_score))
+        if drift_score > FEATURE_MAX_DRIFT_SCORE and abs_shift > FEATURE_MAX_ABS_SHIFT:
+            notes.append(f"drop feature {col}: high drift={drift_score:.2f}")
+            continue
+        selected.append(col)
+    if selected:
+        return selected, notes
+    if diagnostics:
+        fallback = sorted(diagnostics, key=lambda item: (-item[1], item[2], item[0]))
+        selected = [item[0] for item in fallback[: max(8, min(len(fallback), len(feature_cols) // 3 or 1))]]
+        notes.append("feature stability fallback engaged: reused best-coverage subset")
+        return selected, notes
+    return list(feature_cols), notes
+
+
 def build_stock_panel_dataset(
     *,
     stock_securities: Sequence[Security],
@@ -283,6 +338,8 @@ def build_stock_panel_dataset(
         extra_stock_cols=stock_margin_cols_union + panel_extra_cols,
     )
     feature_cols = [col for col in feature_cols if col in panel.columns]
+    feature_cols, stability_notes = _select_stable_feature_columns(panel, feature_cols)
+    notes.extend(stability_notes)
 
     required_cols = feature_cols + [
         "target_1d_excess_mkt_up",

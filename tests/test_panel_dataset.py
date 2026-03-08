@@ -4,7 +4,7 @@ import numpy as np
 import pandas as pd
 
 from src.domain.entities import Security
-from src.infrastructure.panel_dataset import build_stock_panel_dataset
+from src.infrastructure.panel_dataset import _select_stable_feature_columns, build_stock_panel_dataset
 from src.infrastructure.market_data import DataError
 
 
@@ -253,3 +253,26 @@ def test_build_stock_panel_dataset_infers_symbol_statuses(monkeypatch) -> None:
     assert bundle.symbol_status["BBB.SZ"] == "halted"
     assert bundle.symbol_status["CCC.SZ"] == "delisted"
     assert bundle.symbol_status["DDD.SZ"] == "data_insufficient"
+
+
+def test_select_stable_feature_columns_drops_low_coverage_and_high_drift() -> None:
+    dates = pd.date_range("2024-01-01", periods=120, freq="B")
+    frame = pd.DataFrame(
+        {
+            "date": dates,
+            "stable": np.linspace(0.0, 1.0, len(dates)),
+            "low_coverage": [np.nan] * 20 + list(np.linspace(0.0, 1.0, len(dates) - 20)),
+            "high_drift": np.concatenate([np.zeros(60), np.full(60, 10.0)]),
+        }
+    )
+
+    selected, notes = _select_stable_feature_columns(
+        frame,
+        ["stable", "low_coverage", "high_drift"],
+    )
+
+    assert "stable" in selected
+    assert "low_coverage" not in selected
+    assert "high_drift" not in selected
+    assert any("low coverage" in note for note in notes)
+    assert any("high drift" in note for note in notes)

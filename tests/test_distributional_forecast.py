@@ -9,6 +9,7 @@ from src.infrastructure.forecast_engine import (
     MID_RETURN_BUCKET_EDGES,
     SHORT_BUCKET_REPRESENTATIVES,
     SHORT_RETURN_BUCKET_EDGES,
+    _calibrate_latest_probabilities,
     _distributional_score,
     estimate_return_bucket_profile,
 )
@@ -186,3 +187,26 @@ def test_build_features_adds_pattern_and_breakout_features() -> None:
     assert float(latest["breakout_quality_score"]) > 0.0
     assert float(latest["exhaustion_reversal_risk"]) >= 0.0
     assert float(latest["pullback_reclaim_score"]) >= 0.0
+
+
+def test_calibrate_latest_probabilities_improves_brier_on_shifted_probs() -> None:
+    dates = pd.date_range("2024-01-01", periods=180, freq="B")
+    y_true = np.asarray(([0.0] * 90) + ([1.0] * 90), dtype=float)
+    raw_prob = np.asarray(([0.35] * 90) + ([0.65] * 90), dtype=float)
+    pred_frame = pd.DataFrame(
+        {
+            "date": dates,
+            "y_true": y_true,
+            "raw_prob": raw_prob,
+        }
+    )
+
+    result = _calibrate_latest_probabilities(
+        pred_frame=pred_frame,
+        latest_prob=np.asarray([0.35, 0.65], dtype=float),
+    )
+
+    assert result.method in {"platt", "isotonic"}
+    assert result.metrics.calibrated_brier < result.metrics.brier
+    assert np.all(result.latest_probs > 0.0)
+    assert np.all(result.latest_probs < 1.0)
