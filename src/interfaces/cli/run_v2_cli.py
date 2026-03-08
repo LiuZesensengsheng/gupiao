@@ -8,6 +8,7 @@ from src.application.v2_services import (
     load_published_v2_policy_model,
     publish_v2_research_artifacts,
     run_daily_v2_live,
+    run_v2_research_matrix,
     run_v2_research_workflow,
     summarize_daily_run,
     summarize_v2_backtest,
@@ -33,6 +34,7 @@ def build_parser() -> argparse.ArgumentParser:
     daily.add_argument("--strategy", default="swing_v2", help="Strategy snapshot id")
     daily.add_argument("--config", default="config/api.json", help="Runtime config path for live mode")
     daily.add_argument("--source", default=None, help="Optional source override")
+    daily.add_argument("--universe-tier", dest="universe_tier", default=None, help="Optional predefined universe tier override")
     daily.add_argument("--universe-file", dest="universe_file", default=None, help="Optional universe file override")
     daily.add_argument("--universe-limit", dest="universe_limit", type=int, default=None, help="Optional universe size override")
     daily.add_argument("--report", default="reports/v2_daily_report.md", help="Markdown report output path")
@@ -48,6 +50,7 @@ def build_parser() -> argparse.ArgumentParser:
     research.add_argument("--strategy", default="swing_v2", help="Target strategy id")
     research.add_argument("--config", default="config/api.json", help="Runtime config path")
     research.add_argument("--source", default=None, help="Optional source override")
+    research.add_argument("--universe-tier", dest="universe_tier", default=None, help="Optional predefined universe tier override")
     research.add_argument("--universe-file", dest="universe_file", default=None, help="Optional universe file override")
     research.add_argument("--universe-limit", dest="universe_limit", type=int, default=None, help="Optional universe size override")
     research.add_argument("--report", default="reports/v2_research_report.md", help="Markdown report output path")
@@ -63,6 +66,20 @@ def build_parser() -> argparse.ArgumentParser:
     research.add_argument("--embargo-days", type=int, default=20, help="Embargo days for purged walk-forward split")
     research.add_argument("--publish-forecast-models", dest="publish_forecast_models", action="store_true", default=True, help="Publish forecast-layer metadata and frozen state snapshot")
     research.add_argument("--no-publish-forecast-models", dest="publish_forecast_models", action="store_false", help="Skip publishing forecast-layer metadata")
+
+    matrix = sub.add_parser("research-matrix", help="Run the fixed 16/80/150/300 universe matrix")
+    matrix.add_argument("--strategy", default="swing_v2", help="Target strategy id")
+    matrix.add_argument("--config", default="config/api.json", help="Runtime config path")
+    matrix.add_argument("--source", default=None, help="Optional source override")
+    matrix.add_argument("--report", default="reports/v2_research_report.md", help="Markdown report output path for the last run")
+    matrix.add_argument("--dashboard", default="reports/v2_research_dashboard.html", help="HTML dashboard output path for the last run")
+    matrix.add_argument("--artifact-root", default="artifacts/v2", help="Artifact output root for research runs")
+    matrix.add_argument("--cache-root", default="artifacts/v2/cache", help="On-disk cache root for prepared data and trajectories")
+    matrix.add_argument("--refresh-cache", action="store_true", help="Ignore existing cached trajectory and rebuild it")
+    matrix.add_argument("--forecast-backend", default="linear", help="Forecast backend id for research backtests (linear/deep)")
+    matrix.add_argument("--split-mode", default="purged_wf", choices=["purged_wf", "simple"], help="Research split mode")
+    matrix.add_argument("--embargo-days", type=int, default=20, help="Embargo days for purged walk-forward split")
+    matrix.add_argument("--tiers", nargs="*", default=["favorites_16", "generated_80", "generated_150", "generated_300"], help="Universe tiers to evaluate")
 
     return parser
 
@@ -94,6 +111,7 @@ def main() -> int:
             strategy_id=str(args.strategy),
             config_path=str(args.config),
             source=args.source,
+            universe_tier=args.universe_tier,
             universe_file=args.universe_file,
             universe_limit=args.universe_limit,
             artifact_root=str(args.artifact_root),
@@ -130,6 +148,7 @@ def main() -> int:
             strategy_id=str(args.strategy),
             config_path=str(args.config),
             source=args.source,
+            universe_tier=args.universe_tier,
             universe_file=args.universe_file,
             universe_limit=args.universe_limit,
             skip_calibration=skip_calibration,
@@ -147,6 +166,7 @@ def main() -> int:
                 artifact_root=str(args.artifact_root),
                 config_path=str(args.config),
                 source=args.source,
+                universe_tier=args.universe_tier,
                 universe_file=args.universe_file,
                 universe_limit=args.universe_limit,
                 baseline=baseline,
@@ -199,6 +219,23 @@ def main() -> int:
         print(json.dumps(summarize_v2_calibration(calibration), ensure_ascii=False, indent=2))
         print("[V2] learned policy:")
         print(json.dumps(summarize_v2_policy_learning(learning), ensure_ascii=False, indent=2))
+        return 0
+
+    if args.task == "research-matrix":
+        results = run_v2_research_matrix(
+            strategy_id=str(args.strategy),
+            config_path=str(args.config),
+            source=args.source,
+            cache_root=str(args.cache_root),
+            artifact_root=str(args.artifact_root),
+            refresh_cache=bool(args.refresh_cache),
+            forecast_backend=str(args.forecast_backend),
+            split_mode=str(args.split_mode),
+            embargo_days=int(args.embargo_days),
+            universe_tiers=[str(item) for item in args.tiers],
+        )
+        print("[V2] research matrix:")
+        print(json.dumps(results, ensure_ascii=False, indent=2))
         return 0
 
     raise ValueError(f"Unsupported task: {args.task}")

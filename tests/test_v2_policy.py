@@ -1041,3 +1041,104 @@ def test_run_daily_v2_live_fails_when_run_id_mismatches_manifest(monkeypatch: py
             run_id="run_b",
             snapshot_path=str(manifest_path),
         )
+
+
+def test_run_daily_v2_live_fails_when_universe_tier_mismatches_manifest(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path,
+) -> None:
+    watchlist_path = tmp_path / "watchlist.json"
+    margin_market_path = tmp_path / "margin_market.csv"
+    margin_stock_path = tmp_path / "margin_stock.csv"
+    watchlist_path.write_text("[]", encoding="utf-8")
+    margin_market_path.write_text("", encoding="utf-8")
+    margin_stock_path.write_text("", encoding="utf-8")
+    run_id = "run_tier_mismatch"
+    run_dir = tmp_path / "artifacts" / "swing_v2" / run_id
+    run_dir.mkdir(parents=True, exist_ok=True)
+    manifest = {
+        "run_id": run_id,
+        "strategy_id": "swing_v2",
+        "dataset_manifest": str(run_dir / "dataset_manifest.json"),
+        "frozen_daily_state": str(run_dir / "frozen_daily_state.json"),
+    }
+    (run_dir / "research_manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
+    (run_dir / "dataset_manifest.json").write_text(
+        json.dumps(
+            {
+                "universe_tier": "favorites_16",
+                "universe_file": str(run_dir / "favorites.json"),
+            }
+        ),
+        encoding="utf-8",
+    )
+    (run_dir / "frozen_daily_state.json").write_text(
+        json.dumps(
+            {
+                "composite_state": {
+                    "market": {
+                        "as_of_date": "2026-03-01",
+                        "up_1d_prob": 0.57,
+                        "up_5d_prob": 0.59,
+                        "up_20d_prob": 0.61,
+                        "trend_state": "trend",
+                        "drawdown_risk": 0.28,
+                        "volatility_regime": "normal",
+                        "liquidity_stress": 0.22,
+                        "up_2d_prob": 0.55,
+                        "up_3d_prob": 0.56,
+                    },
+                    "cross_section": {
+                        "as_of_date": "2026-03-01",
+                        "large_vs_small_bias": 0.08,
+                        "growth_vs_value_bias": -0.04,
+                        "fund_flow_strength": 0.16,
+                        "margin_risk_on_score": 0.14,
+                        "breadth_strength": 0.21,
+                        "leader_participation": 0.63,
+                        "weak_stock_ratio": 0.29,
+                    },
+                    "sectors": [],
+                    "stocks": [],
+                    "strategy_mode": "trend_follow",
+                    "risk_regime": "risk_on",
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    settings = {
+        "config_path": "config/api.json",
+        "watchlist": str(watchlist_path),
+        "source": "local",
+        "data_dir": "data",
+        "start": "2024-01-01",
+        "end": "2026-03-01",
+        "min_train_days": 240,
+        "step_days": 20,
+        "l2": 0.8,
+        "max_positions": 5,
+        "use_margin_features": False,
+        "margin_market_file": str(margin_market_path),
+        "margin_stock_file": str(margin_stock_path),
+        "universe_tier": "generated_80",
+        "universe_file": str(run_dir / "generated_80.json"),
+        "universe_limit": 80,
+        "source_universe_manifest_path": str(run_dir / "generated_80.json"),
+        "universe_generation_rule": "test",
+        "universe_id": "generated_80",
+        "universe_size": 80,
+        "symbol_count": 80,
+        "symbols": [],
+        "universe_hash": "u",
+    }
+    monkeypatch.setattr("src.application.v2_services._load_v2_runtime_settings", lambda **_: settings)
+    monkeypatch.setattr("src.application.v2_services._resolve_v2_universe_settings", lambda **kwargs: dict(kwargs["settings"]))
+
+    with pytest.raises(ValueError, match="universe tier mismatch"):
+        run_daily_v2_live(
+            strategy_id="swing_v2",
+            artifact_root=str(tmp_path / "artifacts"),
+            run_id=run_id,
+            universe_tier="generated_80",
+        )

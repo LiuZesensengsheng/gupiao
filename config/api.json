@@ -38,6 +38,12 @@
     "sleep_ms": 80
   },
   "daily": {
+    "universe_tier": "favorites_16",
+    "active_default_universe_tier": "favorites_16",
+    "candidate_default_universe_tier": "generated_80",
+    "favorites_universe_file": "config/universe_favorites.json",
+    "generated_universe_base_file": "config/universe_all_a_3y_local_ready_nost_no_kc_cy_stable3y.json",
+    "baseline_reference_run_id": "20260308_211808",
     "universe_file": "config/universe_auto_longtrain.json",
     "universe_limit": 500,
     "positions_file": "",

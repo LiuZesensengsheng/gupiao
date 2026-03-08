@@ -31,7 +31,11 @@ from src.application.v2_contracts import (
 from src.application.watchlist import load_watchlist
 from src.domain.entities import TradeAction
 from src.domain.policies import blend_horizon_score, decide_market_state
-from src.infrastructure.discovery import build_candidate_universe
+from src.infrastructure.discovery import (
+    build_candidate_universe,
+    build_predefined_universe,
+    normalize_universe_tier,
+)
 from src.infrastructure.cross_section_forecast import forecast_cross_section_state
 from src.infrastructure.features import (
     MARKET_FEATURE_COLUMNS,
@@ -73,12 +77,22 @@ def _safe_float(value: object, default: float = 0.0) -> float:
     return out
 
 
+def _signal_unit(value: object, scale: float) -> float:
+    denom = max(1e-9, float(scale))
+    return _clip(_safe_float(value, 0.0) / denom, -1.0, 1.0)
+
+
 _DEFAULT_SPLIT_MODE = "purged_wf"
 _DEFAULT_EMBARGO_DAYS = 20
 _RELEASE_GATE_THRESHOLD = {
     "excess_annual_return_min": 0.0,
     "information_ratio_min": 0.30,
     "max_drawdown_worse_limit": 0.05,
+}
+_DEFAULT_SWITCH_GATE_THRESHOLD = {
+    "excess_annual_return_delta_min": 0.02,
+    "information_ratio_delta_min": 0.10,
+    "max_drawdown_worse_limit": 0.02,
 }
 
 
@@ -201,12 +215,18 @@ def _policy_feature_names() -> list[str]:
         "top_stock_up_20d",
         "top_stock_tradeability",
         "top_stock_excess_vs_sector",
+        "alpha_headroom",
+        "alpha_breadth",
+        "alpha_top_score",
+        "alpha_avg_top3",
+        "alpha_median_score",
     ]
 
 
 def _policy_feature_vector(state: CompositeState) -> np.ndarray:
     top_sector = state.sectors[0] if state.sectors else None
     top_stock = state.stocks[0] if state.stocks else None
+    alpha_metrics = _alpha_opportunity_metrics(state.stocks)
     return np.asarray(
         [
             float(state.market.up_1d_prob),
@@ -223,6 +243,11 @@ def _policy_feature_vector(state: CompositeState) -> np.ndarray:
             0.0 if top_stock is None else float(top_stock.up_20d_prob),
             0.0 if top_stock is None else float(top_stock.tradeability_score),
             0.0 if top_stock is None else float(top_stock.excess_vs_sector_prob),
+            float(alpha_metrics["alpha_headroom"]),
+            float(alpha_metrics["breadth_ratio"]),
+            float(alpha_metrics["top_score"]),
+            float(alpha_metrics["avg_top3"]),
+            float(alpha_metrics["median_score"]),
         ],
         dtype=float,
     )
@@ -233,6 +258,7 @@ def _fit_ridge_regression(
     y: np.ndarray,
     *,
     l2: float,
+    sample_weight: np.ndarray | None = None,
 ) -> tuple[float, np.ndarray]:
     if X.size == 0 or y.size == 0:
         return 0.0, np.zeros(X.shape[1] if X.ndim == 2 else 0, dtype=float)
@@ -240,6 +266,13 @@ def _fit_ridge_regression(
     y = np.asarray(y, dtype=float)
     ones = np.ones((X.shape[0], 1), dtype=float)
     X_aug = np.hstack([ones, X])
+    if sample_weight is not None:
+        weight = np.asarray(sample_weight, dtype=float).reshape(-1)
+        if weight.size != X.shape[0]:
+            raise ValueError("sample_weight dimension mismatch")
+        weight = np.sqrt(np.clip(weight, 1e-9, None)).reshape(-1, 1)
+        X_aug = X_aug * weight
+        y = y * weight.reshape(-1)
     reg = np.eye(X_aug.shape[1], dtype=float) * float(max(0.0, l2))
     reg[0, 0] = 0.0
     coef = np.linalg.solve(X_aug.T @ X_aug + reg, X_aug.T @ y)
@@ -770,6 +803,9 @@ def build_strategy_snapshot(
     *,
     strategy_id: str,
     universe_id: str = "top_liquid_200",
+    universe_size: int = 0,
+    universe_generation_rule: str = "",
+    source_universe_manifest_path: str = "",
     run_id: str = "",
     data_window: str = "",
     model_hashes: dict[str, str] | None = None,
@@ -790,6 +826,9 @@ def build_strategy_snapshot(
         cross_section_model_id="cross_section_v2",
         policy_version="policy_v2_rules",
         execution_version="exec_t1_v2",
+        universe_size=int(universe_size),
+        universe_generation_rule=str(universe_generation_rule),
+        source_universe_manifest_path=str(source_universe_manifest_path),
         run_id=str(run_id),
         data_window=str(data_window),
         model_hashes=dict(model_hashes or {}),
@@ -808,6 +847,7 @@ def _load_v2_runtime_settings(
     source: str | None = None,
     universe_file: str | None = None,
     universe_limit: int | None = None,
+    universe_tier: str | None = None,
 ) -> dict[str, object]:
     payload: dict[str, object] = {}
     path = Path(config_path)
@@ -837,6 +877,18 @@ def _load_v2_runtime_settings(
         "use_margin_features": bool(pick("use_margin_features", True)),
         "margin_market_file": str(pick("margin_market_file", "input/margin_market.csv")),
         "margin_stock_file": str(pick("margin_stock_file", "input/margin_stock.csv")),
+        "universe_tier": (
+            str(universe_tier).strip()
+            if universe_tier is not None and str(universe_tier).strip()
+            else str(pick("universe_tier", ""))
+        ),
+        "active_default_universe_tier": str(pick("active_default_universe_tier", "favorites_16")),
+        "candidate_default_universe_tier": str(pick("candidate_default_universe_tier", "generated_80")),
+        "favorites_universe_file": str(pick("favorites_universe_file", "config/universe_favorites.json")),
+        "generated_universe_base_file": str(
+            pick("generated_universe_base_file", "config/universe_all_a_3y_local_ready_nost_no_kc_cy_stable3y.json")
+        ),
+        "baseline_reference_run_id": str(pick("baseline_reference_run_id", "20260308_211808")),
         "universe_file": (
             str(universe_file).strip()
             if universe_file is not None and str(universe_file).strip()
@@ -848,6 +900,122 @@ def _load_v2_runtime_settings(
             else int(pick("universe_limit", 5))
         ),
     }
+
+
+def _extract_universe_rows(payload: object) -> list[dict[str, str]]:
+    if isinstance(payload, list):
+        return [
+            {
+                "symbol": str(item),
+                "name": str(item),
+                "sector": "其他",
+            }
+            for item in payload
+        ]
+    if isinstance(payload, dict):
+        raw_rows = payload.get("stocks", [])
+        if isinstance(raw_rows, list):
+            out: list[dict[str, str]] = []
+            for item in raw_rows:
+                if not isinstance(item, dict):
+                    continue
+                symbol = str(item.get("symbol", "")).strip()
+                if not symbol:
+                    continue
+                out.append(
+                    {
+                        "symbol": symbol,
+                        "name": str(item.get("name", symbol)),
+                        "sector": str(item.get("sector", "其他")),
+                    }
+                )
+            return out
+    return []
+
+
+def _hydrate_universe_metadata(
+    *,
+    universe_file: str,
+    universe_limit: int,
+    universe_tier: str = "",
+    universe_generation_rule: str = "",
+) -> dict[str, object]:
+    path = Path(str(universe_file))
+    rows: list[dict[str, str]] = []
+    payload = _load_json_dict(path)
+    if payload:
+        rows = _extract_universe_rows(payload)
+    elif path.exists():
+        try:
+            raw = json.loads(path.read_text(encoding="utf-8"))
+            rows = _extract_universe_rows(raw)
+        except Exception:
+            rows = []
+    symbols = [str(item["symbol"]) for item in rows]
+    universe_id = str(universe_tier).strip() or path.stem or "v2_universe"
+    generation_rule = str(universe_generation_rule).strip()
+    if not generation_rule and payload:
+        generation_rule = str(payload.get("generation_rule", ""))
+    if not generation_rule:
+        generation_rule = "external_universe_file"
+    return {
+        "universe_tier": str(universe_tier).strip(),
+        "universe_id": universe_id,
+        "universe_size": int(len(symbols) if symbols else max(0, int(universe_limit))),
+        "universe_generation_rule": generation_rule,
+        "source_universe_manifest_path": str(path.resolve()) if path.exists() else str(path),
+        "symbols": symbols,
+        "symbol_count": int(len(symbols)),
+        "universe_hash": _sha256_file(path) or _stable_json_hash(symbols),
+    }
+
+
+def _resolve_v2_universe_settings(
+    *,
+    settings: dict[str, object],
+    cache_root: str,
+) -> dict[str, object]:
+    resolved = dict(settings)
+    requested_tier = str(resolved.get("universe_tier", "")).strip()
+    if requested_tier:
+        normalized_tier = normalize_universe_tier(requested_tier)
+        catalog_dir = Path(str(cache_root)) / "universe_catalog"
+        manifest_token = _stable_json_hash(
+            {
+                "tier": normalized_tier,
+                "data_dir": str(resolved.get("data_dir", "")),
+                "favorites_universe_file": str(resolved.get("favorites_universe_file", "")),
+                "generated_universe_base_file": str(resolved.get("generated_universe_base_file", "")),
+            }
+        )[:12]
+        manifest_path = catalog_dir / f"{normalized_tier}_{manifest_token}.json"
+        built = build_predefined_universe(
+            tier_id=normalized_tier,
+            data_dir=str(resolved.get("data_dir", "")),
+            favorites_file=str(resolved.get("favorites_universe_file", "")),
+            generated_base_file=str(resolved.get("generated_universe_base_file", "")),
+            output_path=manifest_path,
+            exclude_symbols=(),
+        )
+        resolved["universe_tier"] = normalized_tier
+        resolved["universe_file"] = str(manifest_path.resolve())
+        resolved["universe_limit"] = int(built.universe_size or len(built.rows))
+        resolved["universe_id"] = str(built.universe_id or normalized_tier)
+        resolved["universe_size"] = int(built.universe_size or len(built.rows))
+        resolved["universe_generation_rule"] = str(built.generation_rule)
+        resolved["source_universe_manifest_path"] = str(built.manifest_path or manifest_path.resolve())
+        resolved["symbols"] = [str(item.symbol) for item in built.rows]
+        resolved["symbol_count"] = int(len(built.rows))
+        resolved["universe_hash"] = _sha256_file(manifest_path) or _stable_json_hash(resolved["symbols"])
+        return resolved
+
+    hydrated = _hydrate_universe_metadata(
+        universe_file=str(resolved.get("universe_file", "")),
+        universe_limit=int(resolved.get("universe_limit", 0)),
+        universe_generation_rule=str(resolved.get("universe_generation_rule", "")),
+    )
+    resolved.update(hydrated)
+    return resolved
 
 
 def _build_market_and_cross_section_states(
@@ -2028,9 +2196,14 @@ def _derive_learning_targets(
     state: CompositeState,
     stock_frames: dict[str, pd.DataFrame],
     date: pd.Timestamp,
-) -> tuple[float, float, float]:
+    horizon_metrics: dict[str, dict[str, float]] | None = None,
+    universe_tier: str | None = None,
+) -> tuple[float, float, float, float]:
     ranked = sorted(state.stocks, key=_stock_policy_score, reverse=True)
     realized: list[float] = []
+    realized_excess_1d: list[float] = []
+    realized_excess_5d: list[float] = []
+    realized_excess_20d_sector: list[float] = []
     for stock in ranked[:4]:
         frame = stock_frames.get(stock.symbol)
         if frame is None:
@@ -2038,8 +2211,83 @@ def _derive_learning_targets(
         row = frame[frame["date"] == date]
         if row.empty:
             continue
-        realized.append(float(row.iloc[0]["fwd_ret_1"]))
+        realized.append(_safe_float(row.iloc[0].get("fwd_ret_1"), 0.0))
+        realized_excess_1d.append(_safe_float(row.iloc[0].get("excess_ret_1_vs_mkt"), 0.0))
+        realized_excess_5d.append(_safe_float(row.iloc[0].get("excess_ret_5_vs_mkt"), 0.0))
+        realized_excess_20d_sector.append(_safe_float(row.iloc[0].get("excess_ret_20_vs_sector"), 0.0))
     lead_ret = float(np.mean(realized)) if realized else 0.0
+    lead_excess_1d = float(np.mean(realized_excess_1d)) if realized_excess_1d else 0.0
+    lead_excess_5d = float(np.mean(realized_excess_5d)) if realized_excess_5d else 0.0
+    lead_excess_20d_sector = float(np.mean(realized_excess_20d_sector)) if realized_excess_20d_sector else 0.0
+    alpha_metrics = _alpha_opportunity_metrics(state.stocks)
+    opportunity_signal = float(
+        0.45 * _signal_unit(alpha_metrics["alpha_headroom"], 0.04)
+        + 0.30 * _signal_unit(alpha_metrics["breadth_ratio"] - 0.08, 0.12)
+        + 0.25 * _signal_unit(alpha_metrics["top_score"] - 0.56, 0.10)
+    )
+    quality_20d = {} if horizon_metrics is None else dict(horizon_metrics.get("20d", {}))
+    ranking_signal = float(
+        0.55 * _signal_unit(quality_20d.get("rank_ic", 0.0), 0.12)
+        + 0.30 * _signal_unit(quality_20d.get("top_bottom_spread", 0.0), 0.08)
+        + 0.15 * _signal_unit(_safe_float(quality_20d.get("top_k_hit_rate", 0.5), 0.5) - 0.5, 0.20)
+    )
+    realized_alpha_signal = float(
+        0.50 * _signal_unit(lead_excess_1d, 0.02)
+        + 0.30 * _signal_unit(lead_excess_5d, 0.04)
+        + 0.20 * _signal_unit(lead_excess_20d_sector, 0.08)
+    )
+    composite_signal = float(
+        0.45 * realized_alpha_signal
+        + 0.30 * ranking_signal
+        + 0.25 * opportunity_signal
+    )
+
+    if normalize_universe_tier(universe_tier) == "generated_80":
+        regime_floor = 0.45 if state.risk_regime == "risk_on" else (0.35 if state.risk_regime == "cautious" else 0.25)
+        exposure = float(_clip(0.58 + 0.22 * composite_signal, regime_floor, 0.92))
+        if state.market.drawdown_risk > 0.45:
+            exposure *= 0.90
+        if state.market.volatility_regime == "high":
+            exposure *= 0.92
+        if state.cross_section.weak_stock_ratio > 0.55:
+            exposure *= 0.92
+        if state.cross_section.breadth_strength < 0.05:
+            exposure *= 0.95
+        exposure = float(_clip(exposure, regime_floor, 0.92))
+
+        positions = 3
+        if alpha_metrics["breadth_ratio"] >= 0.10:
+            positions += 1
+        if alpha_metrics["alpha_headroom"] >= 0.02 and state.cross_section.breadth_strength >= 0.10:
+            positions += 1
+        if composite_signal <= -0.20 or state.cross_section.weak_stock_ratio >= 0.60:
+            positions -= 1
+        if state.market.volatility_regime == "high":
+            positions = min(positions, 4)
+        positions = int(np.clip(positions, 1, 5))
+
+        turnover = float(
+            0.18
+            + 0.07 * max(0.0, realized_alpha_signal)
+            + 0.04 * max(0.0, ranking_signal)
+            + 0.05 * max(0.0, opportunity_signal)
+            + 0.03 * abs(composite_signal)
+        )
+        if composite_signal < -0.10:
+            turnover = min(turnover, 0.18)
+        if state.market.drawdown_risk > 0.45:
+            turnover = min(turnover, 0.18)
+        if state.market.volatility_regime == "high":
+            turnover = min(turnover, 0.24)
+        turnover = float(_clip(turnover, 0.12, 0.32))
+        sample_weight = float(
+            1.0
+            + 1.2 * abs(composite_signal)
+            + 0.8 * max(0.0, realized_alpha_signal)
+            + 0.5 * max(0.0, ranking_signal)
+            + 0.6 * max(0.0, opportunity_signal)
+        )
+        return float(exposure), float(positions), float(turnover), sample_weight
 
     if lead_ret >= 0.008:
         exposure = 0.85
@@ -2060,7 +2308,8 @@ def _derive_learning_targets(
     if float(state.market.drawdown_risk) > 0.45:
         turnover = min(turnover, 0.18)
 
-    return float(exposure), float(positions), float(turnover)
+    sample_weight = float(1.0 + 1.5 * abs(lead_ret))
+    return float(exposure), float(positions), float(turnover), sample_weight
 
 
 @dataclass(frozen=True)
@@ -2199,13 +2448,17 @@ def _prepare_v2_backtest_data(
     source: str | None = None,
     universe_file: str | None = None,
     universe_limit: int | None = None,
+    universe_tier: str | None = None,
+    cache_root: str = "artifacts/v2/cache",
 ) -> _PreparedV2BacktestData | None:
     settings = _load_v2_runtime_settings(
         config_path=config_path,
         source=source,
         universe_file=universe_file,
         universe_limit=universe_limit,
+        universe_tier=universe_tier,
     )
+    settings = _resolve_v2_universe_settings(settings=settings, cache_root=cache_root)
     market_security, _, _ = load_watchlist(str(settings["watchlist"]))
     universe = build_candidate_universe(
         source=str(settings["source"]),
@@ -2727,6 +2980,7 @@ def _trajectory_cache_key(
     source: str | None,
     universe_file: str | None,
     universe_limit: int | None,
+    universe_tier: str | None,
     retrain_days: int,
     forecast_backend: str,
 ) -> str:
@@ -2736,6 +2990,7 @@ def _trajectory_cache_key(
         "source": "" if source is None else str(source),
         "universe_file": "" if universe_file is None else str(Path(universe_file).resolve()),
         "universe_limit": -1 if universe_limit is None else int(universe_limit),
+        "universe_tier": "" if universe_tier is None else str(universe_tier),
         "retrain_days": int(retrain_days),
         "forecast_backend": str(forecast_backend),
     }
@@ -2792,6 +3047,9 @@ def _daily_result_cache_key(
         "universe_file": str(Path(str(settings.get("universe_file", ""))).resolve()),
         "universe_mtime": _file_mtime_token(settings.get("universe_file", "")),
         "universe_limit": int(settings.get("universe_limit", 0)),
+        "universe_tier": str(settings.get("universe_tier", "")),
+        "source_universe_manifest_path": str(settings.get("source_universe_manifest_path", "")),
+        "source_universe_manifest_mtime": _file_mtime_token(settings.get("source_universe_manifest_path", "")),
         "start": str(settings.get("start", "")),
         "end": str(settings.get("end", "")),
         "min_train_days": int(settings.get("min_train_days", 0)),
@@ -2831,17 +3089,33 @@ def _load_or_build_v2_backtest_trajectory(
     source: str | None = None,
     universe_file: str | None = None,
     universe_limit: int | None = None,
+    universe_tier: str | None = None,
     retrain_days: int = 20,
     cache_root: str = "artifacts/v2/cache",
     refresh_cache: bool = False,
     forecast_backend: str = "linear",
 ) -> _BacktestTrajectory | None:
     backend = _make_forecast_backend(forecast_backend)
-    cache_key = _trajectory_cache_key(
+    settings = _load_v2_runtime_settings(
         config_path=config_path,
         source=source,
         universe_file=universe_file,
         universe_limit=universe_limit,
+        universe_tier=universe_tier,
+    )
+    settings = _resolve_v2_universe_settings(settings=settings, cache_root=cache_root)
+    cache_key = _trajectory_cache_key(
+        config_path=str(settings.get("config_path", config_path)),
+        source=str(settings.get("source", source)) if settings.get("source", source) is not None else None,
+        universe_file=str(settings.get("universe_file", universe_file))
+        if settings.get("universe_file", universe_file) is not None
+        else None,
+        universe_limit=(
+            int(settings.get("universe_limit"))
+            if settings.get("universe_limit") is not None
+            else universe_limit
+        ),
+        universe_tier=str(settings.get("universe_tier", universe_tier)),
         retrain_days=retrain_days,
         forecast_backend=backend.name,
     )
@@ -2860,10 +3134,18 @@ def _load_or_build_v2_backtest_trajectory(
 
     _emit_progress("research", "开始准备研究数据")
     prepared = _prepare_v2_backtest_data(
-        config_path=config_path,
-        source=source,
-        universe_file=universe_file,
-        universe_limit=universe_limit,
+        config_path=str(settings.get("config_path", config_path)),
+        source=str(settings.get("source", source)) if settings.get("source", source) is not None else None,
+        universe_file=str(settings.get("universe_file", universe_file))
+        if settings.get("universe_file", universe_file) is not None
+        else None,
+        universe_limit=(
+            int(settings.get("universe_limit"))
+            if settings.get("universe_limit") is not None
+            else universe_limit
+        ),
+        universe_tier=str(settings.get("universe_tier", universe_tier)),
+        cache_root=cache_root,
     )
     if prepared is None:
         return None
@@ -2996,10 +3278,12 @@ def _execute_v2_backtest_trajectory(
         prev_cash = next_cash
 
         if capture_learning_rows:
-            target_exposure, target_positions, target_turnover = _derive_learning_targets(
+            target_exposure, target_positions, target_turnover, sample_weight = _derive_learning_targets(
                 state=step.composite_state,
                 stock_frames=trajectory.prepared.stock_frames,
                 date=step.date,
+                horizon_metrics=step.horizon_metrics,
+                universe_tier=trajectory.prepared.settings.get("universe_tier"),
             )
             row = {
                 name: float(value)
@@ -3010,6 +3294,7 @@ def _execute_v2_backtest_trajectory(
                     "target_exposure": float(target_exposure),
                     "target_positions": float(target_positions),
                     "target_turnover": float(target_turnover),
+                    "sample_weight": float(sample_weight),
                 }
             )
             learning_rows.append(row)
@@ -3041,6 +3326,7 @@ def _run_v2_backtest_core(
     source: str | None = None,
     universe_file: str | None = None,
     universe_limit: int | None = None,
+    universe_tier: str | None = None,
     policy_spec: PolicySpec | None = None,
     learned_policy: LearnedPolicyModel | None = None,
     retrain_days: int = 20,
@@ -3059,6 +3345,7 @@ def _run_v2_backtest_core(
             source=source,
             universe_file=universe_file,
             universe_limit=universe_limit,
+            universe_tier=universe_tier,
             retrain_days=retrain_days,
             cache_root=cache_root,
             refresh_cache=refresh_cache,
@@ -3084,6 +3371,7 @@ def run_v2_backtest_live(
     source: str | None = None,
     universe_file: str | None = None,
     universe_limit: int | None = None,
+    universe_tier: str | None = None,
     policy_spec: PolicySpec | None = None,
     learned_policy: LearnedPolicyModel | None = None,
     retrain_days: int = 20,
@@ -3100,6 +3388,7 @@ def run_v2_backtest_live(
         source=source,
         universe_file=universe_file,
         universe_limit=universe_limit,
+        universe_tier=universe_tier,
         policy_spec=policy_spec,
         learned_policy=learned_policy,
         retrain_days=retrain_days,
@@ -3121,6 +3410,7 @@ def calibrate_v2_policy(
     source: str | None = None,
     universe_file: str | None = None,
     universe_limit: int | None = None,
+    universe_tier: str | None = None,
     baseline: V2BacktestSummary | None = None,
     trajectory: _BacktestTrajectory | None = None,
     cache_root: str = "artifacts/v2/cache",
@@ -3147,6 +3437,7 @@ def calibrate_v2_policy(
         source=source,
         universe_file=universe_file,
         universe_limit=universe_limit,
+        universe_tier=universe_tier,
         policy_spec=baseline_spec,
         trajectory=trajectory,
         cache_root=cache_root,
@@ -3214,6 +3505,7 @@ def calibrate_v2_policy(
             source=source,
             universe_file=universe_file,
             universe_limit=universe_limit,
+            universe_tier=universe_tier,
             policy_spec=spec,
             trajectory=trajectory,
             cache_root=cache_root,
@@ -3249,6 +3541,7 @@ def learn_v2_policy_model(
     source: str | None = None,
     universe_file: str | None = None,
     universe_limit: int | None = None,
+    universe_tier: str | None = None,
     l2: float = 1.0,
     baseline: V2BacktestSummary | None = None,
     trajectory: _BacktestTrajectory | None = None,
@@ -3266,6 +3559,7 @@ def learn_v2_policy_model(
         source=source,
         universe_file=universe_file,
         universe_limit=universe_limit,
+        universe_tier=universe_tier,
         trajectory=evaluation_trajectory,
         cache_root=cache_root,
         refresh_cache=refresh_cache,
@@ -3277,6 +3571,7 @@ def learn_v2_policy_model(
         source=source,
         universe_file=universe_file,
         universe_limit=universe_limit,
+        universe_tier=universe_tier,
         capture_learning_rows=True,
         trajectory=fit_trajectory,
         cache_root=cache_root,
@@ -3304,6 +3599,7 @@ def learn_v2_policy_model(
             source=source,
             universe_file=universe_file,
             universe_limit=universe_limit,
+            universe_tier=universe_tier,
             learned_policy=model,
             trajectory=evaluation_trajectory,
             cache_root=cache_root,
@@ -3316,10 +3612,11 @@ def learn_v2_policy_model(
     y_exposure = np.asarray([float(row["target_exposure"]) for row in rows], dtype=float)
     y_positions = np.asarray([float(row["target_positions"]) for row in rows], dtype=float)
     y_turnover = np.asarray([float(row["target_turnover"]) for row in rows], dtype=float)
+    sample_weight = np.asarray([float(row.get("sample_weight", 1.0)) for row in rows], dtype=float)
 
-    exp_b, exp_w = _fit_ridge_regression(X, y_exposure, l2=l2)
-    pos_b, pos_w = _fit_ridge_regression(X, y_positions, l2=l2)
-    turn_b, turn_w = _fit_ridge_regression(X, y_turnover, l2=l2)
+    exp_b, exp_w = _fit_ridge_regression(X, y_exposure, l2=l2, sample_weight=sample_weight)
+    pos_b, pos_w = _fit_ridge_regression(X, y_positions, l2=l2, sample_weight=sample_weight)
+    turn_b, turn_w = _fit_ridge_regression(X, y_turnover, l2=l2, sample_weight=sample_weight)
 
     pred_exp = np.asarray([_predict_ridge(row, exp_b, exp_w) for row in X], dtype=float)
     pred_pos = np.asarray([_predict_ridge(row, pos_b, pos_w) for row in X], dtype=float)
@@ -3344,6 +3641,7 @@ def learn_v2_policy_model(
         source=source,
         universe_file=universe_file,
         universe_limit=universe_limit,
+        universe_tier=universe_tier,
         learned_policy=model,
         trajectory=evaluation_trajectory,
         cache_root=cache_root,
@@ -3403,6 +3701,7 @@ def run_v2_research_workflow(
     source: str | None = None,
     universe_file: str | None = None,
     universe_limit: int | None = None,
+    universe_tier: str | None = None,
     skip_calibration: bool = False,
     skip_learning: bool = False,
     cache_root: str = "artifacts/v2/cache",
@@ -3417,6 +3716,7 @@ def run_v2_research_workflow(
         source=source,
         universe_file=universe_file,
         universe_limit=universe_limit,
+        universe_tier=universe_tier,
         cache_root=cache_root,
         refresh_cache=refresh_cache,
         forecast_backend=forecast_backend,
@@ -3428,6 +3728,7 @@ def run_v2_research_workflow(
             source=source,
             universe_file=universe_file,
             universe_limit=universe_limit,
+            universe_tier=universe_tier,
             trajectory=None,
             cache_root=cache_root,
             refresh_cache=refresh_cache,
@@ -3450,6 +3751,7 @@ def run_v2_research_workflow(
         source=source,
         universe_file=universe_file,
         universe_limit=universe_limit,
+        universe_tier=universe_tier,
         trajectory=holdout_trajectory,
         cache_root=cache_root,
         refresh_cache=refresh_cache,
@@ -3464,6 +3766,7 @@ def run_v2_research_workflow(
             source=source,
             universe_file=universe_file,
             universe_limit=universe_limit,
+            universe_tier=universe_tier,
             trajectory=validation_trajectory,
             cache_root=cache_root,
             refresh_cache=refresh_cache,
@@ -3478,6 +3781,7 @@ def run_v2_research_workflow(
             source=source,
             universe_file=universe_file,
             universe_limit=universe_limit,
+            universe_tier=universe_tier,
             baseline=validation_baseline if validation_baseline is not None else baseline,
             trajectory=validation_trajectory,
             cache_root=cache_root,
@@ -3493,6 +3797,7 @@ def run_v2_research_workflow(
             source=source,
             universe_file=universe_file,
             universe_limit=universe_limit,
+            universe_tier=universe_tier,
             policy_spec=calibration.best_policy,
             trajectory=holdout_trajectory,
             cache_root=cache_root,
@@ -3517,6 +3822,7 @@ def run_v2_research_workflow(
             source=source,
             universe_file=universe_file,
             universe_limit=universe_limit,
+            universe_tier=universe_tier,
             baseline=baseline,
             trajectory=holdout_trajectory,
             fit_trajectory=validation_trajectory,
@@ -3531,6 +3837,77 @@ def run_v2_research_workflow(
     else:
         _emit_progress("research", "学习型策略评估完成")
     return baseline, calibration, learning
+
+
+def run_v2_research_matrix(
+    *,
+    strategy_id: str = "swing_v2",
+    config_path: str = "config/api.json",
+    source: str | None = None,
+    artifact_root: str = "artifacts/v2",
+    cache_root: str = "artifacts/v2/cache",
+    refresh_cache: bool = False,
+    forecast_backend: str = "linear",
+    split_mode: str = _DEFAULT_SPLIT_MODE,
+    embargo_days: int = _DEFAULT_EMBARGO_DAYS,
+    universe_tiers: Iterable[str] = ("favorites_16", "generated_80", "generated_150", "generated_300"),
+) -> dict[str, object]:
+    rows: list[dict[str, object]] = []
+    normalized_tiers = [normalize_universe_tier(item) for item in universe_tiers]
+    for tier_id in normalized_tiers:
+        _emit_progress("matrix", f"开始研究矩阵档位: {tier_id}")
+        baseline, calibration, learning = run_v2_research_workflow(
+            strategy_id=strategy_id,
+            config_path=config_path,
+            source=source,
+            universe_tier=tier_id,
+            cache_root=cache_root,
+            refresh_cache=refresh_cache,
+            forecast_backend=forecast_backend,
+            split_mode=split_mode,
+            embargo_days=embargo_days,
+        )
+        artifacts = publish_v2_research_artifacts(
+            strategy_id=strategy_id,
+            artifact_root=artifact_root,
+            config_path=config_path,
+            source=source,
+            universe_tier=tier_id,
+            baseline=baseline,
+            calibration=calibration,
+            learning=learning,
+            cache_root=cache_root,
+            forecast_backend=forecast_backend,
+            publish_forecast_models=True,
+            split_mode=split_mode,
+            embargo_days=embargo_days,
+        )
+        rows.append(
+            {
+                "universe_tier": tier_id,
+                "run_id": artifacts.get("run_id", ""),
+                "release_gate_passed": artifacts.get("release_gate_passed", "false"),
+                "default_switch_gate_passed": artifacts.get("default_switch_gate_passed", "false"),
+                "annual_return": float(learning.learned.annual_return),
+                "excess_annual_return": float(learning.learned.excess_annual_return),
+                "information_ratio": float(learning.learned.information_ratio),
+                "max_drawdown": float(learning.learned.max_drawdown),
+                "avg_turnover": float(learning.learned.avg_turnover),
+                "total_cost": float(learning.learned.total_cost),
+                "baseline_annual_return": float(baseline.annual_return),
+                "baseline_excess_annual_return": float(baseline.excess_annual_return),
+                "baseline_information_ratio": float(baseline.information_ratio),
+                "baseline_max_drawdown": float(baseline.max_drawdown),
+                "research_manifest": artifacts.get("research_manifest", ""),
+            }
+        )
+    return {
+        "strategy_id": str(strategy_id),
+        "split_mode": str(split_mode),
+        "embargo_days": int(embargo_days),
+        "forecast_backend": str(forecast_backend),
+        "rows": rows,
+    }
 
 
 def load_published_v2_policy_model(
@@ -3645,6 +4022,78 @@ def _pass_release_gate(
     return (len(reasons) == 0), reasons
 
 
+def _tier_latest_manifest_path(*, artifact_root: str, strategy_id: str, universe_tier: str) -> Path:
+    suffix = str(universe_tier).strip() or "custom"
+    if not str(universe_tier).strip():
+        return Path(str(artifact_root)) / str(strategy_id) / "latest_research_manifest.json"
+    return Path(str(artifact_root)) / str(strategy_id) / f"latest_research_manifest.{suffix}.json"
+
+
+def _tier_latest_policy_path(*, artifact_root: str, strategy_id: str, universe_tier: str) -> Path:
+    suffix = str(universe_tier).strip() or "custom"
+    if not str(universe_tier).strip():
+        return Path(str(artifact_root)) / str(strategy_id) / "latest_policy_model.json"
+    return Path(str(artifact_root)) / str(strategy_id) / f"latest_policy_model.{suffix}.json"
+
+
+def _summary_from_payload(template: V2BacktestSummary, payload: dict[str, object]) -> V2BacktestSummary:
+    base = asdict(template)
+    return V2BacktestSummary(
+        **{
+            **base,
+            **{k: v for k, v in payload.items() if k in base},
+        }
+    )
+
+
+def _load_backtest_payload_from_manifest(manifest_payload: dict[str, object], manifest_path: Path) -> dict[str, object]:
+    backtest_path = _path_from_manifest_entry(
+        manifest_payload.get("backtest_summary"),
+        run_dir=manifest_path.parent,
+    )
+    if backtest_path is None:
+        return {}
+    loaded = _load_json_dict(backtest_path)
+    return loaded if isinstance(loaded, dict) else {}
+
+
+def _load_backtest_payload_for_run(
+    *,
+    artifact_root: str,
+    strategy_id: str,
+    run_id: str,
+) -> dict[str, object]:
+    if not str(run_id).strip():
+        return {}
+    backtest_path = Path(str(artifact_root)) / str(strategy_id) / str(run_id).strip() / "backtest_summary.json"
+    loaded = _load_json_dict(backtest_path)
+    return loaded if isinstance(loaded, dict) else {}
+
+
+def _pass_default_switch_gate(
+    *,
+    baseline_reference: V2BacktestSummary,
+    candidate: V2BacktestSummary,
+) -> tuple[bool, list[str], dict[str, float]]:
+    reasons: list[str] = []
+    excess_delta = float(candidate.excess_annual_return) - float(baseline_reference.excess_annual_return)
+    ir_delta = float(candidate.information_ratio) - float(baseline_reference.information_ratio)
+    drawdown_diff = abs(float(candidate.max_drawdown)) - abs(float(baseline_reference.max_drawdown))
+    if not (
+        excess_delta >= float(_DEFAULT_SWITCH_GATE_THRESHOLD["excess_annual_return_delta_min"])
+        or ir_delta >= float(_DEFAULT_SWITCH_GATE_THRESHOLD["information_ratio_delta_min"])
+    ):
+        reasons.append("switch gate unmet: excess_annual_return < +2pp and information_ratio < +0.10 vs baseline reference")
+    if drawdown_diff > float(_DEFAULT_SWITCH_GATE_THRESHOLD["max_drawdown_worse_limit"]):
+        reasons.append("switch gate unmet: max_drawdown worse than baseline reference by > 2pp")
+    deltas = {
+        "excess_annual_return_delta": float(excess_delta),
+        "information_ratio_delta": float(ir_delta),
+        "max_drawdown_diff": float(drawdown_diff),
+    }
+    return (len(reasons) == 0), reasons, deltas
+
+
 def _load_research_manifest_for_daily(
     *,
     strategy_id: str,
@@ -3706,13 +4155,18 @@ def _build_snapshot_from_manifest(
         model_hashes=model_hashes,
     )
     universe_file = str(dataset_manifest.get("universe_file", settings.get("universe_file", "")))
-    universe_id = Path(universe_file).stem or Path(str(settings.get("universe_file", ""))).stem or "v2_universe"
+    universe_id = str(dataset_manifest.get("universe_id", "")).strip() or Path(universe_file).stem or Path(str(settings.get("universe_file", ""))).stem or "v2_universe"
     start = str(dataset_manifest.get("start", settings.get("start", "")))
     end = str(dataset_manifest.get("end", settings.get("end", "")))
     data_window = f"{start}~{end}" if start or end else ""
     return build_strategy_snapshot(
         strategy_id=strategy_id,
         universe_id=universe_id,
+        universe_size=int(dataset_manifest.get("universe_size", dataset_manifest.get("symbol_count", 0)) or 0),
+        universe_generation_rule=str(dataset_manifest.get("universe_generation_rule", "")),
+        source_universe_manifest_path=str(
+            dataset_manifest.get("source_universe_manifest_path", dataset_manifest.get("universe_file", ""))
+        ),
         run_id=run_id,
         data_window=data_window,
         model_hashes=model_hashes,
@@ -3733,6 +4187,7 @@ def publish_v2_research_artifacts(
     source: str | None = None,
     universe_file: str | None = None,
     universe_limit: int | None = None,
+    universe_tier: str | None = None,
     settings: dict[str, object] | None = None,
     baseline: V2BacktestSummary,
     calibration: V2CalibrationResult,
@@ -3749,28 +4204,30 @@ def publish_v2_research_artifacts(
         source=source,
         universe_file=universe_file,
         universe_limit=universe_limit,
+        universe_tier=universe_tier,
     )
-    settings = dict(settings)
+    settings = _resolve_v2_universe_settings(settings=dict(settings), cache_root=cache_root)
     run_id = datetime.now().strftime("%Y%m%d_%H%M%S")
     created_at = datetime.now().isoformat(timespec="seconds")
     base_dir = Path(str(artifact_root)) / str(strategy_id) / run_id
     base_dir.mkdir(parents=True, exist_ok=True)
-    symbols = []
     universe_path = Path(str(settings.get("universe_file", "")))
-    if universe_path.exists():
-        try:
-            raw = json.loads(universe_path.read_text(encoding="utf-8"))
-            if isinstance(raw, list):
-                symbols = [str(item) for item in raw]
-        except Exception:
-            symbols = []
+    symbols = [str(item) for item in settings.get("symbols", [])]
+    universe_tier_value = str(settings.get("universe_tier", "")).strip()
+    universe_id = str(settings.get("universe_id", "")).strip() or universe_tier_value or universe_path.stem or "v2_universe"
+    universe_size = int(settings.get("universe_size", len(symbols)) or len(symbols))
+    universe_generation_rule = str(settings.get("universe_generation_rule", "")).strip() or "external_universe_file"
+    source_universe_manifest_path = str(
+        settings.get("source_universe_manifest_path", settings.get("universe_file", ""))
+    )
+    active_default_universe_tier = str(settings.get("active_default_universe_tier", "favorites_16")).strip()
+    candidate_default_universe_tier = str(settings.get("candidate_default_universe_tier", "generated_80")).strip()
+    baseline_reference_run_id = str(settings.get("baseline_reference_run_id", "")).strip()
 
     config_hash = _stable_json_hash(settings)
     learning_manifest = asdict(learning.model)
     policy_hash = _stable_json_hash(learning_manifest)
-    universe_hash = _sha256_file(universe_path)
-    if not universe_hash:
-        universe_hash = _stable_json_hash(symbols)
+    universe_hash = str(settings.get("universe_hash", "")) or _sha256_file(universe_path) or _stable_json_hash(symbols)
     model_hashes = {
         "market_model": _sha256_text("mkt_lr_v2"),
         "sector_model": _sha256_text("sector_lr_v2"),
@@ -3833,6 +4290,7 @@ def publish_v2_research_artifacts(
                 if settings.get("universe_limit") is not None
                 else (int(universe_limit) if universe_limit is not None else None)
             ),
+            universe_tier=str(settings.get("universe_tier", universe_tier)),
             cache_root=cache_root,
             refresh_cache=False,
             forecast_backend=forecast_backend,
@@ -3873,14 +4331,21 @@ def publish_v2_research_artifacts(
         "config_path": str(settings.get("config_path", "")),
         "source": str(settings.get("source", "")),
         "watchlist": str(settings.get("watchlist", "")),
+        "universe_tier": universe_tier_value,
+        "universe_id": universe_id,
+        "universe_size": int(universe_size),
+        "universe_generation_rule": universe_generation_rule,
+        "source_universe_manifest_path": source_universe_manifest_path,
         "universe_file": str(settings.get("universe_file", "")),
         "universe_limit": int(settings.get("universe_limit", 0)),
         "start": str(settings.get("start", "")),
         "end": str(settings.get("end", "")),
         "symbols": symbols,
-        "symbol_count": len(symbols),
+        "symbol_count": int(settings.get("symbol_count", len(symbols))),
         "universe_hash": universe_hash,
         "config_hash": config_hash,
+        "active_default_universe_tier": active_default_universe_tier,
+        "candidate_default_universe_tier": candidate_default_universe_tier,
     }
     calibration_manifest = {
         "best_score": float(calibration.best_score),
@@ -3895,6 +4360,9 @@ def publish_v2_research_artifacts(
     }
     consistency_manifest = {
         "run_id": run_id,
+        "universe_tier": universe_tier_value,
+        "universe_id": universe_id,
+        "universe_size": int(universe_size),
         "split_mode": str(split_mode),
         "embargo_days": int(embargo_days),
         "train_window": train_window,
@@ -3908,6 +4376,7 @@ def publish_v2_research_artifacts(
     }
     rolling_oos_manifest = {
         "run_id": run_id,
+        "universe_tier": universe_tier_value,
         "windows": [
             {
                 "name": "window_1",
@@ -3940,6 +4409,16 @@ def publish_v2_research_artifacts(
     manifest_path = base_dir / "research_manifest.json"
     latest_policy_path = Path(str(artifact_root)) / str(strategy_id) / "latest_policy_model.json"
     latest_manifest_path = Path(str(artifact_root)) / str(strategy_id) / "latest_research_manifest.json"
+    tier_latest_policy_path = _tier_latest_policy_path(
+        artifact_root=artifact_root,
+        strategy_id=strategy_id,
+        universe_tier=universe_tier_value,
+    )
+    tier_latest_manifest_path = _tier_latest_manifest_path(
+        artifact_root=artifact_root,
+        strategy_id=strategy_id,
+        universe_tier=universe_tier_value,
+    )
     latest_policy_path.parent.mkdir(parents=True, exist_ok=True)
 
     dataset_path.write_text(json.dumps(dataset_manifest, ensure_ascii=False, indent=2), encoding="utf-8")
@@ -3956,30 +4435,16 @@ def publish_v2_research_artifacts(
         baseline=baseline_meta,
         candidate=learned_meta,
     )
-    previous_manifest = _load_json_dict(latest_manifest_path)
+    previous_manifest = _load_json_dict(tier_latest_manifest_path)
     previous_gate_ok = False
-    previous_reason = "missing previous latest manifest"
+    previous_reason = "missing previous same-tier latest manifest"
     if previous_manifest:
-        previous_backtest_path = _path_from_manifest_entry(
-            previous_manifest.get("backtest_summary"),
-            run_dir=latest_manifest_path.parent,
-        )
-        previous_backtest = _load_json_dict(previous_backtest_path) if previous_backtest_path is not None else {}
+        previous_backtest = _load_backtest_payload_from_manifest(previous_manifest, tier_latest_manifest_path)
         prev_baseline_payload = previous_backtest.get("baseline", {}) if isinstance(previous_backtest, dict) else {}
         prev_learned_payload = previous_backtest.get("learned", {}) if isinstance(previous_backtest, dict) else {}
         if isinstance(prev_baseline_payload, dict) and isinstance(prev_learned_payload, dict):
-            prev_baseline = V2BacktestSummary(
-                **{
-                    **asdict(baseline_meta),
-                    **{k: v for k, v in prev_baseline_payload.items() if k in asdict(baseline_meta)},
-                }
-            )
-            prev_learned = V2BacktestSummary(
-                **{
-                    **asdict(learned_meta),
-                    **{k: v for k, v in prev_learned_payload.items() if k in asdict(learned_meta)},
-                }
-            )
+            prev_baseline = _summary_from_payload(baseline_meta, prev_baseline_payload)
+            prev_learned = _summary_from_payload(learned_meta, prev_learned_payload)
             previous_gate_ok, previous_reasons = _pass_release_gate(
                 baseline=prev_baseline,
                 candidate=prev_learned,
@@ -3994,11 +4459,62 @@ def publish_v2_research_artifacts(
         "require_two_consecutive": True,
         "passed": bool(release_gate_passed),
     }
+    baseline_reference_payload = _load_backtest_payload_for_run(
+        artifact_root=artifact_root,
+        strategy_id=strategy_id,
+        run_id=baseline_reference_run_id,
+    )
+    baseline_reference_learned_payload = (
+        baseline_reference_payload.get("learned", {})
+        if isinstance(baseline_reference_payload, dict)
+        else {}
+    )
+    baseline_reference_summary = (
+        _summary_from_payload(learned_meta, baseline_reference_learned_payload)
+        if isinstance(baseline_reference_learned_payload, dict) and baseline_reference_learned_payload
+        else learned_meta
+    )
+    switch_current_ok = False
+    switch_current_reasons = ["switch gate skipped: not candidate default universe tier"]
+    switch_previous_ok = False
+    switch_previous_reason = "missing previous same-tier switch gate"
+    switch_deltas = {
+        "excess_annual_return_delta": 0.0,
+        "information_ratio_delta": 0.0,
+        "max_drawdown_diff": 0.0,
+    }
+    if universe_tier_value == candidate_default_universe_tier and baseline_reference_run_id:
+        switch_current_ok, switch_current_reasons, switch_deltas = _pass_default_switch_gate(
+            baseline_reference=baseline_reference_summary,
+            candidate=learned_meta,
+        )
+        if previous_manifest:
+            previous_switch_gate = previous_manifest.get("default_switch_gate", {})
+            if isinstance(previous_switch_gate, dict):
+                switch_previous_ok = bool(previous_switch_gate.get("current_passed", False))
+                switch_previous_reason = "" if switch_previous_ok else str(previous_switch_gate.get("current_reasons", ""))
+    default_switch_gate_passed = bool(release_gate_passed and switch_current_ok and switch_previous_ok)
+    default_switch_gate = {
+        "baseline_reference_run_id": baseline_reference_run_id,
+        "current_passed": bool(switch_current_ok),
+        "current_reasons": switch_current_reasons,
+        "previous_passed": bool(switch_previous_ok),
+        "previous_reason": switch_previous_reason,
+        "require_two_consecutive": True,
+        "deltas": switch_deltas,
+        "passed": bool(default_switch_gate_passed),
+    }
 
     manifest = {
         "run_id": run_id,
         "strategy_id": str(strategy_id),
         "created_at": created_at,
+        "baseline_reference_run_id": baseline_reference_run_id,
+        "universe_tier": universe_tier_value,
+        "universe_id": universe_id,
+        "universe_size": int(universe_size),
+        "universe_generation_rule": universe_generation_rule,
+        "source_universe_manifest_path": source_universe_manifest_path,
         "data_window": {
             "start": str(settings.get("start", "")),
             "end": str(settings.get("end", "")),
@@ -4020,18 +4536,37 @@ def publish_v2_research_artifacts(
         "rolling_oos_report": str(rolling_oos_path),
         "published_policy_model": str(latest_policy_path),
         "latest_research_manifest": str(latest_manifest_path),
+        "tier_published_policy_model": str(tier_latest_policy_path),
+        "tier_latest_research_manifest": str(tier_latest_manifest_path),
         "release_gate": release_gate,
+        "default_switch_gate": default_switch_gate,
     }
     manifest_path.write_text(json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8")
-    if update_latest and release_gate_passed:
+    tier_latest_manifest_path.write_text(json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8")
+    if gate_ok:
+        tier_latest_policy_path.write_text(json.dumps(learning_manifest, ensure_ascii=False, indent=2), encoding="utf-8")
+    allow_default_latest_update = bool(
+        not universe_tier_value or universe_tier_value == active_default_universe_tier
+    )
+    if update_latest and release_gate_passed and allow_default_latest_update:
         latest_policy_path.write_text(json.dumps(learning_manifest, ensure_ascii=False, indent=2), encoding="utf-8")
         latest_manifest_path.write_text(json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8")
+    elif update_latest and release_gate_passed and not allow_default_latest_update:
+        note = "当前为非默认股票池，本次只更新同 tier latest，不覆盖默认 latest"
+        if default_switch_gate_passed:
+            note += "；default_switch_gate 已通过，切换 `active_default_universe_tier` 后可升级默认"
+        _emit_progress("publish", note)
     elif not release_gate_passed:
         _emit_progress("publish", "门禁未通过，本次不更新 latest policy/manifest")
 
     return {
         "run_dir": str(base_dir),
         "run_id": run_id,
+        "baseline_reference_run_id": baseline_reference_run_id,
+        "universe_tier": universe_tier_value,
+        "universe_id": universe_id,
+        "universe_size": str(universe_size),
+        "source_universe_manifest_path": source_universe_manifest_path,
         "dataset_manifest": str(dataset_path),
         "policy_calibration": str(calibration_path),
         "learned_policy_model": str(learning_path),
@@ -4043,6 +4578,7 @@ def publish_v2_research_artifacts(
         "research_manifest": str(manifest_path),
         "published_policy_model": str(latest_policy_path),
         "release_gate_passed": "true" if release_gate_passed else "false",
+        "default_switch_gate_passed": "true" if default_switch_gate_passed else "false",
         "snapshot_hash": snapshot_hash,
         "config_hash": config_hash,
     }
@@ -4055,6 +4591,7 @@ def run_daily_v2_live(
     source: str | None = None,
     universe_file: str | None = None,
     universe_limit: int | None = None,
+    universe_tier: str | None = None,
     artifact_root: str = "artifacts/v2",
     cache_root: str = "artifacts/v2/cache",
     refresh_cache: bool = False,
@@ -4067,7 +4604,9 @@ def run_daily_v2_live(
         source=source,
         universe_file=universe_file,
         universe_limit=universe_limit,
+        universe_tier=universe_tier,
     )
+    settings = _resolve_v2_universe_settings(settings=settings, cache_root=cache_root)
     manifest: dict[str, object] = {}
     manifest_path: Path | None = None
     try:
@@ -4110,6 +4649,48 @@ def run_daily_v2_live(
     else:
         _emit_progress("daily", "日运行缓存未命中，开始重建")
     if manifest and manifest_path is not None:
+        dataset_path = _path_from_manifest_entry(manifest.get("dataset_manifest"), run_dir=manifest_path.parent)
+        dataset_manifest = _load_json_dict(dataset_path) if dataset_path is not None else {}
+        if dataset_manifest:
+            manifest_universe_tier = str(dataset_manifest.get("universe_tier", "")).strip()
+            manifest_universe_file = str(dataset_manifest.get("universe_file", "")).strip()
+            requested_universe_tier = str(settings.get("universe_tier", "")).strip()
+            requested_universe_file = str(settings.get("universe_file", "")).strip()
+            if universe_tier is not None and requested_universe_tier and manifest_universe_tier and requested_universe_tier != manifest_universe_tier:
+                raise ValueError(
+                    f"universe tier mismatch: requested={requested_universe_tier}, manifest={manifest_universe_tier}"
+                )
+            if universe_file is not None and requested_universe_file and manifest_universe_file:
+                requested_path = str(Path(requested_universe_file).resolve())
+                manifest_path_resolved = str(Path(manifest_universe_file).resolve())
+                if requested_path != manifest_path_resolved:
+                    raise ValueError(
+                        f"universe file mismatch: requested={requested_path}, manifest={manifest_path_resolved}"
+                    )
+            settings["universe_file"] = str(
+                dataset_manifest.get("universe_file", settings.get("universe_file", ""))
+            )
+            settings["universe_limit"] = int(
+                dataset_manifest.get("universe_limit", settings.get("universe_limit", 0))
+            )
+            settings["universe_tier"] = str(dataset_manifest.get("universe_tier", settings.get("universe_tier", "")))
+            settings["universe_id"] = str(dataset_manifest.get("universe_id", settings.get("universe_id", "")))
+            settings["universe_size"] = int(
+                dataset_manifest.get("universe_size", dataset_manifest.get("symbol_count", settings.get("universe_size", 0)))
+            )
+            settings["universe_generation_rule"] = str(
+                dataset_manifest.get("universe_generation_rule", settings.get("universe_generation_rule", ""))
+            )
+            settings["source_universe_manifest_path"] = str(
+                dataset_manifest.get("source_universe_manifest_path", settings.get("source_universe_manifest_path", ""))
+            )
+            settings["symbols"] = [
+                str(item)
+                for item in dataset_manifest.get("symbols", settings.get("symbols", []))
+                if str(item).strip()
+            ]
+            settings["symbol_count"] = int(dataset_manifest.get("symbol_count", len(settings["symbols"])))
+            settings["universe_hash"] = str(dataset_manifest.get("universe_hash", settings.get("universe_hash", "")))
         snapshot = _build_snapshot_from_manifest(
             strategy_id=strategy_id,
             settings=settings,
@@ -4120,11 +4701,16 @@ def run_daily_v2_live(
         data_window = f"{settings.get('start', '')}~{settings.get('end', '')}"
         snapshot = build_strategy_snapshot(
             strategy_id=strategy_id,
-            universe_id=Path(str(settings["universe_file"])).stem or "v2_universe",
+            universe_id=str(settings.get("universe_id", "")).strip() or Path(str(settings["universe_file"])).stem or "v2_universe",
+            universe_size=int(settings.get("universe_size", settings.get("symbol_count", 0)) or 0),
+            universe_generation_rule=str(settings.get("universe_generation_rule", "")),
+            source_universe_manifest_path=str(
+                settings.get("source_universe_manifest_path", settings.get("universe_file", ""))
+            ),
             run_id=resolved_run_id,
             data_window=data_window,
             config_hash=_stable_json_hash(settings),
-            universe_hash=_sha256_file(settings.get("universe_file", "")),
+            universe_hash=str(settings.get("universe_hash", "")) or _sha256_file(settings.get("universe_file", "")),
         )
 
     _emit_progress("daily", "加载观察池与候选股票池")
@@ -4326,6 +4912,10 @@ def summarize_daily_run(result: DailyRunResult) -> dict[str, object]:
     }
     return {
         "strategy_id": result.snapshot.strategy_id,
+        "universe_id": result.snapshot.universe_id,
+        "universe_size": result.snapshot.universe_size,
+        "universe_generation_rule": result.snapshot.universe_generation_rule,
+        "source_universe_manifest_path": result.snapshot.source_universe_manifest_path,
         "run_id": result.run_id or result.snapshot.run_id,
         "snapshot_hash": result.snapshot_hash or result.snapshot.snapshot_hash,
         "config_hash": result.config_hash or result.snapshot.config_hash,

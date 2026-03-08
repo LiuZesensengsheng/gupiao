@@ -23,6 +23,7 @@ from src.application.v2_services import (
     _BacktestTrajectory,
     _TrajectoryStep,
     _build_date_slice_index,
+    _derive_learning_targets,
     calibrate_v2_policy,
     _load_or_build_v2_backtest_trajectory,
     _make_forecast_backend,
@@ -134,6 +135,97 @@ def test_policy_model_projects_state_into_valid_policy_spec() -> None:
     assert 0.10 <= spec.risk_on_turnover_cap <= 0.45
 
 
+def test_generated_80_learning_targets_prefer_realizable_alpha_and_ranking() -> None:
+    date = pd.Timestamp("2026-03-01")
+    strong_state = CompositeState(
+        market=MarketForecastState(
+            as_of_date="2026-03-01",
+            up_1d_prob=0.56,
+            up_5d_prob=0.58,
+            up_20d_prob=0.60,
+            trend_state="trend",
+            drawdown_risk=0.20,
+            volatility_regime="normal",
+            liquidity_stress=0.18,
+        ),
+        cross_section=CrossSectionForecastState(
+            as_of_date="2026-03-01",
+            large_vs_small_bias=0.02,
+            growth_vs_value_bias=-0.01,
+            fund_flow_strength=0.10,
+            margin_risk_on_score=0.09,
+            breadth_strength=0.18,
+            leader_participation=0.62,
+            weak_stock_ratio=0.24,
+        ),
+        sectors=[
+            SectorForecastState("有色", 0.58, 0.63, 0.18, 0.22, 0.18),
+            SectorForecastState("化工", 0.55, 0.59, 0.10, 0.24, 0.16),
+        ],
+        stocks=[
+            StockForecastState("A1", "有色", 0.60, 0.65, 0.72, 0.62, 0.30, 0.92, alpha_score=0.72),
+            StockForecastState("A2", "有色", 0.58, 0.62, 0.68, 0.60, 0.24, 0.90, alpha_score=0.67),
+            StockForecastState("B1", "化工", 0.55, 0.58, 0.62, 0.55, 0.14, 0.86, alpha_score=0.58),
+            StockForecastState("B2", "化工", 0.53, 0.56, 0.60, 0.53, 0.10, 0.84, alpha_score=0.56),
+        ],
+        strategy_mode="trend_follow",
+        risk_regime="risk_on",
+    )
+    weak_state = CompositeState(
+        market=strong_state.market,
+        cross_section=CrossSectionForecastState(
+            as_of_date="2026-03-01",
+            large_vs_small_bias=0.02,
+            growth_vs_value_bias=-0.01,
+            fund_flow_strength=0.02,
+            margin_risk_on_score=0.04,
+            breadth_strength=0.06,
+            leader_participation=0.48,
+            weak_stock_ratio=0.58,
+        ),
+        sectors=strong_state.sectors,
+        stocks=[
+            StockForecastState("C1", "有色", 0.68, 0.71, 0.74, 0.51, 0.01, 0.82, alpha_score=0.53),
+            StockForecastState("C2", "有色", 0.67, 0.70, 0.73, 0.50, 0.00, 0.80, alpha_score=0.52),
+            StockForecastState("D1", "化工", 0.66, 0.69, 0.72, 0.49, -0.01, 0.80, alpha_score=0.51),
+            StockForecastState("D2", "化工", 0.65, 0.68, 0.71, 0.48, -0.02, 0.78, alpha_score=0.50),
+        ],
+        strategy_mode="trend_follow",
+        risk_regime="risk_on",
+    )
+    strong_frames = {
+        "A1": pd.DataFrame([{"date": date, "fwd_ret_1": 0.020, "excess_ret_1_vs_mkt": 0.015, "excess_ret_5_vs_mkt": 0.030, "excess_ret_20_vs_sector": 0.050}]),
+        "A2": pd.DataFrame([{"date": date, "fwd_ret_1": 0.016, "excess_ret_1_vs_mkt": 0.012, "excess_ret_5_vs_mkt": 0.024, "excess_ret_20_vs_sector": 0.040}]),
+        "B1": pd.DataFrame([{"date": date, "fwd_ret_1": 0.010, "excess_ret_1_vs_mkt": 0.006, "excess_ret_5_vs_mkt": 0.014, "excess_ret_20_vs_sector": 0.022}]),
+        "B2": pd.DataFrame([{"date": date, "fwd_ret_1": 0.008, "excess_ret_1_vs_mkt": 0.004, "excess_ret_5_vs_mkt": 0.010, "excess_ret_20_vs_sector": 0.018}]),
+    }
+    weak_frames = {
+        "C1": pd.DataFrame([{"date": date, "fwd_ret_1": 0.030, "excess_ret_1_vs_mkt": -0.003, "excess_ret_5_vs_mkt": -0.004, "excess_ret_20_vs_sector": -0.006}]),
+        "C2": pd.DataFrame([{"date": date, "fwd_ret_1": 0.028, "excess_ret_1_vs_mkt": -0.004, "excess_ret_5_vs_mkt": -0.006, "excess_ret_20_vs_sector": -0.008}]),
+        "D1": pd.DataFrame([{"date": date, "fwd_ret_1": 0.026, "excess_ret_1_vs_mkt": -0.005, "excess_ret_5_vs_mkt": -0.007, "excess_ret_20_vs_sector": -0.010}]),
+        "D2": pd.DataFrame([{"date": date, "fwd_ret_1": 0.024, "excess_ret_1_vs_mkt": -0.006, "excess_ret_5_vs_mkt": -0.008, "excess_ret_20_vs_sector": -0.012}]),
+    }
+    strong_targets = _derive_learning_targets(
+        state=strong_state,
+        stock_frames=strong_frames,
+        date=date,
+        horizon_metrics={"20d": {"rank_ic": 0.16, "top_bottom_spread": 0.09, "top_k_hit_rate": 0.72}},
+        universe_tier="generated_80",
+    )
+    weak_targets = _derive_learning_targets(
+        state=weak_state,
+        stock_frames=weak_frames,
+        date=date,
+        horizon_metrics={"20d": {"rank_ic": -0.03, "top_bottom_spread": -0.01, "top_k_hit_rate": 0.48}},
+        universe_tier="generated_80",
+    )
+
+    assert strong_targets[0] > weak_targets[0]
+    assert strong_targets[1] >= weak_targets[1]
+    assert strong_targets[2] >= weak_targets[2]
+    assert strong_targets[3] > weak_targets[3]
+
+
 def test_publish_artifacts_writes_and_loads_latest_policy(tmp_path: Path) -> None:
     baseline = _make_backtest(0.20, 0.18)
     calibrated = _make_backtest(0.22, 0.20)
@@ -203,6 +295,119 @@ def test_publish_artifacts_writes_and_loads_latest_policy(tmp_path: Path) -> Non
     assert loaded.train_rows == 88
     assert loaded.exposure_coef == [0.1, 0.2]
     assert paths["release_gate_passed"] == "true"
+
+
+def test_publish_artifacts_records_universe_metadata_and_keeps_non_default_latest_isolated(tmp_path: Path) -> None:
+    baseline = _make_backtest(0.20, 0.18)
+    calibrated = _make_backtest(0.22, 0.20)
+    learned = _make_backtest(0.24, 0.22)
+    learning_result = V2PolicyLearningResult(
+        model=LearnedPolicyModel(
+            feature_names=["x1"],
+            exposure_intercept=0.55,
+            exposure_coef=[0.1],
+            position_intercept=2.5,
+            position_coef=[0.05],
+            turnover_intercept=0.20,
+            turnover_coef=[0.01],
+            train_rows=88,
+            train_r2_exposure=0.33,
+            train_r2_positions=0.25,
+            train_r2_turnover=0.19,
+        ),
+        baseline=baseline,
+        learned=learned,
+    )
+    calibration = V2CalibrationResult(
+        best_policy=PolicySpec(),
+        best_score=0.12,
+        baseline=baseline,
+        calibrated=calibrated,
+        trials=[],
+    )
+    data_dir = tmp_path / "data"
+    data_dir.mkdir(parents=True, exist_ok=True)
+    dates = pd.date_range("2022-01-01", periods=520, freq="B")
+    for symbol, amount in [("000001.SZ", 8.0e7), ("000002.SZ", 6.0e7), ("000003.SZ", 4.0e7)]:
+        pd.DataFrame(
+            {
+                "date": dates,
+                "open": 10.0,
+                "high": 10.2,
+                "low": 9.8,
+                "close": 10.0,
+                "volume": 1000000,
+                "amount": amount,
+                "symbol": symbol,
+            }
+        ).to_csv(data_dir / f"{symbol}.csv", index=False)
+    favorites = tmp_path / "favorites.json"
+    favorites.write_text(
+        json.dumps(
+            {
+                "stocks": [
+                    {"symbol": "000001.SZ", "name": "A", "sector": "其他"},
+                    {"symbol": "000002.SZ", "name": "B", "sector": "其他"},
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+    generated_base = tmp_path / "base.json"
+    generated_base.write_text(
+        json.dumps(
+            {
+                "stocks": [
+                    {"symbol": "000001.SZ", "name": "A", "sector": "其他"},
+                    {"symbol": "000002.SZ", "name": "B", "sector": "其他"},
+                    {"symbol": "000003.SZ", "name": "C", "sector": "其他"},
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+    baseline_ref_dir = tmp_path / "swing_v2" / "20260308_211808"
+    baseline_ref_dir.mkdir(parents=True, exist_ok=True)
+    (baseline_ref_dir / "backtest_summary.json").write_text(
+        json.dumps({"learned": asdict(_make_backtest(0.30, 0.28))}),
+        encoding="utf-8",
+    )
+
+    paths = publish_v2_research_artifacts(
+        strategy_id="swing_v2",
+        artifact_root=str(tmp_path),
+        cache_root=str(tmp_path / "cache"),
+        publish_forecast_models=False,
+        settings={
+            "config_path": "config/api.json",
+            "source": "local",
+            "watchlist": "config/watchlist.json",
+            "data_dir": str(data_dir),
+            "start": "2024-01-01",
+            "end": "2024-12-31",
+            "universe_tier": "generated_80",
+            "active_default_universe_tier": "favorites_16",
+            "candidate_default_universe_tier": "generated_80",
+            "favorites_universe_file": str(favorites),
+            "generated_universe_base_file": str(generated_base),
+            "baseline_reference_run_id": "20260308_211808",
+        },
+        baseline=baseline,
+        calibration=calibration,
+        learning=learning_result,
+    )
+
+    dataset_manifest = json.loads(Path(paths["dataset_manifest"]).read_text(encoding="utf-8"))
+    assert dataset_manifest["universe_tier"] == "generated_80"
+    assert dataset_manifest["universe_id"] == "generated_80"
+    assert dataset_manifest["symbol_count"] == 3
+    assert len(dataset_manifest["symbols"]) == 3
+    assert dataset_manifest["source_universe_manifest_path"]
+
+    manifest = json.loads(Path(paths["research_manifest"]).read_text(encoding="utf-8"))
+    assert manifest["default_switch_gate"]["passed"] is False
+    assert not (tmp_path / "swing_v2" / "latest_research_manifest.json").exists()
+    assert (tmp_path / "swing_v2" / "latest_research_manifest.generated_80.json").exists()
 
 
 def test_backtest_summary_carries_cross_section_metrics() -> None:

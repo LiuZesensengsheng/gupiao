@@ -117,6 +117,9 @@ class StrategySnapshot:
     cross_section_model_id: str
     policy_version: str
     execution_version: str
+    universe_size: int = 0
+    universe_generation_rule: str = ""
+    source_universe_manifest_path: str = ""
     run_id: str = ""
     data_window: str = ""
     model_hashes: Dict[str, str] = field(default_factory=dict)

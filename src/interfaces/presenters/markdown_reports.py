@@ -462,8 +462,14 @@ def write_v2_daily_report(out_path: str | Path, result: V2DailyRunResult) -> Pat
     lines.append(f"- 策略ID: {result.snapshot.strategy_id}")
     lines.append(f"- artifact run_id: {result.run_id or result.snapshot.run_id or 'NA'}")
     lines.append(f"- 股票池: {result.snapshot.universe_id}")
+    if result.snapshot.universe_size:
+        lines.append(f"- 股票池规模: {result.snapshot.universe_size}")
+    if result.snapshot.universe_generation_rule:
+        lines.append(f"- 股票池规则: {result.snapshot.universe_generation_rule}")
     if result.snapshot.data_window:
         lines.append(f"- 数据窗口: {result.snapshot.data_window}")
+    if result.snapshot.source_universe_manifest_path:
+        lines.append(f"- source universe manifest path: {result.snapshot.source_universe_manifest_path}")
     if result.snapshot.manifest_path:
         lines.append(f"- source manifest path: {result.snapshot.manifest_path}")
     if result.snapshot.snapshot_hash or result.snapshot.config_hash:
@@ -593,10 +599,16 @@ def write_v2_research_report(
     lines.append(f"- 策略ID: {strategy_id}")
     if artifacts is not None:
         lines.append(f"- artifact run_id: {artifacts.get('run_id', 'NA')}")
+        lines.append(f"- baseline reference run_id: {artifacts.get('baseline_reference_run_id', 'NA')}")
+        lines.append(f"- universe tier: {artifacts.get('universe_tier', 'NA')}")
+        lines.append(f"- universe id: {artifacts.get('universe_id', 'NA')}")
+        lines.append(f"- universe size: {artifacts.get('universe_size', 'NA')}")
+        lines.append(f"- source universe manifest path: {artifacts.get('source_universe_manifest_path', 'NA')}")
         lines.append(f"- source manifest path: {artifacts.get('research_manifest', 'NA')}")
         lines.append(f"- snapshot_hash: {artifacts.get('snapshot_hash', 'NA')}")
         lines.append(f"- config_hash: {artifacts.get('config_hash', 'NA')}")
         lines.append(f"- release gate passed: {artifacts.get('release_gate_passed', 'false')}")
+        lines.append(f"- default switch gate passed: {artifacts.get('default_switch_gate_passed', 'false')}")
     lines.append("")
     lines.append("## 基线回测（留出集 Holdout）")
     lines.append("")
