@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 from typing import Sequence
 
@@ -45,6 +46,17 @@ def _to_int(v: float) -> str:
     if pd.isna(v):
         return "NA"
     return str(int(round(float(v))))
+
+
+def _load_json_report(path_like: object) -> dict[str, object]:
+    path = Path(str(path_like))
+    if not path.exists():
+        return {}
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return {}
+    return payload if isinstance(payload, dict) else {}
 
 
 def _append_horizon_metrics_table(
@@ -470,6 +482,11 @@ def write_v2_daily_report(out_path: str | Path, result: V2DailyRunResult) -> Pat
         lines.append(f"- 数据窗口: {result.snapshot.data_window}")
     if result.snapshot.source_universe_manifest_path:
         lines.append(f"- source universe manifest path: {result.snapshot.source_universe_manifest_path}")
+    if result.info_manifest_path or result.snapshot.info_manifest_path:
+        lines.append(f"- info manifest path: {result.info_manifest_path or result.snapshot.info_manifest_path}")
+    if result.info_hash or result.snapshot.info_hash:
+        lines.append(f"- info_hash: {result.info_hash or result.snapshot.info_hash}")
+    lines.append(f"- info shadow enabled: {'true' if (result.info_shadow_enabled or result.snapshot.info_shadow_enabled) else 'false'}")
     if result.snapshot.manifest_path:
         lines.append(f"- source manifest path: {result.snapshot.manifest_path}")
     if result.snapshot.snapshot_hash or result.snapshot.config_hash:
@@ -493,6 +510,54 @@ def write_v2_daily_report(out_path: str | Path, result: V2DailyRunResult) -> Pat
     lines.append(f"| 波动状态 | {result.composite_state.market.volatility_regime} |")
     lines.append(f"| 流动性压力 | {_to_percent(result.composite_state.market.liquidity_stress)} |")
     lines.append("")
+    if result.info_shadow_enabled:
+        lines.append("## 信息摘要")
+        lines.append("")
+        lines.append("| 指标 | 数值 |")
+        lines.append("|---|---:|")
+        lines.append(f"| 信息条数 | {result.info_item_count} |")
+        lines.append(f"| 市场短期信息分 | {_to_float(result.composite_state.market_info_state.short_score, 3)} |")
+        lines.append(f"| 市场中期信息分 | {_to_float(result.composite_state.market_info_state.mid_score, 3)} |")
+        lines.append(f"| 市场负面事件风险 | {_to_percent(result.composite_state.market_info_state.negative_event_risk)} |")
+        lines.append(f"| 市场信息1日概率 | {_to_percent(result.composite_state.market_info_state.info_prob_1d)} |")
+        lines.append(f"| 市场信息20日概率 | {_to_percent(result.composite_state.market_info_state.info_prob_20d)} |")
+        lines.append("")
+        lines.append("### Top Negative Events")
+        lines.append("")
+        lines.append("| 目标 | 类型 | 方向 | 标签 | 标题 | 风险 |")
+        lines.append("|---|---|---|---|---|---:|")
+        if not result.top_negative_info_events:
+            lines.append("| 无 | NA | NA | NA | NA | NA |")
+        else:
+            for item in result.top_negative_info_events:
+                lines.append(
+                    f"| {item.target_name} | {item.info_type} | {item.direction} | {item.event_tag or 'NA'} | {item.title or 'NA'} | {_to_percent(item.negative_event_risk)} |"
+                )
+        lines.append("")
+        lines.append("### Top Positive Stock Info Signals")
+        lines.append("")
+        lines.append("| 股票 | 分数 | 负面风险 |")
+        lines.append("|---|---:|---:|")
+        if not result.top_positive_info_signals:
+            lines.append("| 无 | NA | NA |")
+        else:
+            for item in result.top_positive_info_signals:
+                lines.append(
+                    f"| {item.target_name} | {_to_float(item.score, 3)} | {_to_percent(item.negative_event_risk)} |"
+                )
+        lines.append("")
+        lines.append("### Quant / Info Divergence")
+        lines.append("")
+        lines.append("| 股票 | Quant20日 | Info20日 | Shadow20日 | 差值 |")
+        lines.append("|---|---:|---:|---:|---:|")
+        if not result.quant_info_divergence:
+            lines.append("| 无 | NA | NA | NA | NA |")
+        else:
+            for item in result.quant_info_divergence:
+                lines.append(
+                    f"| {item.name} | {_to_percent(item.quant_prob_20d)} | {_to_percent(item.info_prob_20d)} | {_to_percent(item.shadow_prob_20d)} | {_to_percent(item.gap)} |"
+                )
+        lines.append("")
     lines.append("## 横截面状态")
     lines.append("")
     lines.append("| 指标 | 数值 |")
@@ -604,6 +669,9 @@ def write_v2_research_report(
         lines.append(f"- universe id: {artifacts.get('universe_id', 'NA')}")
         lines.append(f"- universe size: {artifacts.get('universe_size', 'NA')}")
         lines.append(f"- source universe manifest path: {artifacts.get('source_universe_manifest_path', 'NA')}")
+        lines.append(f"- info manifest path: {artifacts.get('info_manifest', 'NA')}")
+        lines.append(f"- info_hash: {artifacts.get('info_hash', 'NA')}")
+        lines.append(f"- info shadow enabled: {artifacts.get('info_shadow_enabled', 'false')}")
         lines.append(f"- source manifest path: {artifacts.get('research_manifest', 'NA')}")
         lines.append(f"- snapshot_hash: {artifacts.get('snapshot_hash', 'NA')}")
         lines.append(f"- config_hash: {artifacts.get('config_hash', 'NA')}")
@@ -705,6 +773,51 @@ def write_v2_research_report(
             ("学习", learning.learned),
         ],
     )
+    if artifacts:
+        info_manifest = _load_json_report(artifacts.get("info_manifest", ""))
+        info_shadow = _load_json_report(artifacts.get("info_shadow_report", ""))
+        lines.append("## 信息影子评估")
+        lines.append("")
+        lines.append(f"- 信息条数: {info_manifest.get('info_item_count', 0)}")
+        lines.append(f"- 信息类型分布: {info_manifest.get('info_type_counts', {})}")
+        lines.append(f"- 覆盖摘要: {info_manifest.get('coverage_summary', {})}")
+        lines.append("")
+        lines.append("| 方案 | 20日RankIC | 20日头尾价差 | 事件日命中率 |")
+        lines.append("|---|---:|---:|---:|")
+        quant_only = info_shadow.get("quant_only", {}) if isinstance(info_shadow, dict) else {}
+        shadow_only = info_shadow.get("quant_plus_info_shadow", {}) if isinstance(info_shadow, dict) else {}
+        lines.append(
+            f"| quant_only | {_to_float(float(quant_only.get('avg_20d_rank_ic', 0.0)), 3)} | {_to_percent(float(quant_only.get('avg_20d_top_bottom_spread', 0.0)))} | {_to_percent(float(quant_only.get('event_day_hit_rate', 0.0)))} |"
+        )
+        lines.append(
+            f"| quant_plus_info_shadow | {_to_float(float(shadow_only.get('avg_20d_rank_ic', 0.0)), 3)} | {_to_percent(float(shadow_only.get('avg_20d_top_bottom_spread', 0.0)))} | {_to_percent(float(shadow_only.get('event_day_hit_rate', 0.0)))} |"
+        )
+        lines.append("")
+        lines.append("### Top Positive Shadow Delta")
+        lines.append("")
+        lines.append("| 股票 | 板块 | Delta | 负面风险 | 条数 |")
+        lines.append("|---|---|---:|---:|---:|")
+        top_positive = info_shadow.get("top_positive_stock_deltas", []) if isinstance(info_shadow, dict) else []
+        if not top_positive:
+            lines.append("| 无 | NA | NA | NA | NA |")
+        else:
+            for item in top_positive:
+                if not isinstance(item, dict):
+                    continue
+                lines.append(
+                    f"| {item.get('symbol', 'NA')} | {item.get('sector', 'NA')} | {_to_float(float(item.get('delta', 0.0)), 3)} | {_to_percent(float(item.get('negative_event_risk', 0.0)))} | {int(item.get('item_count', 0))} |"
+                )
+        lines.append("")
+        lines.append("### Event Tag Distribution")
+        lines.append("")
+        lines.append("| 标签 | 数量 |")
+        lines.append("|---|---:|")
+        event_dist = info_shadow.get("event_tag_distribution", {}) if isinstance(info_shadow, dict) else {}
+        if not event_dist:
+            lines.append("| 无 | 0 |")
+        else:
+            for key, value in event_dist.items():
+                lines.append(f"| {key} | {value} |")
     if artifacts:
         lines.append("")
         lines.append("## 研究产物")

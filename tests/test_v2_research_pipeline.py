@@ -297,7 +297,10 @@ def test_publish_artifacts_writes_and_loads_latest_policy(tmp_path: Path) -> Non
     assert paths["release_gate_passed"] == "true"
 
 
-def test_publish_artifacts_records_universe_metadata_and_keeps_non_default_latest_isolated(tmp_path: Path) -> None:
+def test_publish_artifacts_records_universe_metadata_and_keeps_non_default_latest_isolated(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
     baseline = _make_backtest(0.20, 0.18)
     calibrated = _make_backtest(0.22, 0.20)
     learned = _make_backtest(0.24, 0.22)
@@ -372,6 +375,18 @@ def test_publish_artifacts_records_universe_metadata_and_keeps_non_default_lates
         json.dumps({"learned": asdict(_make_backtest(0.30, 0.28))}),
         encoding="utf-8",
     )
+    info_file = tmp_path / "info.csv"
+    info_file.write_text(
+        "\n".join(
+            [
+                "date,target_type,target,horizon,direction,info_type,title,event_tag",
+                "2024-12-20,market,MARKET,mid,bullish,news,macro support,regulatory_positive",
+                "2024-12-22,stock,000001.SZ,short,bearish,announcement,risk event,earnings_negative",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr("src.application.v2_services._load_or_build_v2_backtest_trajectory", lambda **_: None)
 
     paths = publish_v2_research_artifacts(
         strategy_id="swing_v2",
@@ -391,6 +406,9 @@ def test_publish_artifacts_records_universe_metadata_and_keeps_non_default_lates
             "favorites_universe_file": str(favorites),
             "generated_universe_base_file": str(generated_base),
             "baseline_reference_run_id": "20260308_211808",
+            "info_file": str(info_file),
+            "use_info_fusion": True,
+            "info_shadow_only": True,
         },
         baseline=baseline,
         calibration=calibration,
@@ -403,11 +421,21 @@ def test_publish_artifacts_records_universe_metadata_and_keeps_non_default_lates
     assert dataset_manifest["symbol_count"] == 3
     assert len(dataset_manifest["symbols"]) == 3
     assert dataset_manifest["source_universe_manifest_path"]
+    assert dataset_manifest["info_file"] == str(info_file)
+    assert dataset_manifest["info_hash"]
+    assert dataset_manifest["info_item_count"] == 2
 
     manifest = json.loads(Path(paths["research_manifest"]).read_text(encoding="utf-8"))
     assert manifest["default_switch_gate"]["passed"] is False
+    assert manifest["info_manifest"]
+    assert manifest["info_shadow_report"]
+    assert manifest["info_hash"]
     assert not (tmp_path / "swing_v2" / "latest_research_manifest.json").exists()
     assert (tmp_path / "swing_v2" / "latest_research_manifest.generated_80.json").exists()
+    info_manifest = json.loads(Path(paths["info_manifest"]).read_text(encoding="utf-8"))
+    assert info_manifest["info_item_count"] == 2
+    assert info_manifest["info_type_counts"]["news"] == 1
+    assert info_manifest["info_type_counts"]["announcement"] == 1
 
 
 def test_backtest_summary_carries_cross_section_metrics() -> None:

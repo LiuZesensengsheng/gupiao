@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from html import escape
 from pathlib import Path
 from typing import Callable
@@ -15,6 +16,19 @@ from src.application.v2_contracts import (
     V2PolicyLearningResult,
 )
 from src.interfaces.presenters.driver_explainer import format_driver_list
+
+
+def _load_json_report(path_value: str | Path | None) -> dict[str, object]:
+    if not path_value:
+        return {}
+    path = Path(path_value)
+    if not path.exists():
+        return {}
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return {}
+    return payload if isinstance(payload, dict) else {}
 
 
 def _pct(v: float) -> str:
@@ -1177,6 +1191,35 @@ def write_v2_daily_dashboard(out_path: str | Path, result: V2DailyRunResult) -> 
         color="#3c6fd1",
         formatter=lambda value: f"{value:.3f}",
     )
+    market_info = result.composite_state.market_info_state
+    negative_info_rows = "".join(
+        "<tr>"
+        f"<td>{escape(item.target_name or item.target)}</td>"
+        f"<td>{escape(item.info_type)}</td>"
+        f"<td>{escape(item.event_tag or '-')}</td>"
+        f"<td>{_score(item.score)}</td>"
+        "</tr>"
+        for item in result.top_negative_info_events
+    )
+    positive_info_rows = "".join(
+        "<tr>"
+        f"<td>{escape(item.target_name or item.target)}</td>"
+        f"<td>{escape(item.info_type)}</td>"
+        f"<td>{escape(item.horizon)}</td>"
+        f"<td>{_score(item.score)}</td>"
+        "</tr>"
+        for item in result.top_positive_info_signals
+    )
+    divergence_rows = "".join(
+        "<tr>"
+        f"<td>{escape(item.name or item.symbol)}</td>"
+        f"<td>{_pct(item.quant_prob_20d)}</td>"
+        f"<td>{_pct(item.info_prob_20d)}</td>"
+        f"<td>{_pct(item.shadow_prob_20d)}</td>"
+        f"<td>{_bp(item.gap)}</td>"
+        "</tr>"
+        for item in result.quant_info_divergence
+    )
 
     html = f"""<!doctype html>
 <html lang="zh-CN">
@@ -1351,6 +1394,45 @@ def write_v2_daily_dashboard(out_path: str | Path, result: V2DailyRunResult) -> 
         </table>
       </div>
     </section>
+
+    <section class="grid two">
+      <div class="card">
+        <h2>信息影子摘要</h2>
+        <table>
+          <tr><th>影子模式</th><td>{'开启' if result.info_shadow_enabled else '关闭'}</td></tr>
+          <tr><th>信息条数</th><td>{result.info_item_count}</td></tr>
+          <tr><th>市场短期分</th><td>{_score(market_info.short_score)}</td></tr>
+          <tr><th>市场中期分</th><td>{_score(market_info.mid_score)}</td></tr>
+          <tr><th>市场 20 日影子概率</th><td>{_pct(market_info.shadow_prob_20d)}</td></tr>
+          <tr><th>负面事件风险</th><td>{_pct(market_info.negative_event_risk)}</td></tr>
+          <tr><th>覆盖率</th><td>{_pct(market_info.coverage_ratio)}</td></tr>
+        </table>
+      </div>
+      <div class="card">
+        <h2>Quant / Info 分歧</h2>
+        <table>
+          <thead><tr><th>股票</th><th>Quant 20日</th><th>Info 20日</th><th>Shadow 20日</th><th>差值</th></tr></thead>
+          <tbody>{divergence_rows or '<tr><td colspan="5">无显著分歧</td></tr>'}</tbody>
+        </table>
+      </div>
+    </section>
+
+    <section class="grid two">
+      <div class="card">
+        <h2>重点负面事件</h2>
+        <table>
+          <thead><tr><th>目标</th><th>类型</th><th>标签</th><th>得分</th></tr></thead>
+          <tbody>{negative_info_rows or '<tr><td colspan="4">无负面事件</td></tr>'}</tbody>
+        </table>
+      </div>
+      <div class="card">
+        <h2>重点正面信号</h2>
+        <table>
+          <thead><tr><th>目标</th><th>类型</th><th>周期</th><th>得分</th></tr></thead>
+          <tbody>{positive_info_rows or '<tr><td colspan="4">无正面信号</td></tr>'}</tbody>
+        </table>
+      </div>
+    </section>
   </div>
 </body>
 </html>"""
@@ -1433,6 +1515,30 @@ def write_v2_research_dashboard(
     artifact_rows = "".join(
         f"<tr><th>{escape(str(label))}</th><td>{escape(str(path_value))}</td></tr>"
         for label, path_value in (artifacts or {}).items()
+    )
+    info_manifest = _load_json_report((artifacts or {}).get("info_manifest"))
+    info_shadow = _load_json_report((artifacts or {}).get("info_shadow_report"))
+    info_compare_rows = ""
+    if info_shadow:
+        quant_only = info_shadow.get("quant_only", {}) if isinstance(info_shadow, dict) else {}
+        shadow_only = info_shadow.get("quant_plus_info_shadow", {}) if isinstance(info_shadow, dict) else {}
+        info_compare_rows = (
+            "<tr>"
+            "<td>quant_only</td>"
+            f"<td>{_num(float(quant_only.get('avg_20d_rank_ic', 0.0)), 3)}</td>"
+            f"<td>{_pct(float(quant_only.get('avg_20d_top_bottom_spread', 0.0)))}</td>"
+            f"<td>{_pct(float(quant_only.get('event_day_hit_rate', 0.0)))}</td>"
+            "</tr>"
+            "<tr>"
+            "<td>quant_plus_info_shadow</td>"
+            f"<td>{_num(float(shadow_only.get('avg_20d_rank_ic', 0.0)), 3)}</td>"
+            f"<td>{_pct(float(shadow_only.get('avg_20d_top_bottom_spread', 0.0)))}</td>"
+            f"<td>{_pct(float(shadow_only.get('event_day_hit_rate', 0.0)))}</td>"
+            "</tr>"
+        )
+    event_tag_rows = "".join(
+        f"<tr><td>{escape(str(key))}</td><td>{int(value)}</td></tr>"
+        for key, value in sorted((info_shadow.get("event_tag_distribution", {}) if isinstance(info_shadow, dict) else {}).items())
     )
     horizon_rows = ""
     for label, summary in [
@@ -1637,6 +1743,30 @@ def write_v2_research_dashboard(
         <table>
           <thead><tr><th>方案</th><th>周期</th><th>RankIC</th><th>头部分层收益</th><th>头尾价差</th><th>TopK命中率</th></tr></thead>
           <tbody>{horizon_rows or '<tr><td colspan="6">暂无多周期指标</td></tr>'}</tbody>
+        </table>
+      </div>
+    </section>
+
+    <section class="grid two">
+      <div class="card">
+        <h2>信息影子评估</h2>
+        <table>
+          <tr><th>影子模式</th><td>{'开启' if bool((artifacts or {}).get('info_shadow_enabled')) else '关闭'}</td></tr>
+          <tr><th>信息条数</th><td>{int(info_manifest.get('info_item_count', 0) or 0)}</td></tr>
+          <tr><th>信息哈希</th><td>{escape(str((artifacts or {}).get('info_hash', '')))}</td></tr>
+          <tr><th>市场覆盖率</th><td>{_pct(float((info_manifest.get('coverage_summary', {}) if isinstance(info_manifest, dict) else {}).get('market_coverage_ratio', 0.0)))}</td></tr>
+          <tr><th>个股覆盖率</th><td>{_pct(float((info_manifest.get('coverage_summary', {}) if isinstance(info_manifest, dict) else {}).get('stock_coverage_ratio', 0.0)))}</td></tr>
+        </table>
+        <table style="margin-top:14px;">
+          <thead><tr><th>模式</th><th>20日 RankIC</th><th>头尾价差</th><th>事件日命中率</th></tr></thead>
+          <tbody>{info_compare_rows or '<tr><td colspan="4">暂无信息影子结果</td></tr>'}</tbody>
+        </table>
+      </div>
+      <div class="card">
+        <h2>事件标签分布</h2>
+        <table>
+          <thead><tr><th>标签</th><th>数量</th></tr></thead>
+          <tbody>{event_tag_rows or '<tr><td colspan="2">暂无事件标签</td></tr>'}</tbody>
         </table>
       </div>
     </section>

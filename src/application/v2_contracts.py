@@ -47,6 +47,65 @@ class StockForecastState:
 
 
 @dataclass(frozen=True)
+class InfoAggregateState:
+    short_score: float = 0.0
+    mid_score: float = 0.0
+    item_count: int = 0
+    announcement_count: int = 0
+    research_count: int = 0
+    negative_event_risk: float = 0.0
+    coverage_ratio: float = 0.0
+    info_prob_1d: float = 0.5
+    info_prob_5d: float = 0.5
+    info_prob_20d: float = 0.5
+    shadow_prob_1d: float = 0.5
+    shadow_prob_5d: float = 0.5
+    shadow_prob_20d: float = 0.5
+
+
+@dataclass(frozen=True)
+class InfoItem:
+    date: str
+    target_type: str
+    target: str
+    horizon: str
+    direction: str
+    info_type: str
+    title: str
+    source_url: str = ""
+    strength: float = 3.0
+    confidence: float = 0.7
+    source_weight: float = 0.0
+    publisher: str = ""
+    event_tag: str = ""
+    event_id: str = ""
+
+
+@dataclass(frozen=True)
+class InfoSignalRecord:
+    target: str
+    target_name: str
+    title: str
+    info_type: str
+    direction: str
+    horizon: str
+    event_tag: str = ""
+    score: float = 0.0
+    negative_event_risk: float = 0.0
+    source_url: str = ""
+
+
+@dataclass(frozen=True)
+class InfoDivergenceRecord:
+    symbol: str
+    name: str
+    quant_prob_20d: float
+    info_prob_20d: float
+    shadow_prob_20d: float
+    gap: float
+
+
+@dataclass(frozen=True)
 class CrossSectionForecastState:
     as_of_date: str
     large_vs_small_bias: float
@@ -66,6 +125,9 @@ class CompositeState:
     stocks: List[StockForecastState]
     strategy_mode: str
     risk_regime: str
+    market_info_state: InfoAggregateState = field(default_factory=InfoAggregateState)
+    sector_info_states: Dict[str, InfoAggregateState] = field(default_factory=dict)
+    stock_info_states: Dict[str, InfoAggregateState] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -120,6 +182,9 @@ class StrategySnapshot:
     universe_size: int = 0
     universe_generation_rule: str = ""
     source_universe_manifest_path: str = ""
+    info_manifest_path: str = ""
+    info_hash: str = ""
+    info_shadow_enabled: bool = False
     run_id: str = ""
     data_window: str = ""
     model_hashes: Dict[str, str] = field(default_factory=dict)
@@ -138,6 +203,13 @@ class DailyRunResult:
     policy_decision: PolicyDecision
     trade_actions: List[TradeAction]
     symbol_names: Dict[str, str] = field(default_factory=dict)
+    info_hash: str = ""
+    info_manifest_path: str = ""
+    info_shadow_enabled: bool = False
+    info_item_count: int = 0
+    top_negative_info_events: List[InfoSignalRecord] = field(default_factory=list)
+    top_positive_info_signals: List[InfoSignalRecord] = field(default_factory=list)
+    quant_info_divergence: List[InfoDivergenceRecord] = field(default_factory=list)
     run_id: str = ""
     snapshot_hash: str = ""
     config_hash: str = ""

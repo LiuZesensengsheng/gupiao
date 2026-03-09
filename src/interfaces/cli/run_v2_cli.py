@@ -37,6 +37,14 @@ def build_parser() -> argparse.ArgumentParser:
     daily.add_argument("--universe-tier", dest="universe_tier", default=None, help="Optional predefined universe tier override")
     daily.add_argument("--universe-file", dest="universe_file", default=None, help="Optional universe file override")
     daily.add_argument("--universe-limit", dest="universe_limit", type=int, default=None, help="Optional universe size override")
+    daily.add_argument("--info-file", dest="info_file", default=None, help="Optional structured info file or directory override")
+    daily.add_argument("--info-lookback-days", dest="info_lookback_days", type=int, default=None, help="Info lookback window")
+    daily.add_argument("--info-half-life-days", dest="info_half_life_days", type=float, default=None, help="Info half life")
+    daily.add_argument("--use-info-fusion", dest="use_info_fusion", action="store_true", default=None, help="Enable info shadow evaluation")
+    daily.add_argument("--no-use-info-fusion", dest="use_info_fusion", action="store_false", help="Disable info shadow evaluation")
+    daily.add_argument("--info-shadow-only", dest="info_shadow_only", action="store_true", default=None, help="Keep info in shadow-only mode")
+    daily.add_argument("--no-info-shadow-only", dest="info_shadow_only", action="store_false", help="Disable shadow-only flag")
+    daily.add_argument("--info-types", dest="info_types", default=None, help="Comma-separated info types")
     daily.add_argument("--report", default="reports/v2_daily_report.md", help="Markdown report output path")
     daily.add_argument("--dashboard", default="reports/v2_daily_dashboard.html", help="HTML dashboard output path")
     daily.add_argument("--artifact-root", default="artifacts/v2", help="Published artifact root for learned policy snapshots")
@@ -53,6 +61,14 @@ def build_parser() -> argparse.ArgumentParser:
     research.add_argument("--universe-tier", dest="universe_tier", default=None, help="Optional predefined universe tier override")
     research.add_argument("--universe-file", dest="universe_file", default=None, help="Optional universe file override")
     research.add_argument("--universe-limit", dest="universe_limit", type=int, default=None, help="Optional universe size override")
+    research.add_argument("--info-file", dest="info_file", default=None, help="Optional structured info file or directory override")
+    research.add_argument("--info-lookback-days", dest="info_lookback_days", type=int, default=None, help="Info lookback window")
+    research.add_argument("--info-half-life-days", dest="info_half_life_days", type=float, default=None, help="Info half life")
+    research.add_argument("--use-info-fusion", dest="use_info_fusion", action="store_true", default=None, help="Enable info shadow evaluation")
+    research.add_argument("--no-use-info-fusion", dest="use_info_fusion", action="store_false", help="Disable info shadow evaluation")
+    research.add_argument("--info-shadow-only", dest="info_shadow_only", action="store_true", default=None, help="Keep info in shadow-only mode")
+    research.add_argument("--no-info-shadow-only", dest="info_shadow_only", action="store_false", help="Disable shadow-only flag")
+    research.add_argument("--info-types", dest="info_types", default=None, help="Comma-separated info types")
     research.add_argument("--report", default="reports/v2_research_report.md", help="Markdown report output path")
     research.add_argument("--dashboard", default="reports/v2_research_dashboard.html", help="HTML dashboard output path")
     research.add_argument("--artifact-root", default="artifacts/v2", help="Artifact output root for research runs")
@@ -114,6 +130,12 @@ def main() -> int:
             universe_tier=args.universe_tier,
             universe_file=args.universe_file,
             universe_limit=args.universe_limit,
+            info_file=args.info_file,
+            info_lookback_days=args.info_lookback_days,
+            info_half_life_days=args.info_half_life_days,
+            use_info_fusion=args.use_info_fusion,
+            info_shadow_only=args.info_shadow_only,
+            info_types=args.info_types,
             artifact_root=str(args.artifact_root),
             cache_root=str(args.cache_root),
             refresh_cache=bool(args.refresh_cache),
@@ -151,6 +173,12 @@ def main() -> int:
             universe_tier=args.universe_tier,
             universe_file=args.universe_file,
             universe_limit=args.universe_limit,
+            info_file=args.info_file,
+            info_lookback_days=args.info_lookback_days,
+            info_half_life_days=args.info_half_life_days,
+            use_info_fusion=args.use_info_fusion,
+            info_shadow_only=args.info_shadow_only,
+            info_types=args.info_types,
             skip_calibration=skip_calibration,
             skip_learning=skip_learning,
             cache_root=str(args.cache_root),
@@ -169,6 +197,12 @@ def main() -> int:
                 universe_tier=args.universe_tier,
                 universe_file=args.universe_file,
                 universe_limit=args.universe_limit,
+                info_file=args.info_file,
+                info_lookback_days=args.info_lookback_days,
+                info_half_life_days=args.info_half_life_days,
+                use_info_fusion=args.use_info_fusion,
+                info_shadow_only=args.info_shadow_only,
+                info_types=args.info_types,
                 baseline=baseline,
                 calibration=calibration,
                 learning=learning,

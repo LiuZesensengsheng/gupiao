@@ -1142,3 +1142,141 @@ def test_run_daily_v2_live_fails_when_universe_tier_mismatches_manifest(
             run_id=run_id,
             universe_tier="generated_80",
         )
+
+
+def test_run_daily_v2_live_info_shadow_only_keeps_trade_plan_stable(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path,
+) -> None:
+    market, sectors, stocks, cross_section = _make_demo_state()
+    composite_state = compose_state(
+        market=market,
+        sectors=sectors,
+        stocks=stocks,
+        cross_section=cross_section,
+    )
+    decision = apply_policy(
+        PolicyInput(
+            composite_state=composite_state,
+            current_weights={},
+            current_cash=1.0,
+            total_equity=1.0,
+        )
+    )
+    watchlist_path = tmp_path / "watchlist.json"
+    universe_path = tmp_path / "universe.json"
+    margin_market_path = tmp_path / "margin_market.csv"
+    margin_stock_path = tmp_path / "margin_stock.csv"
+    info_path = tmp_path / "info.csv"
+    watchlist_path.write_text("[]", encoding="utf-8")
+    universe_path.write_text("[]", encoding="utf-8")
+    margin_market_path.write_text("", encoding="utf-8")
+    margin_stock_path.write_text("", encoding="utf-8")
+    info_path.write_text(
+        "\n".join(
+            [
+                "date,target_type,target,horizon,direction,info_type,title,event_tag",
+                "2026-03-01,market,MARKET,mid,bearish,news,macro caution,regulatory_negative",
+                "2026-03-01,stock,000630.SZ,short,bullish,announcement,positive contract,contract_win",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    settings = {
+        "config_path": "config/api.json",
+        "watchlist": str(watchlist_path),
+        "source": "local",
+        "data_dir": "data",
+        "start": "2024-01-01",
+        "end": "2024-12-31",
+        "min_train_days": 240,
+        "step_days": 20,
+        "l2": 0.8,
+        "max_positions": 5,
+        "use_margin_features": False,
+        "margin_market_file": str(margin_market_path),
+        "margin_stock_file": str(margin_stock_path),
+        "universe_file": str(universe_path),
+        "universe_limit": 5,
+        "info_file": str(info_path),
+        "use_info_fusion": False,
+        "info_shadow_only": True,
+        "info_types": ["news", "announcement", "research"],
+    }
+
+    monkeypatch.setattr("src.application.v2_services._load_v2_runtime_settings", lambda **_: dict(settings))
+    monkeypatch.setattr("src.application.v2_services._resolve_v2_universe_settings", lambda **kwargs: dict(kwargs["settings"]))
+    monkeypatch.setattr(
+        "src.application.v2_services.load_watchlist",
+        lambda *_: (Security("000001.SH", "指数"), [], {}),
+    )
+    monkeypatch.setattr(
+        "src.application.v2_services.build_candidate_universe",
+        lambda **_: type("Universe", (), {"rows": [Security("000630.SZ", "样例股", "有色")]})(),
+    )
+    monkeypatch.setattr(
+        "src.application.v2_services.run_quant_pipeline",
+        lambda **_: (
+            MarketForecast(
+                symbol="000001.SH",
+                name="指数",
+                latest_date=pd.Timestamp("2026-03-01"),
+                short_prob=0.55,
+                five_prob=0.56,
+                mid_prob=0.60,
+                short_eval=BinaryMetrics.empty(),
+                mid_eval=BinaryMetrics.empty(),
+            ),
+            [
+                ForecastRow(
+                    symbol="000630.SZ",
+                    name="样例股",
+                    latest_date=pd.Timestamp("2026-03-01"),
+                    short_prob=0.58,
+                    five_prob=0.60,
+                    mid_prob=0.64,
+                    score=0.70,
+                    short_drivers=[],
+                    mid_drivers=[],
+                    short_eval=BinaryMetrics.empty(),
+                    mid_eval=BinaryMetrics.empty(),
+                )
+            ],
+        ),
+    )
+    monkeypatch.setattr(
+        "src.application.v2_services.load_symbol_daily",
+        lambda **_: pd.DataFrame({"date": pd.to_datetime(["2026-03-01"]), "close": [1.0]}),
+    )
+    monkeypatch.setattr(
+        "src.application.v2_services._build_market_and_cross_section_states",
+        lambda **_: (market, cross_section),
+    )
+    monkeypatch.setattr("src.application.v2_services.build_sector_daily_frames", lambda **_: {})
+    monkeypatch.setattr("src.application.v2_services.run_sector_forecast", lambda **_: [])
+    monkeypatch.setattr("src.application.v2_services._build_stock_states_from_rows", lambda *_, **__: stocks)
+    monkeypatch.setattr("src.application.v2_services.compose_state", lambda **_: composite_state)
+    monkeypatch.setattr("src.application.v2_services.load_published_v2_policy_model", lambda **_: None)
+    monkeypatch.setattr("src.application.v2_services.apply_policy", lambda *_, **__: decision)
+
+    baseline = run_daily_v2_live(
+        strategy_id="swing_v2",
+        artifact_root=str(tmp_path / "artifacts"),
+        cache_root=str(tmp_path / "cache_base"),
+        refresh_cache=True,
+        allow_retrain=True,
+    )
+    settings["use_info_fusion"] = True
+    shadow = run_daily_v2_live(
+        strategy_id="swing_v2",
+        artifact_root=str(tmp_path / "artifacts"),
+        cache_root=str(tmp_path / "cache_shadow"),
+        refresh_cache=True,
+        allow_retrain=True,
+    )
+
+    assert baseline.policy_decision.target_exposure == shadow.policy_decision.target_exposure
+    assert baseline.trade_actions == shadow.trade_actions
+    assert shadow.info_shadow_enabled is True
+    assert shadow.info_item_count == 2
+    assert shadow.top_negative_info_events

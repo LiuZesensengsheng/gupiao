@@ -7,7 +7,7 @@ import time
 from dataclasses import asdict, dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import Iterable, Protocol
+from typing import Iterable, Protocol, Sequence
 
 import numpy as np
 import pandas as pd
@@ -19,6 +19,10 @@ from src.application.v2_contracts import (
     V2CalibrationResult,
     V2PolicyLearningResult,
     DailyRunResult,
+    InfoAggregateState,
+    InfoDivergenceRecord,
+    InfoItem,
+    InfoSignalRecord,
     LearnedPolicyModel,
     MarketForecastState,
     PolicyDecision,
@@ -30,6 +34,7 @@ from src.application.v2_contracts import (
 )
 from src.application.watchlist import load_watchlist
 from src.domain.entities import TradeAction
+from src.domain.news import blend_probability
 from src.domain.policies import blend_horizon_score, decide_market_state
 from src.infrastructure.discovery import (
     build_candidate_universe,
@@ -41,7 +46,15 @@ from src.infrastructure.features import (
     MARKET_FEATURE_COLUMNS,
     make_market_feature_frame,
 )
+from src.infrastructure.info_repository import load_v2_info_items
 from src.infrastructure.forecast_engine import run_quant_pipeline
+from src.infrastructure.v2_info_fusion import (
+    build_info_state_maps,
+    event_tag_counts,
+    quant_info_divergence_rows,
+    top_negative_events,
+    top_positive_stock_signals,
+)
 from src.infrastructure.market_context import build_market_context_features
 from src.infrastructure.market_data import load_symbol_daily
 from src.infrastructure.modeling import (
@@ -65,6 +78,31 @@ def _coalesce(primary: object, secondary: object, default: object) -> object:
     if secondary is not None:
         return secondary
     return default
+
+
+def _parse_boolish(value: object, default: bool = False) -> bool:
+    if value is None:
+        return bool(default)
+    if isinstance(value, bool):
+        return bool(value)
+    text = str(value).strip().lower()
+    if not text:
+        return bool(default)
+    if text in {"1", "true", "yes", "y", "on"}:
+        return True
+    if text in {"0", "false", "no", "n", "off"}:
+        return False
+    return bool(default)
+
+
+def _parse_csv_tokens(value: object, default: Iterable[str]) -> list[str]:
+    if isinstance(value, (list, tuple, set)):
+        out = [str(item).strip() for item in value if str(item).strip()]
+        return out or [str(item).strip() for item in default if str(item).strip()]
+    text = str(value).strip()
+    if not text:
+        return [str(item).strip() for item in default if str(item).strip()]
+    return [item.strip() for item in text.split(",") if item.strip()]
 
 
 def _safe_float(value: object, default: float = 0.0) -> float:
@@ -94,6 +132,13 @@ _DEFAULT_SWITCH_GATE_THRESHOLD = {
     "information_ratio_delta_min": 0.10,
     "max_drawdown_worse_limit": 0.02,
 }
+_INFO_SHADOW_FEATURE_COLUMNS = [
+    "q_logit",
+    "i_logit",
+    "q_minus_i",
+    "negative_event_risk",
+    "item_count_log",
+]
 
 
 def _stable_json_hash(payload: object) -> str:
@@ -117,6 +162,259 @@ def _sha256_file(path_like: object) -> str:
                 break
             h.update(chunk)
     return h.hexdigest()
+
+
+@dataclass(frozen=True)
+class _InfoShadowModel:
+    mode: str
+    samples: int
+    feature_cols: list[str]
+    model: LogisticBinaryModel | None = None
+
+
+def _clip_prob(p: float) -> float:
+    return float(np.clip(float(p), 1e-6, 1.0 - 1e-6))
+
+
+def _logit_prob(p: float) -> float:
+    clipped = _clip_prob(p)
+    return float(np.log(clipped / (1.0 - clipped)))
+
+
+def _resolve_info_file_from_settings(settings: dict[str, object]) -> str:
+    info_file = str(settings.get("info_file", "")).strip()
+    if info_file and Path(info_file).exists():
+        return info_file
+    news_file = str(settings.get("news_file", "")).strip()
+    if news_file and Path(news_file).exists():
+        return news_file
+    return info_file or news_file
+
+
+def _load_v2_info_items_for_date(
+    *,
+    settings: dict[str, object],
+    as_of_date: pd.Timestamp,
+    learned_window: bool = False,
+) -> tuple[str, list[InfoItem]]:
+    info_file = _resolve_info_file_from_settings(settings)
+    if not info_file:
+        return "", []
+    lookback_days = int(
+        settings.get(
+            "learned_info_lookback_days" if learned_window else "info_lookback_days",
+            settings.get("info_lookback_days", 45),
+        )
+    )
+    items = load_v2_info_items(
+        info_file,
+        as_of_date=as_of_date.normalize(),
+        lookback_days=lookback_days,
+        info_types=settings.get("info_types", ("news", "announcement", "research")),
+    )
+    return info_file, items
+
+
+def _info_feature_frame(
+    *,
+    quant_prob: Sequence[float],
+    info_prob: Sequence[float],
+    negative_event_risk: Sequence[float],
+    item_count: Sequence[float],
+) -> pd.DataFrame:
+    q = np.asarray([_clip_prob(float(item)) for item in quant_prob], dtype=float)
+    i = np.asarray([_clip_prob(float(item)) for item in info_prob], dtype=float)
+    return pd.DataFrame(
+        {
+            "q_logit": [_logit_prob(float(item)) for item in q],
+            "i_logit": [_logit_prob(float(item)) for item in i],
+            "q_minus_i": q - i,
+            "negative_event_risk": np.asarray(negative_event_risk, dtype=float),
+            "item_count_log": np.log1p(np.asarray(item_count, dtype=float)),
+        }
+    )
+
+
+def _fit_info_shadow_model(
+    frame: pd.DataFrame,
+    *,
+    target_col: str,
+    l2: float,
+    min_samples: int,
+) -> _InfoShadowModel:
+    valid = frame.dropna(subset=_INFO_SHADOW_FEATURE_COLUMNS + [target_col]).copy()
+    if len(valid) < int(min_samples):
+        return _InfoShadowModel(mode="rule", samples=int(len(valid)), feature_cols=list(_INFO_SHADOW_FEATURE_COLUMNS))
+    model = LogisticBinaryModel(l2=float(l2)).fit(valid, _INFO_SHADOW_FEATURE_COLUMNS, target_col)
+    return _InfoShadowModel(
+        mode="learned",
+        samples=int(len(valid)),
+        feature_cols=list(_INFO_SHADOW_FEATURE_COLUMNS),
+        model=model,
+    )
+
+
+def _predict_info_shadow_prob(
+    *,
+    quant_prob: float,
+    info_prob: float,
+    negative_event_risk: float,
+    item_count: int,
+    score: float,
+    strength: float,
+    model: _InfoShadowModel | None,
+) -> tuple[float, str]:
+    if model is not None and model.mode == "learned" and model.model is not None:
+        frame = _info_feature_frame(
+            quant_prob=[quant_prob],
+            info_prob=[info_prob],
+            negative_event_risk=[negative_event_risk],
+            item_count=[item_count],
+        )
+        prob = float(model.model.predict_proba(frame, model.feature_cols)[0])
+        return _clip_prob(prob), "learned"
+    return float(blend_probability(quant_prob, score, sentiment_strength=strength)), "rule"
+
+
+def _compose_shadow_stock_score(
+    *,
+    stock: StockForecastState,
+    info_state: InfoAggregateState,
+) -> float:
+    return float(
+        0.15 * float(info_state.shadow_prob_1d)
+        + 0.25 * float(info_state.shadow_prob_5d)
+        + 0.60 * float(info_state.shadow_prob_20d)
+        + 0.08 * float(stock.tradeability_score)
+        - 0.08 * float(info_state.negative_event_risk)
+    )
+
+
+def _build_sector_map_from_state(state: CompositeState) -> dict[str, str]:
+    return {str(stock.symbol): str(stock.sector) for stock in state.stocks}
+
+
+def _enrich_state_with_info(
+    *,
+    state: CompositeState,
+    as_of_date: pd.Timestamp,
+    info_items: list[InfoItem],
+    settings: dict[str, object],
+    stock_models: dict[str, _InfoShadowModel] | None = None,
+    market_models: dict[str, _InfoShadowModel] | None = None,
+) -> CompositeState:
+    sector_map = _build_sector_map_from_state(state)
+    market_info_state, sector_info_states, stock_info_states = build_info_state_maps(
+        info_items=info_items,
+        as_of_date=as_of_date,
+        stock_symbols=sector_map.keys(),
+        sector_map=sector_map,
+        market_to_stock_carry=0.35,
+        info_half_life_days=float(settings.get("info_half_life_days", 10.0)),
+        market_info_strength=float(settings.get("market_info_strength", 0.9)),
+        stock_info_strength=float(settings.get("stock_info_strength", 1.1)),
+    )
+
+    market_shadow_1d, _ = _predict_info_shadow_prob(
+        quant_prob=float(state.market.up_1d_prob),
+        info_prob=float(market_info_state.info_prob_1d),
+        negative_event_risk=float(market_info_state.negative_event_risk),
+        item_count=int(market_info_state.item_count),
+        score=float(market_info_state.short_score),
+        strength=float(settings.get("market_info_strength", 0.9)),
+        model=None if market_models is None else market_models.get("1d"),
+    )
+    market_shadow_5d, _ = _predict_info_shadow_prob(
+        quant_prob=float(state.market.up_5d_prob),
+        info_prob=float(market_info_state.info_prob_5d),
+        negative_event_risk=float(market_info_state.negative_event_risk),
+        item_count=int(market_info_state.item_count),
+        score=float(market_info_state.short_score),
+        strength=0.9 * float(settings.get("market_info_strength", 0.9)),
+        model=None if market_models is None else market_models.get("5d"),
+    )
+    market_shadow_20d, _ = _predict_info_shadow_prob(
+        quant_prob=float(state.market.up_20d_prob),
+        info_prob=float(market_info_state.info_prob_20d),
+        negative_event_risk=float(market_info_state.negative_event_risk),
+        item_count=int(market_info_state.item_count),
+        score=float(market_info_state.mid_score),
+        strength=float(settings.get("market_info_strength", 0.9)),
+        model=None if market_models is None else market_models.get("20d"),
+    )
+    market_info_state = InfoAggregateState(
+        **{
+            **asdict(market_info_state),
+            "shadow_prob_1d": float(market_shadow_1d),
+            "shadow_prob_5d": float(market_shadow_5d),
+            "shadow_prob_20d": float(market_shadow_20d),
+        }
+    )
+
+    updated_sector_states: dict[str, InfoAggregateState] = {}
+    for sector in state.sectors:
+        current = sector_info_states.get(sector.sector, InfoAggregateState())
+        shadow_1d = float(blend_probability(0.5, current.short_score, sentiment_strength=0.7 * float(settings.get("stock_info_strength", 1.1))))
+        shadow_5d = float(blend_probability(float(sector.up_5d_prob), current.short_score, sentiment_strength=0.6 * float(settings.get("stock_info_strength", 1.1))))
+        shadow_20d = float(blend_probability(float(sector.up_20d_prob), current.mid_score, sentiment_strength=0.6 * float(settings.get("stock_info_strength", 1.1))))
+        updated_sector_states[sector.sector] = InfoAggregateState(
+            **{
+                **asdict(current),
+                "shadow_prob_1d": shadow_1d,
+                "shadow_prob_5d": shadow_5d,
+                "shadow_prob_20d": shadow_20d,
+            }
+        )
+
+    updated_stock_states: dict[str, InfoAggregateState] = {}
+    for stock in state.stocks:
+        current = stock_info_states.get(stock.symbol, InfoAggregateState())
+        shadow_1d, _ = _predict_info_shadow_prob(
+            quant_prob=float(stock.up_1d_prob),
+            info_prob=float(current.info_prob_1d),
+            negative_event_risk=float(current.negative_event_risk),
+            item_count=int(current.item_count),
+            score=float(current.short_score),
+            strength=float(settings.get("stock_info_strength", 1.1)),
+            model=None if stock_models is None else stock_models.get("1d"),
+        )
+        shadow_5d, _ = _predict_info_shadow_prob(
+            quant_prob=float(stock.up_5d_prob),
+            info_prob=float(current.info_prob_5d),
+            negative_event_risk=float(current.negative_event_risk),
+            item_count=int(current.item_count),
+            score=float(current.short_score),
+            strength=0.9 * float(settings.get("stock_info_strength", 1.1)),
+            model=None if stock_models is None else stock_models.get("5d"),
+        )
+        shadow_20d, _ = _predict_info_shadow_prob(
+            quant_prob=float(stock.up_20d_prob),
+            info_prob=float(current.info_prob_20d),
+            negative_event_risk=float(current.negative_event_risk),
+            item_count=int(current.item_count),
+            score=float(current.mid_score),
+            strength=float(settings.get("stock_info_strength", 1.1)),
+            model=None if stock_models is None else stock_models.get("20d"),
+        )
+        updated_stock_states[stock.symbol] = InfoAggregateState(
+            **{
+                **asdict(current),
+                "shadow_prob_1d": float(shadow_1d),
+                "shadow_prob_5d": float(shadow_5d),
+                "shadow_prob_20d": float(shadow_20d),
+            }
+        )
+    return CompositeState(
+        market=state.market,
+        cross_section=state.cross_section,
+        sectors=state.sectors,
+        stocks=state.stocks,
+        strategy_mode=state.strategy_mode,
+        risk_regime=state.risk_regime,
+        market_info_state=market_info_state,
+        sector_info_states=updated_sector_states,
+        stock_info_states=updated_stock_states,
+    )
 
 
 def _load_json_dict(path_like: object) -> dict[str, object]:
@@ -806,6 +1104,9 @@ def build_strategy_snapshot(
     universe_size: int = 0,
     universe_generation_rule: str = "",
     source_universe_manifest_path: str = "",
+    info_manifest_path: str = "",
+    info_hash: str = "",
+    info_shadow_enabled: bool = False,
     run_id: str = "",
     data_window: str = "",
     model_hashes: dict[str, str] | None = None,
@@ -829,6 +1130,9 @@ def build_strategy_snapshot(
         universe_size=int(universe_size),
         universe_generation_rule=str(universe_generation_rule),
         source_universe_manifest_path=str(source_universe_manifest_path),
+        info_manifest_path=str(info_manifest_path),
+        info_hash=str(info_hash),
+        info_shadow_enabled=bool(info_shadow_enabled),
         run_id=str(run_id),
         data_window=str(data_window),
         model_hashes=dict(model_hashes or {}),
@@ -848,6 +1152,12 @@ def _load_v2_runtime_settings(
     universe_file: str | None = None,
     universe_limit: int | None = None,
     universe_tier: str | None = None,
+    info_file: str | None = None,
+    info_lookback_days: int | None = None,
+    info_half_life_days: float | None = None,
+    use_info_fusion: bool | None = None,
+    info_shadow_only: bool | None = None,
+    info_types: str | None = None,
 ) -> dict[str, object]:
     payload: dict[str, object] = {}
     path = Path(config_path)
@@ -889,6 +1199,43 @@ def _load_v2_runtime_settings(
             pick("generated_universe_base_file", "config/universe_all_a_3y_local_ready_nost_no_kc_cy_stable3y.json")
         ),
         "baseline_reference_run_id": str(pick("baseline_reference_run_id", "20260308_211808")),
+        "news_file": str(pick("news_file", "input/news_parts")),
+        "info_file": (
+            str(info_file).strip()
+            if info_file is not None and str(info_file).strip()
+            else str(pick("info_file", pick("news_file", "input/info_parts")))
+        ),
+        "info_lookback_days": int(
+            info_lookback_days
+            if info_lookback_days is not None
+            else int(pick("info_lookback_days", pick("news_lookback_days", 45)))
+        ),
+        "learned_info_lookback_days": int(pick("learned_info_lookback_days", pick("learned_news_lookback_days", 720))),
+        "info_half_life_days": float(
+            info_half_life_days
+            if info_half_life_days is not None
+            else float(pick("info_half_life_days", pick("news_half_life_days", 10.0)))
+        ),
+        "market_info_strength": float(pick("market_info_strength", pick("market_news_strength", 0.9))),
+        "stock_info_strength": float(pick("stock_info_strength", pick("stock_news_strength", 1.1))),
+        "use_info_fusion": (
+            bool(use_info_fusion)
+            if use_info_fusion is not None
+            else _parse_boolish(pick("use_info_fusion", False), False)
+        ),
+        "use_learned_info_fusion": _parse_boolish(pick("use_learned_info_fusion", pick("use_learned_news_fusion", True)), True),
+        "learned_info_min_samples": int(pick("learned_info_min_samples", pick("learned_news_min_samples", 80))),
+        "learned_info_l2": float(pick("learned_info_l2", pick("learned_news_l2", 0.8))),
+        "learned_info_holdout_ratio": float(pick("learned_info_holdout_ratio", pick("learned_holdout_ratio", 0.2))),
+        "info_shadow_only": (
+            bool(info_shadow_only)
+            if info_shadow_only is not None
+            else _parse_boolish(pick("info_shadow_only", True), True)
+        ),
+        "info_types": _parse_csv_tokens(
+            info_types if info_types is not None else pick("info_types", "news,announcement,research"),
+            default=("news", "announcement", "research"),
+        ),
         "universe_file": (
             str(universe_file).strip()
             if universe_file is not None and str(universe_file).strip()
@@ -2427,6 +2774,297 @@ def _split_research_trajectory(
     return train, validation, holdout
 
 
+def _fit_v2_info_shadow_models(
+    *,
+    trajectory: _BacktestTrajectory,
+    settings: dict[str, object],
+    info_items: list[InfoItem],
+) -> tuple[dict[str, _InfoShadowModel], dict[str, _InfoShadowModel]]:
+    stock_rows_by_horizon: dict[str, list[dict[str, float]]] = {"1d": [], "5d": [], "20d": []}
+    market_rows_by_horizon: dict[str, list[dict[str, float]]] = {"1d": [], "5d": [], "20d": []}
+    for step in trajectory.steps:
+        enriched_state = _enrich_state_with_info(
+            state=step.composite_state,
+            as_of_date=pd.Timestamp(step.date),
+            info_items=info_items,
+            settings=settings,
+        )
+        market_row = trajectory.prepared.market_valid[trajectory.prepared.market_valid["date"] == step.date]
+        if not market_row.empty:
+            market_info = enriched_state.market_info_state
+            row = market_row.iloc[0]
+            market_rows_by_horizon["1d"].append(
+                {
+                    "quant_prob": float(enriched_state.market.up_1d_prob),
+                    "info_prob": float(market_info.info_prob_1d),
+                    "negative_event_risk": float(market_info.negative_event_risk),
+                    "item_count": float(market_info.item_count),
+                    "y": 1.0 if _safe_float(row.get("mkt_fwd_ret_1"), 0.0) > 0.0 else 0.0,
+                }
+            )
+            market_rows_by_horizon["5d"].append(
+                {
+                    "quant_prob": float(enriched_state.market.up_5d_prob),
+                    "info_prob": float(market_info.info_prob_5d),
+                    "negative_event_risk": float(market_info.negative_event_risk),
+                    "item_count": float(market_info.item_count),
+                    "y": 1.0 if _safe_float(row.get("mkt_fwd_ret_5"), 0.0) > 0.0 else 0.0,
+                }
+            )
+            market_rows_by_horizon["20d"].append(
+                {
+                    "quant_prob": float(enriched_state.market.up_20d_prob),
+                    "info_prob": float(market_info.info_prob_20d),
+                    "negative_event_risk": float(market_info.negative_event_risk),
+                    "item_count": float(market_info.item_count),
+                    "y": 1.0 if _safe_float(row.get("mkt_fwd_ret_20"), 0.0) > 0.0 else 0.0,
+                }
+            )
+        for stock in enriched_state.stocks:
+            info_state = enriched_state.stock_info_states.get(stock.symbol, InfoAggregateState())
+            frame = trajectory.prepared.stock_frames.get(stock.symbol)
+            if frame is None:
+                continue
+            row = frame[frame["date"] == step.date]
+            if row.empty:
+                continue
+            payload = row.iloc[0]
+            stock_rows_by_horizon["1d"].append(
+                {
+                    "quant_prob": float(stock.up_1d_prob),
+                    "info_prob": float(info_state.info_prob_1d),
+                    "negative_event_risk": float(info_state.negative_event_risk),
+                    "item_count": float(info_state.item_count),
+                    "y": 1.0 if _safe_float(payload.get("excess_ret_1_vs_mkt"), 0.0) > 0.0 else 0.0,
+                }
+            )
+            stock_rows_by_horizon["5d"].append(
+                {
+                    "quant_prob": float(stock.up_5d_prob),
+                    "info_prob": float(info_state.info_prob_5d),
+                    "negative_event_risk": float(info_state.negative_event_risk),
+                    "item_count": float(info_state.item_count),
+                    "y": 1.0 if _safe_float(payload.get("excess_ret_5_vs_mkt"), 0.0) > 0.0 else 0.0,
+                }
+            )
+            stock_rows_by_horizon["20d"].append(
+                {
+                    "quant_prob": float(stock.up_20d_prob),
+                    "info_prob": float(info_state.info_prob_20d),
+                    "negative_event_risk": float(info_state.negative_event_risk),
+                    "item_count": float(info_state.item_count),
+                    "y": 1.0 if _safe_float(payload.get("excess_ret_20_vs_sector"), 0.0) > 0.0 else 0.0,
+                }
+            )
+
+    def _fit_bucket(bucket: list[dict[str, float]]) -> _InfoShadowModel:
+        if not bucket:
+            return _InfoShadowModel(mode="rule", samples=0, feature_cols=list(_INFO_SHADOW_FEATURE_COLUMNS))
+        frame = _info_feature_frame(
+            quant_prob=[row["quant_prob"] for row in bucket],
+            info_prob=[row["info_prob"] for row in bucket],
+            negative_event_risk=[row["negative_event_risk"] for row in bucket],
+            item_count=[row["item_count"] for row in bucket],
+        )
+        frame["y"] = [float(row["y"]) for row in bucket]
+        return _fit_info_shadow_model(
+            frame,
+            target_col="y",
+            l2=float(settings.get("learned_info_l2", 0.8)),
+            min_samples=int(settings.get("learned_info_min_samples", 80)),
+        )
+
+    return (
+        {horizon: _fit_bucket(bucket) for horizon, bucket in stock_rows_by_horizon.items()},
+        {horizon: _fit_bucket(bucket) for horizon, bucket in market_rows_by_horizon.items()},
+    )
+
+
+def _build_shadow_scored_rows_for_step(
+    *,
+    state: CompositeState,
+    stock_frames: dict[str, pd.DataFrame],
+    date: pd.Timestamp,
+) -> tuple[pd.DataFrame, bool]:
+    rows: list[dict[str, float | str]] = []
+    event_day = False
+    for stock in state.stocks:
+        info_state = state.stock_info_states.get(stock.symbol, InfoAggregateState())
+        frame = stock_frames.get(stock.symbol)
+        if frame is None:
+            continue
+        row = frame[frame["date"] == date]
+        if row.empty:
+            continue
+        payload = row.iloc[0]
+        if info_state.item_count > 0 or info_state.negative_event_risk > 0.10:
+            event_day = True
+        rows.append(
+            {
+                "symbol": str(stock.symbol),
+                "score": _compose_shadow_stock_score(stock=stock, info_state=info_state),
+                "realized_ret_1d": _safe_float(payload.get("excess_ret_1_vs_mkt"), np.nan),
+                "realized_ret_5d": _safe_float(payload.get("excess_ret_5_vs_mkt"), np.nan),
+                "realized_ret_20d": _safe_float(payload.get("excess_ret_20_vs_sector"), np.nan),
+            }
+        )
+    return pd.DataFrame(rows), bool(event_day)
+
+
+def _build_info_shadow_report(
+    *,
+    validation_trajectory: _BacktestTrajectory,
+    holdout_trajectory: _BacktestTrajectory,
+    settings: dict[str, object],
+    info_items: list[InfoItem],
+) -> dict[str, object]:
+    stock_models, market_models = _fit_v2_info_shadow_models(
+        trajectory=validation_trajectory,
+        settings=settings,
+        info_items=info_items,
+    )
+
+    holdout_shadow_metrics: dict[str, list[float]] = {
+        "1d_rank_ic": [],
+        "5d_rank_ic": [],
+        "20d_rank_ic": [],
+        "20d_top_bottom_spread": [],
+        "event_day_hit_rate_shadow": [],
+        "event_day_hit_rate_quant": [],
+    }
+    stock_score_deltas: list[dict[str, object]] = []
+    coverage_steps = 0
+    market_items_total = 0
+    stock_coverage_total = 0.0
+    last_state: CompositeState | None = None
+    last_date: pd.Timestamp | None = None
+
+    for step in holdout_trajectory.steps:
+        enriched_state = _enrich_state_with_info(
+            state=step.composite_state,
+            as_of_date=pd.Timestamp(step.date),
+            info_items=info_items,
+            settings=settings,
+            stock_models=stock_models,
+            market_models=market_models,
+        )
+        shadow_rows, event_day = _build_shadow_scored_rows_for_step(
+            state=enriched_state,
+            stock_frames=holdout_trajectory.prepared.stock_frames,
+            date=step.date,
+        )
+        rank_ic_1d, _, _, top_k_1d = _panel_slice_metrics(shadow_rows, realized_col="realized_ret_1d")
+        rank_ic_5d, _, _, _ = _panel_slice_metrics(shadow_rows, realized_col="realized_ret_5d")
+        rank_ic_20d, _, spread_20d, top_k_20d = _panel_slice_metrics(shadow_rows, realized_col="realized_ret_20d")
+        holdout_shadow_metrics["1d_rank_ic"].append(float(rank_ic_1d))
+        holdout_shadow_metrics["5d_rank_ic"].append(float(rank_ic_5d))
+        holdout_shadow_metrics["20d_rank_ic"].append(float(rank_ic_20d))
+        holdout_shadow_metrics["20d_top_bottom_spread"].append(float(spread_20d))
+        if event_day:
+            holdout_shadow_metrics["event_day_hit_rate_shadow"].append(float(top_k_20d))
+            holdout_shadow_metrics["event_day_hit_rate_quant"].append(float(step.horizon_metrics["20d"]["top_k_hit_rate"]))
+        if enriched_state.market_info_state.item_count > 0:
+            coverage_steps += 1
+        market_items_total += int(enriched_state.market_info_state.item_count)
+        covered_names = sum(1 for item in enriched_state.stock_info_states.values() if item.item_count > 0)
+        stock_coverage_total += float(covered_names / max(1, len(enriched_state.stock_info_states)))
+        for stock in enriched_state.stocks:
+            info_state = enriched_state.stock_info_states.get(stock.symbol, InfoAggregateState())
+            quant_score = _stock_policy_score(stock)
+            shadow_score = _compose_shadow_stock_score(stock=stock, info_state=info_state)
+            stock_score_deltas.append(
+                {
+                    "symbol": str(stock.symbol),
+                    "sector": str(stock.sector),
+                    "quant_score": float(quant_score),
+                    "shadow_score": float(shadow_score),
+                    "delta": float(shadow_score - quant_score),
+                    "negative_event_risk": float(info_state.negative_event_risk),
+                    "item_count": int(info_state.item_count),
+                }
+            )
+        last_state = enriched_state
+        last_date = pd.Timestamp(step.date)
+
+    stock_score_deltas.sort(key=lambda item: float(item["delta"]), reverse=True)
+    top_positive = stock_score_deltas[:5]
+    top_negative = sorted(stock_score_deltas, key=lambda item: float(item["delta"]))[:5]
+    coverage_summary = {
+        "holdout_step_coverage_ratio": float(coverage_steps / max(1, len(holdout_trajectory.steps))),
+        "avg_market_item_count": float(market_items_total / max(1, len(holdout_trajectory.steps))),
+        "avg_stock_coverage_ratio": float(stock_coverage_total / max(1, len(holdout_trajectory.steps))),
+    }
+    report = {
+        "info_shadow_enabled": bool(settings.get("use_info_fusion", False)),
+        "shadow_only": bool(settings.get("info_shadow_only", True)),
+        "market_shadow_modes": {horizon: model.mode for horizon, model in market_models.items()},
+        "stock_shadow_modes": {horizon: model.mode for horizon, model in stock_models.items()},
+        "model_samples": {
+            "market": {horizon: int(model.samples) for horizon, model in market_models.items()},
+            "stock": {horizon: int(model.samples) for horizon, model in stock_models.items()},
+        },
+        "quant_only": {
+            "avg_20d_rank_ic": float(np.mean([float(step.horizon_metrics["20d"]["rank_ic"]) for step in holdout_trajectory.steps])) if holdout_trajectory.steps else 0.0,
+            "avg_20d_top_bottom_spread": float(np.mean([float(step.horizon_metrics["20d"]["top_bottom_spread"]) for step in holdout_trajectory.steps])) if holdout_trajectory.steps else 0.0,
+            "event_day_hit_rate": float(np.mean(holdout_shadow_metrics["event_day_hit_rate_quant"])) if holdout_shadow_metrics["event_day_hit_rate_quant"] else 0.0,
+        },
+        "quant_plus_info_shadow": {
+            "avg_1d_rank_ic": float(np.mean(holdout_shadow_metrics["1d_rank_ic"])) if holdout_shadow_metrics["1d_rank_ic"] else 0.0,
+            "avg_5d_rank_ic": float(np.mean(holdout_shadow_metrics["5d_rank_ic"])) if holdout_shadow_metrics["5d_rank_ic"] else 0.0,
+            "avg_20d_rank_ic": float(np.mean(holdout_shadow_metrics["20d_rank_ic"])) if holdout_shadow_metrics["20d_rank_ic"] else 0.0,
+            "avg_20d_top_bottom_spread": float(np.mean(holdout_shadow_metrics["20d_top_bottom_spread"])) if holdout_shadow_metrics["20d_top_bottom_spread"] else 0.0,
+            "event_day_hit_rate": float(np.mean(holdout_shadow_metrics["event_day_hit_rate_shadow"])) if holdout_shadow_metrics["event_day_hit_rate_shadow"] else 0.0,
+        },
+        "coverage_summary": coverage_summary,
+        "top_positive_stock_deltas": top_positive,
+        "top_negative_stock_deltas": top_negative,
+        "event_tag_distribution": event_tag_counts(info_items),
+        "last_market_info_state": {} if last_state is None else asdict(last_state.market_info_state),
+        "last_date": "" if last_date is None else str(last_date.date()),
+    }
+    return report
+
+
+def _build_info_manifest_payload(
+    *,
+    settings: dict[str, object],
+    info_file: str,
+    info_items: list[InfoItem],
+    as_of_date: pd.Timestamp,
+    config_hash: str,
+    shadow_enabled: bool,
+    shadow_report: dict[str, object] | None = None,
+) -> dict[str, object]:
+    counts: dict[str, int] = {}
+    for item in info_items:
+        counts[item.info_type] = int(counts.get(item.info_type, 0) + 1)
+    date_window = {
+        "start": "",
+        "end": "",
+    }
+    if info_items:
+        date_window = {
+            "start": str(min(item.date for item in info_items)),
+            "end": str(max(item.date for item in info_items)),
+        }
+    info_hash = _sha256_file(info_file) if info_file else ""
+    if not info_hash:
+        info_hash = _stable_json_hash([asdict(item) for item in info_items])
+    return {
+        "info_file": str(info_file),
+        "info_hash": str(info_hash),
+        "info_item_count": int(len(info_items)),
+        "info_type_counts": counts,
+        "date_window": date_window,
+        "coverage_summary": {} if shadow_report is None else dict(shadow_report.get("coverage_summary", {})),
+        "config_hash": str(config_hash),
+        "info_shadow_enabled": bool(shadow_enabled),
+        "info_shadow_only": bool(settings.get("info_shadow_only", True)),
+        "info_types": [str(item) for item in settings.get("info_types", [])],
+        "as_of_date": str(as_of_date.date()),
+    }
+
+
 def _empty_v2_backtest_result() -> tuple[V2BacktestSummary, list[dict[str, float]]]:
     return (
         _to_v2_backtest_summary(
@@ -3061,6 +3699,12 @@ def _daily_result_cache_key(
         "margin_market_mtime": _file_mtime_token(settings.get("margin_market_file", "")),
         "margin_stock_file": str(settings.get("margin_stock_file", "")),
         "margin_stock_mtime": _file_mtime_token(settings.get("margin_stock_file", "")),
+        "info_file": str(Path(str(_resolve_info_file_from_settings(settings) or "")).resolve()) if _resolve_info_file_from_settings(settings) else "",
+        "info_file_mtime": _file_mtime_token(_resolve_info_file_from_settings(settings)),
+        "info_hash": str(settings.get("info_hash", "")),
+        "use_info_fusion": bool(settings.get("use_info_fusion", False)),
+        "info_shadow_only": bool(settings.get("info_shadow_only", True)),
+        "info_types": [str(item) for item in settings.get("info_types", [])],
         "published_policy_path": str(policy_path.resolve()),
         "published_policy_mtime": _file_mtime_token(policy_path),
         "run_id": str(run_id),
@@ -3702,6 +4346,12 @@ def run_v2_research_workflow(
     universe_file: str | None = None,
     universe_limit: int | None = None,
     universe_tier: str | None = None,
+    info_file: str | None = None,
+    info_lookback_days: int | None = None,
+    info_half_life_days: float | None = None,
+    use_info_fusion: bool | None = None,
+    info_shadow_only: bool | None = None,
+    info_types: str | None = None,
     skip_calibration: bool = False,
     skip_learning: bool = False,
     cache_root: str = "artifacts/v2/cache",
@@ -3970,6 +4620,9 @@ def _decode_composite_state(payload: object) -> CompositeState | None:
         cross = CrossSectionForecastState(**cross_raw)
         sectors = [SectorForecastState(**item) for item in sectors_raw if isinstance(item, dict)]
         stocks = [StockForecastState(**item) for item in stocks_raw if isinstance(item, dict)]
+        market_info_raw = payload.get("market_info_state", {})
+        sector_info_raw = payload.get("sector_info_states", {})
+        stock_info_raw = payload.get("stock_info_states", {})
         return CompositeState(
             market=market,
             cross_section=cross,
@@ -3977,9 +4630,40 @@ def _decode_composite_state(payload: object) -> CompositeState | None:
             stocks=stocks,
             strategy_mode=str(payload.get("strategy_mode", "")),
             risk_regime=str(payload.get("risk_regime", "")),
+            market_info_state=InfoAggregateState(**market_info_raw) if isinstance(market_info_raw, dict) else InfoAggregateState(),
+            sector_info_states={
+                str(key): InfoAggregateState(**value)
+                for key, value in sector_info_raw.items()
+                if isinstance(value, dict)
+            } if isinstance(sector_info_raw, dict) else {},
+            stock_info_states={
+                str(key): InfoAggregateState(**value)
+                for key, value in stock_info_raw.items()
+                if isinstance(value, dict)
+            } if isinstance(stock_info_raw, dict) else {},
         )
     except Exception:
         return None
+
+
+def _serialize_composite_state(state: CompositeState) -> dict[str, object]:
+    return {
+        "market": asdict(getattr(state, "market")),
+        "cross_section": asdict(getattr(state, "cross_section")),
+        "sectors": [asdict(item) for item in getattr(state, "sectors", [])],
+        "stocks": [asdict(item) for item in getattr(state, "stocks", [])],
+        "strategy_mode": str(getattr(state, "strategy_mode", "")),
+        "risk_regime": str(getattr(state, "risk_regime", "")),
+        "market_info_state": asdict(getattr(state, "market_info_state", InfoAggregateState())),
+        "sector_info_states": {
+            str(key): asdict(value)
+            for key, value in getattr(state, "sector_info_states", {}).items()
+        },
+        "stock_info_states": {
+            str(key): asdict(value)
+            for key, value in getattr(state, "stock_info_states", {}).items()
+        },
+    }
 
 
 def _build_frozen_daily_state_payload(
@@ -4002,7 +4686,7 @@ def _build_frozen_daily_state_payload(
     return {
         "as_of_date": str(last_step.date.date()),
         "next_date": str(last_step.next_date.date()),
-        "composite_state": asdict(last_step.composite_state),
+        "composite_state": _serialize_composite_state(last_step.composite_state),
     }
 
 
@@ -4167,6 +4851,9 @@ def _build_snapshot_from_manifest(
         source_universe_manifest_path=str(
             dataset_manifest.get("source_universe_manifest_path", dataset_manifest.get("universe_file", ""))
         ),
+        info_manifest_path=str(manifest.get("info_manifest", "")),
+        info_hash=str(manifest.get("info_hash", dataset_manifest.get("info_hash", ""))),
+        info_shadow_enabled=_parse_boolish(manifest.get("info_shadow_enabled", dataset_manifest.get("info_shadow_enabled", False)), False),
         run_id=run_id,
         data_window=data_window,
         model_hashes=model_hashes,
@@ -4188,6 +4875,12 @@ def publish_v2_research_artifacts(
     universe_file: str | None = None,
     universe_limit: int | None = None,
     universe_tier: str | None = None,
+    info_file: str | None = None,
+    info_lookback_days: int | None = None,
+    info_half_life_days: float | None = None,
+    use_info_fusion: bool | None = None,
+    info_shadow_only: bool | None = None,
+    info_types: str | None = None,
     settings: dict[str, object] | None = None,
     baseline: V2BacktestSummary,
     calibration: V2CalibrationResult,
@@ -4205,6 +4898,12 @@ def publish_v2_research_artifacts(
         universe_file=universe_file,
         universe_limit=universe_limit,
         universe_tier=universe_tier,
+        info_file=info_file,
+        info_lookback_days=info_lookback_days,
+        info_half_life_days=info_half_life_days,
+        use_info_fusion=use_info_fusion,
+        info_shadow_only=info_shadow_only,
+        info_types=info_types,
     )
     settings = _resolve_v2_universe_settings(settings=dict(settings), cache_root=cache_root)
     run_id = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -4326,6 +5025,96 @@ def publish_v2_research_artifacts(
             "regime_counts": regime_counts,
         }
 
+    dataset_path = base_dir / "dataset_manifest.json"
+    calibration_path = base_dir / "policy_calibration.json"
+    learning_path = base_dir / "learned_policy_model.json"
+    forecast_models_path = base_dir / "forecast_models_manifest.json"
+    frozen_state_path = base_dir / "frozen_daily_state.json"
+    backtest_path = base_dir / "backtest_summary.json"
+    consistency_path = base_dir / "consistency_checklist.json"
+    rolling_oos_path = base_dir / "rolling_oos_report.json"
+    info_manifest_path = base_dir / "info_manifest.json"
+    info_shadow_report_path = base_dir / "info_shadow_report.json"
+    manifest_path = base_dir / "research_manifest.json"
+    latest_policy_path = Path(str(artifact_root)) / str(strategy_id) / "latest_policy_model.json"
+    latest_manifest_path = Path(str(artifact_root)) / str(strategy_id) / "latest_research_manifest.json"
+    tier_latest_policy_path = _tier_latest_policy_path(
+        artifact_root=artifact_root,
+        strategy_id=strategy_id,
+        universe_tier=universe_tier_value,
+    )
+    tier_latest_manifest_path = _tier_latest_manifest_path(
+        artifact_root=artifact_root,
+        strategy_id=strategy_id,
+        universe_tier=universe_tier_value,
+    )
+
+    info_shadow_enabled = False
+    info_shadow_report: dict[str, object] = {
+        "info_shadow_enabled": False,
+        "shadow_only": bool(settings.get("info_shadow_only", True)),
+        "quant_only": {},
+        "quant_plus_info_shadow": {},
+        "coverage_summary": {},
+        "top_positive_stock_deltas": [],
+        "top_negative_stock_deltas": [],
+        "event_tag_distribution": {},
+        "last_market_info_state": {},
+        "last_date": "",
+        "market_shadow_modes": {},
+        "stock_shadow_modes": {},
+        "model_samples": {"market": {}, "stock": {}},
+    }
+    info_file_path = _resolve_info_file_from_settings(settings)
+    info_as_of_date = pd.Timestamp(learned_meta.end_date or baseline_meta.end_date or settings.get("end", "today")).normalize()
+    info_items: list[InfoItem] = []
+    if bool(settings.get("use_info_fusion", False)):
+        if trajectory is None:
+            trajectory = _load_or_build_v2_backtest_trajectory(
+                config_path=str(settings.get("config_path", config_path)),
+                source=str(settings.get("source", source)) if settings.get("source", source) is not None else None,
+                universe_file=str(settings.get("universe_file", universe_file))
+                if settings.get("universe_file", universe_file) is not None
+                else None,
+                universe_limit=(
+                    int(settings.get("universe_limit"))
+                    if settings.get("universe_limit") is not None
+                    else (int(universe_limit) if universe_limit is not None else None)
+                ),
+                universe_tier=str(settings.get("universe_tier", universe_tier)),
+                cache_root=cache_root,
+                refresh_cache=False,
+                forecast_backend=forecast_backend,
+            )
+        info_file_path, info_items = _load_v2_info_items_for_date(
+            settings=settings,
+            as_of_date=info_as_of_date,
+            learned_window=True,
+        )
+        if trajectory is not None and info_items:
+            _, validation_traj, holdout_traj = _split_research_trajectory(
+                trajectory,
+                split_mode=split_mode,
+                embargo_days=embargo_days,
+            )
+            info_shadow_report = _build_info_shadow_report(
+                validation_trajectory=validation_traj,
+                holdout_trajectory=holdout_traj,
+                settings=settings,
+                info_items=info_items,
+            )
+            info_shadow_enabled = True
+    info_manifest = _build_info_manifest_payload(
+        settings=settings,
+        info_file=info_file_path,
+        info_items=info_items,
+        as_of_date=info_as_of_date,
+        config_hash=config_hash,
+        shadow_enabled=info_shadow_enabled,
+        shadow_report=info_shadow_report,
+    )
+    info_hash = str(info_manifest.get("info_hash", ""))
+
     dataset_manifest = {
         "strategy_id": str(strategy_id),
         "config_path": str(settings.get("config_path", "")),
@@ -4344,6 +5133,11 @@ def publish_v2_research_artifacts(
         "symbol_count": int(settings.get("symbol_count", len(symbols))),
         "universe_hash": universe_hash,
         "config_hash": config_hash,
+        "info_file": str(info_file_path),
+        "info_hash": info_hash,
+        "info_shadow_enabled": bool(info_shadow_enabled),
+        "info_shadow_only": bool(settings.get("info_shadow_only", True)),
+        "info_item_count": int(info_manifest.get("info_item_count", 0)),
         "active_default_universe_tier": active_default_universe_tier,
         "candidate_default_universe_tier": candidate_default_universe_tier,
     }
@@ -4373,6 +5167,7 @@ def publish_v2_research_artifacts(
         "policy_hash": policy_hash,
         "universe_hash": universe_hash,
         "model_hashes": model_hashes,
+        "info_hash": info_hash,
     }
     rolling_oos_manifest = {
         "run_id": run_id,
@@ -4397,28 +5192,6 @@ def publish_v2_research_artifacts(
         ],
         "regime_breakdown": regime_counts,
     }
-
-    dataset_path = base_dir / "dataset_manifest.json"
-    calibration_path = base_dir / "policy_calibration.json"
-    learning_path = base_dir / "learned_policy_model.json"
-    forecast_models_path = base_dir / "forecast_models_manifest.json"
-    frozen_state_path = base_dir / "frozen_daily_state.json"
-    backtest_path = base_dir / "backtest_summary.json"
-    consistency_path = base_dir / "consistency_checklist.json"
-    rolling_oos_path = base_dir / "rolling_oos_report.json"
-    manifest_path = base_dir / "research_manifest.json"
-    latest_policy_path = Path(str(artifact_root)) / str(strategy_id) / "latest_policy_model.json"
-    latest_manifest_path = Path(str(artifact_root)) / str(strategy_id) / "latest_research_manifest.json"
-    tier_latest_policy_path = _tier_latest_policy_path(
-        artifact_root=artifact_root,
-        strategy_id=strategy_id,
-        universe_tier=universe_tier_value,
-    )
-    tier_latest_manifest_path = _tier_latest_manifest_path(
-        artifact_root=artifact_root,
-        strategy_id=strategy_id,
-        universe_tier=universe_tier_value,
-    )
     latest_policy_path.parent.mkdir(parents=True, exist_ok=True)
 
     dataset_path.write_text(json.dumps(dataset_manifest, ensure_ascii=False, indent=2), encoding="utf-8")
@@ -4430,6 +5203,8 @@ def publish_v2_research_artifacts(
     backtest_path.write_text(json.dumps(backtest_manifest, ensure_ascii=False, indent=2), encoding="utf-8")
     consistency_path.write_text(json.dumps(consistency_manifest, ensure_ascii=False, indent=2), encoding="utf-8")
     rolling_oos_path.write_text(json.dumps(rolling_oos_manifest, ensure_ascii=False, indent=2), encoding="utf-8")
+    info_manifest_path.write_text(json.dumps(info_manifest, ensure_ascii=False, indent=2), encoding="utf-8")
+    info_shadow_report_path.write_text(json.dumps(info_shadow_report, ensure_ascii=False, indent=2), encoding="utf-8")
 
     gate_ok, gate_reasons = _pass_release_gate(
         baseline=baseline_meta,
@@ -4515,6 +5290,8 @@ def publish_v2_research_artifacts(
         "universe_size": int(universe_size),
         "universe_generation_rule": universe_generation_rule,
         "source_universe_manifest_path": source_universe_manifest_path,
+        "info_hash": info_hash,
+        "info_shadow_enabled": bool(info_shadow_enabled),
         "data_window": {
             "start": str(settings.get("start", "")),
             "end": str(settings.get("end", "")),
@@ -4534,6 +5311,8 @@ def publish_v2_research_artifacts(
         "backtest_summary": str(backtest_path),
         "consistency_checklist": str(consistency_path),
         "rolling_oos_report": str(rolling_oos_path),
+        "info_manifest": str(info_manifest_path),
+        "info_shadow_report": str(info_shadow_report_path),
         "published_policy_model": str(latest_policy_path),
         "latest_research_manifest": str(latest_manifest_path),
         "tier_published_policy_model": str(tier_latest_policy_path),
@@ -4567,6 +5346,11 @@ def publish_v2_research_artifacts(
         "universe_id": universe_id,
         "universe_size": str(universe_size),
         "source_universe_manifest_path": source_universe_manifest_path,
+        "info_manifest": str(info_manifest_path),
+        "info_shadow_report": str(info_shadow_report_path),
+        "info_hash": info_hash,
+        "info_item_count": str(info_manifest.get("info_item_count", 0)),
+        "info_shadow_enabled": "true" if info_shadow_enabled else "false",
         "dataset_manifest": str(dataset_path),
         "policy_calibration": str(calibration_path),
         "learned_policy_model": str(learning_path),
@@ -4592,6 +5376,12 @@ def run_daily_v2_live(
     universe_file: str | None = None,
     universe_limit: int | None = None,
     universe_tier: str | None = None,
+    info_file: str | None = None,
+    info_lookback_days: int | None = None,
+    info_half_life_days: float | None = None,
+    use_info_fusion: bool | None = None,
+    info_shadow_only: bool | None = None,
+    info_types: str | None = None,
     artifact_root: str = "artifacts/v2",
     cache_root: str = "artifacts/v2/cache",
     refresh_cache: bool = False,
@@ -4605,6 +5395,12 @@ def run_daily_v2_live(
         universe_file=universe_file,
         universe_limit=universe_limit,
         universe_tier=universe_tier,
+        info_file=info_file,
+        info_lookback_days=info_lookback_days,
+        info_half_life_days=info_half_life_days,
+        use_info_fusion=use_info_fusion,
+        info_shadow_only=info_shadow_only,
+        info_types=info_types,
     )
     settings = _resolve_v2_universe_settings(settings=settings, cache_root=cache_root)
     manifest: dict[str, object] = {}
@@ -4691,6 +5487,12 @@ def run_daily_v2_live(
             ]
             settings["symbol_count"] = int(dataset_manifest.get("symbol_count", len(settings["symbols"])))
             settings["universe_hash"] = str(dataset_manifest.get("universe_hash", settings.get("universe_hash", "")))
+            settings["info_file"] = str(dataset_manifest.get("info_file", settings.get("info_file", "")))
+            settings["info_hash"] = str(dataset_manifest.get("info_hash", settings.get("info_hash", "")))
+            settings["info_shadow_enabled"] = _parse_boolish(
+                dataset_manifest.get("info_shadow_enabled", settings.get("info_shadow_enabled", False)),
+                False,
+            )
         snapshot = _build_snapshot_from_manifest(
             strategy_id=strategy_id,
             settings=settings,
@@ -4707,6 +5509,9 @@ def run_daily_v2_live(
             source_universe_manifest_path=str(
                 settings.get("source_universe_manifest_path", settings.get("universe_file", ""))
             ),
+            info_manifest_path=str(settings.get("info_manifest_path", "")),
+            info_hash=str(settings.get("info_hash", "")),
+            info_shadow_enabled=_parse_boolish(settings.get("info_shadow_enabled", False), False),
             run_id=resolved_run_id,
             data_window=data_window,
             config_hash=_stable_json_hash(settings),
@@ -4843,6 +5648,44 @@ def run_daily_v2_live(
     for state in composite_state.stocks:
         symbol_names.setdefault(str(state.symbol), str(state.symbol))
 
+    info_hash = str(snapshot.info_hash or settings.get("info_hash", ""))
+    info_manifest_path = str(snapshot.info_manifest_path or settings.get("info_manifest_path", ""))
+    info_shadow_enabled = bool(snapshot.info_shadow_enabled)
+    info_item_count = 0
+    top_negative_info_events: list[InfoSignalRecord] = []
+    top_positive_info_signals: list[InfoSignalRecord] = []
+    quant_info_divergence: list[InfoDivergenceRecord] = []
+    if bool(settings.get("use_info_fusion", False)):
+        info_file_path, info_items = _load_v2_info_items_for_date(
+            settings=settings,
+            as_of_date=pd.Timestamp(composite_state.market.as_of_date),
+            learned_window=False,
+        )
+        if info_items:
+            composite_state = _enrich_state_with_info(
+                state=composite_state,
+                as_of_date=pd.Timestamp(composite_state.market.as_of_date),
+                info_items=info_items,
+                settings=settings,
+            )
+            info_shadow_enabled = True
+            info_item_count = len(info_items)
+            if not info_hash:
+                info_hash = _sha256_file(info_file_path) or _stable_json_hash([asdict(item) for item in info_items])
+            top_negative_info_events = top_negative_events(
+                info_items,
+                as_of_date=pd.Timestamp(composite_state.market.as_of_date),
+                half_life_days=float(settings.get("info_half_life_days", 10.0)),
+            )
+            top_positive_info_signals = top_positive_stock_signals(
+                composite_state,
+                symbol_names=symbol_names,
+            )
+            quant_info_divergence = quant_info_divergence_rows(
+                composite_state,
+                symbol_names=symbol_names,
+            )
+
     learned_policy = None
     if manifest and manifest_path is not None:
         model_path = _path_from_manifest_entry(
@@ -4883,6 +5726,13 @@ def run_daily_v2_live(
         policy_decision=policy_decision,
         trade_actions=trade_actions,
         symbol_names=symbol_names,
+        info_hash=info_hash,
+        info_manifest_path=info_manifest_path,
+        info_shadow_enabled=info_shadow_enabled,
+        info_item_count=info_item_count,
+        top_negative_info_events=top_negative_info_events,
+        top_positive_info_signals=top_positive_info_signals,
+        quant_info_divergence=quant_info_divergence,
         run_id=snapshot.run_id,
         snapshot_hash=snapshot.snapshot_hash,
         config_hash=snapshot.config_hash,
@@ -4916,6 +5766,10 @@ def summarize_daily_run(result: DailyRunResult) -> dict[str, object]:
         "universe_size": result.snapshot.universe_size,
         "universe_generation_rule": result.snapshot.universe_generation_rule,
         "source_universe_manifest_path": result.snapshot.source_universe_manifest_path,
+        "info_hash": result.info_hash or result.snapshot.info_hash,
+        "info_manifest_path": result.info_manifest_path or result.snapshot.info_manifest_path,
+        "info_shadow_enabled": bool(result.info_shadow_enabled or result.snapshot.info_shadow_enabled),
+        "info_item_count": int(result.info_item_count),
         "run_id": result.run_id or result.snapshot.run_id,
         "snapshot_hash": result.snapshot_hash or result.snapshot.snapshot_hash,
         "config_hash": result.config_hash or result.snapshot.config_hash,
@@ -4923,7 +5777,11 @@ def summarize_daily_run(result: DailyRunResult) -> dict[str, object]:
         "strategy_mode": result.composite_state.strategy_mode,
         "risk_regime": result.composite_state.risk_regime,
         "market": asdict(result.composite_state.market),
+        "market_info_state": asdict(result.composite_state.market_info_state),
         "policy": policy_payload,
+        "top_negative_info_events": [asdict(item) for item in result.top_negative_info_events],
+        "top_positive_info_signals": [asdict(item) for item in result.top_positive_info_signals],
+        "quant_info_divergence": [asdict(item) for item in result.quant_info_divergence],
         "trade_plan": [
             {
                 "stock": _display_name(action.symbol),
