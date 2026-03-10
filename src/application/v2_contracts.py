@@ -72,6 +72,7 @@ class InfoItem:
     direction: str
     info_type: str
     title: str
+    source_subset: str = "market_news"
     source_url: str = ""
     strength: float = 3.0
     confidence: float = 0.7

@@ -19,3 +19,10 @@ config/universe_auto*.json
 artifacts/
 reports/v2_*.md
 reports/v2_*.html
+reports/info_*.md
+reports/info_*.html
+reports/*phase15*.md
+reports/*phase15*.html
+
+# Local experiment configs
+tmp/

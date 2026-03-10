@@ -155,6 +155,17 @@ def _sha256_file(path_like: object) -> str:
     if not path.exists():
         return ""
     h = hashlib.sha256()
+    if path.is_dir():
+        for file in sorted(p for p in path.rglob("*") if p.is_file()):
+            rel = str(file.relative_to(path)).replace("\\", "/")
+            h.update(rel.encode("utf-8"))
+            with file.open("rb") as f:
+                while True:
+                    chunk = f.read(1024 * 1024)
+                    if not chunk:
+                        break
+                    h.update(chunk)
+        return h.hexdigest()
     with path.open("rb") as f:
         while True:
             chunk = f.read(1024 * 1024)
@@ -210,7 +221,26 @@ def _load_v2_info_items_for_date(
         info_file,
         as_of_date=as_of_date.normalize(),
         lookback_days=lookback_days,
+        source_mode=str(settings.get("info_source_mode", "layered")),
         info_types=settings.get("info_types", ("news", "announcement", "research")),
+        info_subsets=settings.get("info_subsets", ("market_news", "announcements", "research")),
+        announcement_event_tags=settings.get(
+            "announcement_event_tags",
+            (
+                "earnings_positive",
+                "earnings_negative",
+                "guidance_positive",
+                "guidance_negative",
+                "contract_win",
+                "contract_loss",
+                "regulatory_positive",
+                "regulatory_negative",
+                "share_reduction",
+                "share_increase",
+                "trading_halt",
+                "delisting_risk",
+            ),
+        ),
     )
     return info_file, items
 
@@ -1158,6 +1188,8 @@ def _load_v2_runtime_settings(
     use_info_fusion: bool | None = None,
     info_shadow_only: bool | None = None,
     info_types: str | None = None,
+    info_source_mode: str | None = None,
+    info_subsets: str | None = None,
 ) -> dict[str, object]:
     payload: dict[str, object] = {}
     path = Path(config_path)
@@ -1227,6 +1259,11 @@ def _load_v2_runtime_settings(
         "learned_info_min_samples": int(pick("learned_info_min_samples", pick("learned_news_min_samples", 80))),
         "learned_info_l2": float(pick("learned_info_l2", pick("learned_news_l2", 0.8))),
         "learned_info_holdout_ratio": float(pick("learned_info_holdout_ratio", pick("learned_holdout_ratio", 0.2))),
+        "info_source_mode": (
+            str(info_source_mode).strip()
+            if info_source_mode is not None and str(info_source_mode).strip()
+            else str(pick("info_source_mode", "layered")).strip()
+        ),
         "info_shadow_only": (
             bool(info_shadow_only)
             if info_shadow_only is not None
@@ -1235,6 +1272,30 @@ def _load_v2_runtime_settings(
         "info_types": _parse_csv_tokens(
             info_types if info_types is not None else pick("info_types", "news,announcement,research"),
             default=("news", "announcement", "research"),
+        ),
+        "info_subsets": _parse_csv_tokens(
+            info_subsets if info_subsets is not None else pick("info_subsets", "market_news,announcements,research"),
+            default=("market_news", "announcements", "research"),
+        ),
+        "announcement_event_tags": _parse_csv_tokens(
+            pick(
+                "announcement_event_tags",
+                "earnings_positive,earnings_negative,guidance_positive,guidance_negative,contract_win,contract_loss,regulatory_positive,regulatory_negative,share_reduction,share_increase,trading_halt,delisting_risk",
+            ),
+            default=(
+                "earnings_positive",
+                "earnings_negative",
+                "guidance_positive",
+                "guidance_negative",
+                "contract_win",
+                "contract_loss",
+                "regulatory_positive",
+                "regulatory_negative",
+                "share_reduction",
+                "share_increase",
+                "trading_halt",
+                "delisting_risk",
+            ),
         ),
         "universe_file": (
             str(universe_file).strip()
@@ -2911,7 +2972,27 @@ def _build_shadow_scored_rows_for_step(
     return pd.DataFrame(rows), bool(event_day)
 
 
-def _build_info_shadow_report(
+def _filter_info_items_by_source_subset(items: Iterable[InfoItem], subset: str) -> list[InfoItem]:
+    target = str(subset).strip()
+    if not target:
+        return list(items)
+    return [item for item in items if str(getattr(item, "source_subset", "")) == target]
+
+
+def _info_source_breakdown(items: Iterable[InfoItem]) -> dict[str, int]:
+    counts = {
+        "market_news": 0,
+        "announcements": 0,
+        "research": 0,
+    }
+    for item in items:
+        subset = str(getattr(item, "source_subset", "")).strip()
+        if subset in counts:
+            counts[subset] = int(counts[subset] + 1)
+    return counts
+
+
+def _build_info_shadow_variant(
     *,
     validation_trajectory: _BacktestTrajectory,
     holdout_trajectory: _BacktestTrajectory,
@@ -2993,34 +3074,104 @@ def _build_info_shadow_report(
         "holdout_step_coverage_ratio": float(coverage_steps / max(1, len(holdout_trajectory.steps))),
         "avg_market_item_count": float(market_items_total / max(1, len(holdout_trajectory.steps))),
         "avg_stock_coverage_ratio": float(stock_coverage_total / max(1, len(holdout_trajectory.steps))),
+        "market_coverage_ratio": float(coverage_steps / max(1, len(holdout_trajectory.steps))),
+        "stock_coverage_ratio": float(stock_coverage_total / max(1, len(holdout_trajectory.steps))),
     }
-    report = {
-        "info_shadow_enabled": bool(settings.get("use_info_fusion", False)),
-        "shadow_only": bool(settings.get("info_shadow_only", True)),
+    return {
         "market_shadow_modes": {horizon: model.mode for horizon, model in market_models.items()},
         "stock_shadow_modes": {horizon: model.mode for horizon, model in stock_models.items()},
         "model_samples": {
             "market": {horizon: int(model.samples) for horizon, model in market_models.items()},
             "stock": {horizon: int(model.samples) for horizon, model in stock_models.items()},
         },
-        "quant_only": {
-            "avg_20d_rank_ic": float(np.mean([float(step.horizon_metrics["20d"]["rank_ic"]) for step in holdout_trajectory.steps])) if holdout_trajectory.steps else 0.0,
-            "avg_20d_top_bottom_spread": float(np.mean([float(step.horizon_metrics["20d"]["top_bottom_spread"]) for step in holdout_trajectory.steps])) if holdout_trajectory.steps else 0.0,
-            "event_day_hit_rate": float(np.mean(holdout_shadow_metrics["event_day_hit_rate_quant"])) if holdout_shadow_metrics["event_day_hit_rate_quant"] else 0.0,
-        },
-        "quant_plus_info_shadow": {
-            "avg_1d_rank_ic": float(np.mean(holdout_shadow_metrics["1d_rank_ic"])) if holdout_shadow_metrics["1d_rank_ic"] else 0.0,
-            "avg_5d_rank_ic": float(np.mean(holdout_shadow_metrics["5d_rank_ic"])) if holdout_shadow_metrics["5d_rank_ic"] else 0.0,
-            "avg_20d_rank_ic": float(np.mean(holdout_shadow_metrics["20d_rank_ic"])) if holdout_shadow_metrics["20d_rank_ic"] else 0.0,
-            "avg_20d_top_bottom_spread": float(np.mean(holdout_shadow_metrics["20d_top_bottom_spread"])) if holdout_shadow_metrics["20d_top_bottom_spread"] else 0.0,
-            "event_day_hit_rate": float(np.mean(holdout_shadow_metrics["event_day_hit_rate_shadow"])) if holdout_shadow_metrics["event_day_hit_rate_shadow"] else 0.0,
-        },
+        "avg_1d_rank_ic": float(np.mean(holdout_shadow_metrics["1d_rank_ic"])) if holdout_shadow_metrics["1d_rank_ic"] else 0.0,
+        "avg_5d_rank_ic": float(np.mean(holdout_shadow_metrics["5d_rank_ic"])) if holdout_shadow_metrics["5d_rank_ic"] else 0.0,
+        "avg_20d_rank_ic": float(np.mean(holdout_shadow_metrics["20d_rank_ic"])) if holdout_shadow_metrics["20d_rank_ic"] else 0.0,
+        "avg_20d_top_bottom_spread": float(np.mean(holdout_shadow_metrics["20d_top_bottom_spread"])) if holdout_shadow_metrics["20d_top_bottom_spread"] else 0.0,
+        "event_day_hit_rate": float(np.mean(holdout_shadow_metrics["event_day_hit_rate_shadow"])) if holdout_shadow_metrics["event_day_hit_rate_shadow"] else 0.0,
+        "quant_event_day_hit_rate": float(np.mean(holdout_shadow_metrics["event_day_hit_rate_quant"])) if holdout_shadow_metrics["event_day_hit_rate_quant"] else 0.0,
         "coverage_summary": coverage_summary,
         "top_positive_stock_deltas": top_positive,
         "top_negative_stock_deltas": top_negative,
-        "event_tag_distribution": event_tag_counts(info_items),
         "last_market_info_state": {} if last_state is None else asdict(last_state.market_info_state),
         "last_date": "" if last_date is None else str(last_date.date()),
+    }
+
+
+def _build_info_shadow_report(
+    *,
+    validation_trajectory: _BacktestTrajectory,
+    holdout_trajectory: _BacktestTrajectory,
+    settings: dict[str, object],
+    info_items: list[InfoItem],
+) -> dict[str, object]:
+    all_variant = _build_info_shadow_variant(
+        validation_trajectory=validation_trajectory,
+        holdout_trajectory=holdout_trajectory,
+        settings=settings,
+        info_items=info_items,
+    )
+    market_news_variant = _build_info_shadow_variant(
+        validation_trajectory=validation_trajectory,
+        holdout_trajectory=holdout_trajectory,
+        settings=settings,
+        info_items=_filter_info_items_by_source_subset(info_items, "market_news"),
+    )
+    announcement_variant = _build_info_shadow_variant(
+        validation_trajectory=validation_trajectory,
+        holdout_trajectory=holdout_trajectory,
+        settings=settings,
+        info_items=_filter_info_items_by_source_subset(info_items, "announcements"),
+    )
+    research_variant = _build_info_shadow_variant(
+        validation_trajectory=validation_trajectory,
+        holdout_trajectory=holdout_trajectory,
+        settings=settings,
+        info_items=_filter_info_items_by_source_subset(info_items, "research"),
+    )
+    report = {
+        "info_shadow_enabled": bool(settings.get("use_info_fusion", False)),
+        "shadow_only": bool(settings.get("info_shadow_only", True)),
+        "market_shadow_modes": dict(all_variant.get("market_shadow_modes", {})),
+        "stock_shadow_modes": dict(all_variant.get("stock_shadow_modes", {})),
+        "model_samples": dict(all_variant.get("model_samples", {})),
+        "quant_only": {
+            "avg_20d_rank_ic": float(np.mean([float(step.horizon_metrics["20d"]["rank_ic"]) for step in holdout_trajectory.steps])) if holdout_trajectory.steps else 0.0,
+            "avg_20d_top_bottom_spread": float(np.mean([float(step.horizon_metrics["20d"]["top_bottom_spread"]) for step in holdout_trajectory.steps])) if holdout_trajectory.steps else 0.0,
+            "event_day_hit_rate": float(all_variant.get("quant_event_day_hit_rate", 0.0)),
+        },
+        "quant_plus_info_shadow": {
+            key: value
+            for key, value in all_variant.items()
+            if key in {"avg_1d_rank_ic", "avg_5d_rank_ic", "avg_20d_rank_ic", "avg_20d_top_bottom_spread", "event_day_hit_rate"}
+        },
+        "market_news_only": {
+            key: value
+            for key, value in market_news_variant.items()
+            if key in {"avg_1d_rank_ic", "avg_5d_rank_ic", "avg_20d_rank_ic", "avg_20d_top_bottom_spread", "event_day_hit_rate"}
+        },
+        "announcements_only": {
+            key: value
+            for key, value in announcement_variant.items()
+            if key in {"avg_1d_rank_ic", "avg_5d_rank_ic", "avg_20d_rank_ic", "avg_20d_top_bottom_spread", "event_day_hit_rate"}
+        },
+        "research_only": {
+            key: value
+            for key, value in research_variant.items()
+            if key in {"avg_1d_rank_ic", "avg_5d_rank_ic", "avg_20d_rank_ic", "avg_20d_top_bottom_spread", "event_day_hit_rate"}
+        },
+        "all_info_combined": {
+            key: value
+            for key, value in all_variant.items()
+            if key in {"avg_1d_rank_ic", "avg_5d_rank_ic", "avg_20d_rank_ic", "avg_20d_top_bottom_spread", "event_day_hit_rate"}
+        },
+        "coverage_summary": dict(all_variant.get("coverage_summary", {})),
+        "top_positive_stock_deltas": list(all_variant.get("top_positive_stock_deltas", [])),
+        "top_negative_stock_deltas": list(all_variant.get("top_negative_stock_deltas", [])),
+        "event_tag_distribution": event_tag_counts(info_items),
+        "info_source_breakdown": _info_source_breakdown(info_items),
+        "last_market_info_state": dict(all_variant.get("last_market_info_state", {})),
+        "last_date": str(all_variant.get("last_date", "")),
     }
     return report
 
@@ -3038,6 +3189,7 @@ def _build_info_manifest_payload(
     counts: dict[str, int] = {}
     for item in info_items:
         counts[item.info_type] = int(counts.get(item.info_type, 0) + 1)
+    source_breakdown = _info_source_breakdown(info_items)
     date_window = {
         "start": "",
         "end": "",
@@ -3055,12 +3207,25 @@ def _build_info_manifest_payload(
         "info_hash": str(info_hash),
         "info_item_count": int(len(info_items)),
         "info_type_counts": counts,
+        "info_source_breakdown": source_breakdown,
+        "market_news_count": int(source_breakdown.get("market_news", 0)),
+        "announcement_count": int(source_breakdown.get("announcements", 0)),
+        "research_count": int(source_breakdown.get("research", 0)),
         "date_window": date_window,
         "coverage_summary": {} if shadow_report is None else dict(shadow_report.get("coverage_summary", {})),
+        "market_coverage_ratio": float(
+            (shadow_report or {}).get("coverage_summary", {}).get("market_coverage_ratio", 0.0)
+        ),
+        "stock_coverage_ratio": float(
+            (shadow_report or {}).get("coverage_summary", {}).get("stock_coverage_ratio", 0.0)
+        ),
         "config_hash": str(config_hash),
         "info_shadow_enabled": bool(shadow_enabled),
         "info_shadow_only": bool(settings.get("info_shadow_only", True)),
+        "info_source_mode": str(settings.get("info_source_mode", "layered")),
         "info_types": [str(item) for item in settings.get("info_types", [])],
+        "info_subsets": [str(item) for item in settings.get("info_subsets", [])],
+        "announcement_event_tags": [str(item) for item in settings.get("announcement_event_tags", [])],
         "as_of_date": str(as_of_date.date()),
     }
 
@@ -3676,7 +3841,7 @@ def _daily_result_cache_key(
         snapshot_path=snapshot_path,
     )
     payload = {
-        "version": "v2-daily-cache-2",
+        "version": "v2-daily-cache-3",
         "strategy_id": str(strategy_id),
         "config_path": str(Path(str(settings.get("config_path", ""))).resolve()),
         "source": str(settings.get("source", "")),
@@ -3704,7 +3869,10 @@ def _daily_result_cache_key(
         "info_hash": str(settings.get("info_hash", "")),
         "use_info_fusion": bool(settings.get("use_info_fusion", False)),
         "info_shadow_only": bool(settings.get("info_shadow_only", True)),
+        "info_source_mode": str(settings.get("info_source_mode", "layered")),
         "info_types": [str(item) for item in settings.get("info_types", [])],
+        "info_subsets": [str(item) for item in settings.get("info_subsets", [])],
+        "announcement_event_tags": [str(item) for item in settings.get("announcement_event_tags", [])],
         "published_policy_path": str(policy_path.resolve()),
         "published_policy_mtime": _file_mtime_token(policy_path),
         "run_id": str(run_id),
@@ -4352,6 +4520,8 @@ def run_v2_research_workflow(
     use_info_fusion: bool | None = None,
     info_shadow_only: bool | None = None,
     info_types: str | None = None,
+    info_source_mode: str | None = None,
+    info_subsets: str | None = None,
     skip_calibration: bool = False,
     skip_learning: bool = False,
     cache_root: str = "artifacts/v2/cache",
@@ -4881,6 +5051,8 @@ def publish_v2_research_artifacts(
     use_info_fusion: bool | None = None,
     info_shadow_only: bool | None = None,
     info_types: str | None = None,
+    info_source_mode: str | None = None,
+    info_subsets: str | None = None,
     settings: dict[str, object] | None = None,
     baseline: V2BacktestSummary,
     calibration: V2CalibrationResult,
@@ -4904,6 +5076,8 @@ def publish_v2_research_artifacts(
         use_info_fusion=use_info_fusion,
         info_shadow_only=info_shadow_only,
         info_types=info_types,
+        info_source_mode=info_source_mode,
+        info_subsets=info_subsets,
     )
     settings = _resolve_v2_universe_settings(settings=dict(settings), cache_root=cache_root)
     run_id = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -5055,10 +5229,15 @@ def publish_v2_research_artifacts(
         "shadow_only": bool(settings.get("info_shadow_only", True)),
         "quant_only": {},
         "quant_plus_info_shadow": {},
+        "market_news_only": {},
+        "announcements_only": {},
+        "research_only": {},
+        "all_info_combined": {},
         "coverage_summary": {},
         "top_positive_stock_deltas": [],
         "top_negative_stock_deltas": [],
         "event_tag_distribution": {},
+        "info_source_breakdown": {},
         "last_market_info_state": {},
         "last_date": "",
         "market_shadow_modes": {},
@@ -5138,6 +5317,9 @@ def publish_v2_research_artifacts(
         "info_shadow_enabled": bool(info_shadow_enabled),
         "info_shadow_only": bool(settings.get("info_shadow_only", True)),
         "info_item_count": int(info_manifest.get("info_item_count", 0)),
+        "info_source_mode": str(settings.get("info_source_mode", "layered")),
+        "info_subsets": [str(item) for item in settings.get("info_subsets", [])],
+        "announcement_event_tags": [str(item) for item in settings.get("announcement_event_tags", [])],
         "active_default_universe_tier": active_default_universe_tier,
         "candidate_default_universe_tier": candidate_default_universe_tier,
     }
@@ -5168,6 +5350,7 @@ def publish_v2_research_artifacts(
         "universe_hash": universe_hash,
         "model_hashes": model_hashes,
         "info_hash": info_hash,
+        "info_source_mode": str(settings.get("info_source_mode", "layered")),
     }
     rolling_oos_manifest = {
         "run_id": run_id,
@@ -5292,6 +5475,9 @@ def publish_v2_research_artifacts(
         "source_universe_manifest_path": source_universe_manifest_path,
         "info_hash": info_hash,
         "info_shadow_enabled": bool(info_shadow_enabled),
+        "info_source_mode": str(settings.get("info_source_mode", "layered")),
+        "info_subsets": [str(item) for item in settings.get("info_subsets", [])],
+        "announcement_event_tags": [str(item) for item in settings.get("announcement_event_tags", [])],
         "data_window": {
             "start": str(settings.get("start", "")),
             "end": str(settings.get("end", "")),
@@ -5382,6 +5568,8 @@ def run_daily_v2_live(
     use_info_fusion: bool | None = None,
     info_shadow_only: bool | None = None,
     info_types: str | None = None,
+    info_source_mode: str | None = None,
+    info_subsets: str | None = None,
     artifact_root: str = "artifacts/v2",
     cache_root: str = "artifacts/v2/cache",
     refresh_cache: bool = False,
@@ -5401,6 +5589,8 @@ def run_daily_v2_live(
         use_info_fusion=use_info_fusion,
         info_shadow_only=info_shadow_only,
         info_types=info_types,
+        info_source_mode=info_source_mode,
+        info_subsets=info_subsets,
     )
     settings = _resolve_v2_universe_settings(settings=settings, cache_root=cache_root)
     manifest: dict[str, object] = {}
@@ -5493,6 +5683,17 @@ def run_daily_v2_live(
                 dataset_manifest.get("info_shadow_enabled", settings.get("info_shadow_enabled", False)),
                 False,
             )
+            settings["info_source_mode"] = str(dataset_manifest.get("info_source_mode", settings.get("info_source_mode", "layered")))
+            settings["info_subsets"] = [
+                str(item)
+                for item in dataset_manifest.get("info_subsets", settings.get("info_subsets", []))
+                if str(item).strip()
+            ]
+            settings["announcement_event_tags"] = [
+                str(item)
+                for item in dataset_manifest.get("announcement_event_tags", settings.get("announcement_event_tags", []))
+                if str(item).strip()
+            ]
         snapshot = _build_snapshot_from_manifest(
             strategy_id=strategy_id,
             settings=settings,

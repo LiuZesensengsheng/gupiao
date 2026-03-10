@@ -1,0 +1,7 @@
+date,target_type,target,horizon,direction,info_type,title,source_url,publisher,strength,confidence,source_weight,event_tag
+2025-01-18,stock,603619.SH,mid,bullish,announcement,中曼石油关于油田项目勘探开发进展的公告,https://data.eastmoney.com/notices/detail/603619/AN202501171642298303.html,东财公告,4,0.82,1.0,contract_win
+2025-01-23,stock,600160.SH,mid,bullish,announcement,巨化股份2024年度业绩预增公告,https://data.eastmoney.com/notices/detail/600160/AN202501221642458142.html,东财公告,4,0.82,1.0,earnings_positive
+2025-03-07,stock,603619.SH,mid,bullish,announcement,中曼石油关于控股股东增持股份暨权益变动触及1%整数倍的提示性公告,https://data.eastmoney.com/notices/detail/603619/AN202503061644115037.html,东财公告,4,0.82,1.0,share_increase
+2026-01-22,stock,600160.SH,mid,bullish,announcement,巨化股份2025年度业绩预增公告,https://data.eastmoney.com/notices/detail/600160/AN202601211818210077.html,东财公告,4,0.82,1.0,earnings_positive
+2026-01-30,stock,603619.SH,mid,bearish,announcement,中曼石油股东减持结果公告含超计划减持情形,https://paper.cnstock.com/html/2026-01/30/content_2175924.htm,上证报,4,0.90,1.0,share_reduction
+2026-01-30,stock,000630.SZ,short,bearish,announcement,铜陵有色股票交易异常波动公告,https://data.eastmoney.com/notices/detail/000630/AN202601291818546587.html,东财公告,4,0.82,1.0,regulatory_negative

@@ -1,0 +1,5 @@
+date,target_type,target,horizon,direction,info_type,title,source_url,publisher,strength,confidence,source_weight,event_tag
+2025-02-11,stock,603619.SH,mid,bullish,research,国金证券股份有限公司关于中曼石油天然气集团股份有限公司向特定对象发行股票限售股解禁上市流通的核查意见,https://data.eastmoney.com/notices/detail/603619/AN202502101642942486.html,国金证券,3,0.78,0.70,regulatory_positive
+2025-02-19,stock,600160.SH,mid,bullish,research,巨化股份增资控股甘肃巨化暨实施高性能氟氯新材料一体化项目的可行性研究报告,https://data.eastmoney.com/notices/detail/600160/AN202502181643210789.html,公司披露,3,0.72,0.70,contract_win
+2026-01-01,stock,603619.SH,mid,bullish,research,国金证券股份有限公司关于中曼石油天然气集团股份有限公司签署伊拉克MF区块研究服务协议暨关联交易的核查意见,https://data.eastmoney.com/notices/detail/603619/AN202512311812018091.html,国金证券,4,0.82,0.70,contract_win
+2026-02-10,stock,603049.SH,mid,bearish,research,中信建投证券股份有限公司关于中策橡胶集团股份有限公司2025年度现场检查报告,https://data.eastmoney.com/notices/detail/603049/AN202602091819833724.html,中信建投,2,0.66,0.70,regulatory_negative

@@ -24,6 +24,7 @@ from src.application.v2_services import (
     _TrajectoryStep,
     _build_date_slice_index,
     _derive_learning_targets,
+    _sha256_file,
     calibrate_v2_policy,
     _load_or_build_v2_backtest_trajectory,
     _make_forecast_backend,
@@ -133,6 +134,21 @@ def test_policy_model_projects_state_into_valid_policy_spec() -> None:
     assert 0.20 <= spec.risk_on_exposure <= 0.95
     assert 1 <= spec.risk_on_positions <= 6
     assert 0.10 <= spec.risk_on_turnover_cap <= 0.45
+
+
+def test_sha256_file_supports_directory_inputs(tmp_path: Path) -> None:
+    info_dir = tmp_path / "info_parts"
+    info_dir.mkdir(parents=True, exist_ok=True)
+    (info_dir / "a.csv").write_text("x\n1\n", encoding="utf-8")
+    nested = info_dir / "nested"
+    nested.mkdir(parents=True, exist_ok=True)
+    (nested / "b.csv").write_text("y\n2\n", encoding="utf-8")
+
+    first = _sha256_file(info_dir)
+    second = _sha256_file(info_dir)
+
+    assert first
+    assert first == second
 
 
 def test_generated_80_learning_targets_prefer_realizable_alpha_and_ranking() -> None:
@@ -375,13 +391,33 @@ def test_publish_artifacts_records_universe_metadata_and_keeps_non_default_lates
         json.dumps({"learned": asdict(_make_backtest(0.30, 0.28))}),
         encoding="utf-8",
     )
-    info_file = tmp_path / "info.csv"
-    info_file.write_text(
+    info_dir = tmp_path / "info_parts"
+    (info_dir / "market_news").mkdir(parents=True, exist_ok=True)
+    (info_dir / "announcements").mkdir(parents=True, exist_ok=True)
+    (info_dir / "research").mkdir(parents=True, exist_ok=True)
+    (info_dir / "market_news" / "market.csv").write_text(
         "\n".join(
             [
-                "date,target_type,target,horizon,direction,info_type,title,event_tag",
-                "2024-12-20,market,MARKET,mid,bullish,news,macro support,regulatory_positive",
-                "2024-12-22,stock,000001.SZ,short,bearish,announcement,risk event,earnings_negative",
+                "date,target_type,target,horizon,direction,title",
+                "2024-12-20,market,MARKET,mid,bullish,macro support",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    (info_dir / "announcements" / "ann.csv").write_text(
+        "\n".join(
+            [
+                "date,target_type,target,horizon,direction,title,event_tag",
+                "2024-12-22,stock,000001.SZ,short,bearish,risk event,earnings_negative",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    (info_dir / "research" / "research.csv").write_text(
+        "\n".join(
+            [
+                "date,target_type,target,horizon,direction,title",
+                "2024-12-23,stock,000001.SZ,mid,bullish,券商首次覆盖并给出买入评级",
             ]
         ),
         encoding="utf-8",
@@ -406,9 +442,12 @@ def test_publish_artifacts_records_universe_metadata_and_keeps_non_default_lates
             "favorites_universe_file": str(favorites),
             "generated_universe_base_file": str(generated_base),
             "baseline_reference_run_id": "20260308_211808",
-            "info_file": str(info_file),
+            "info_file": str(info_dir),
             "use_info_fusion": True,
             "info_shadow_only": True,
+            "info_source_mode": "layered",
+            "info_subsets": ["market_news", "announcements", "research"],
+            "announcement_event_tags": ["earnings_negative"],
         },
         baseline=baseline,
         calibration=calibration,
@@ -421,9 +460,12 @@ def test_publish_artifacts_records_universe_metadata_and_keeps_non_default_lates
     assert dataset_manifest["symbol_count"] == 3
     assert len(dataset_manifest["symbols"]) == 3
     assert dataset_manifest["source_universe_manifest_path"]
-    assert dataset_manifest["info_file"] == str(info_file)
+    assert dataset_manifest["info_file"] == str(info_dir)
     assert dataset_manifest["info_hash"]
-    assert dataset_manifest["info_item_count"] == 2
+    assert dataset_manifest["info_item_count"] == 3
+    assert dataset_manifest["info_source_mode"] == "layered"
+    assert dataset_manifest["info_subsets"] == ["market_news", "announcements", "research"]
+    assert dataset_manifest["announcement_event_tags"] == ["earnings_negative"]
 
     manifest = json.loads(Path(paths["research_manifest"]).read_text(encoding="utf-8"))
     assert manifest["default_switch_gate"]["passed"] is False
@@ -433,9 +475,13 @@ def test_publish_artifacts_records_universe_metadata_and_keeps_non_default_lates
     assert not (tmp_path / "swing_v2" / "latest_research_manifest.json").exists()
     assert (tmp_path / "swing_v2" / "latest_research_manifest.generated_80.json").exists()
     info_manifest = json.loads(Path(paths["info_manifest"]).read_text(encoding="utf-8"))
-    assert info_manifest["info_item_count"] == 2
+    assert info_manifest["info_item_count"] == 3
     assert info_manifest["info_type_counts"]["news"] == 1
     assert info_manifest["info_type_counts"]["announcement"] == 1
+    assert info_manifest["info_type_counts"]["research"] == 1
+    assert info_manifest["info_source_breakdown"]["market_news"] == 1
+    assert info_manifest["info_source_breakdown"]["announcements"] == 1
+    assert info_manifest["info_source_breakdown"]["research"] == 1
 
 
 def test_backtest_summary_carries_cross_section_metrics() -> None:

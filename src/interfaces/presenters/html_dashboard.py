@@ -1522,6 +1522,10 @@ def write_v2_research_dashboard(
     if info_shadow:
         quant_only = info_shadow.get("quant_only", {}) if isinstance(info_shadow, dict) else {}
         shadow_only = info_shadow.get("quant_plus_info_shadow", {}) if isinstance(info_shadow, dict) else {}
+        market_news_only = info_shadow.get("market_news_only", {}) if isinstance(info_shadow, dict) else {}
+        announcements_only = info_shadow.get("announcements_only", {}) if isinstance(info_shadow, dict) else {}
+        research_only = info_shadow.get("research_only", {}) if isinstance(info_shadow, dict) else {}
+        all_info_combined = info_shadow.get("all_info_combined", shadow_only) if isinstance(info_shadow, dict) else {}
         info_compare_rows = (
             "<tr>"
             "<td>quant_only</td>"
@@ -1534,6 +1538,30 @@ def write_v2_research_dashboard(
             f"<td>{_num(float(shadow_only.get('avg_20d_rank_ic', 0.0)), 3)}</td>"
             f"<td>{_pct(float(shadow_only.get('avg_20d_top_bottom_spread', 0.0)))}</td>"
             f"<td>{_pct(float(shadow_only.get('event_day_hit_rate', 0.0)))}</td>"
+            "</tr>"
+            "<tr>"
+            "<td>quant_plus_market_news_shadow</td>"
+            f"<td>{_num(float(market_news_only.get('avg_20d_rank_ic', 0.0)), 3)}</td>"
+            f"<td>{_pct(float(market_news_only.get('avg_20d_top_bottom_spread', 0.0)))}</td>"
+            f"<td>{_pct(float(market_news_only.get('event_day_hit_rate', 0.0)))}</td>"
+            "</tr>"
+            "<tr>"
+            "<td>quant_plus_event_ann_shadow</td>"
+            f"<td>{_num(float(announcements_only.get('avg_20d_rank_ic', 0.0)), 3)}</td>"
+            f"<td>{_pct(float(announcements_only.get('avg_20d_top_bottom_spread', 0.0)))}</td>"
+            f"<td>{_pct(float(announcements_only.get('event_day_hit_rate', 0.0)))}</td>"
+            "</tr>"
+            "<tr>"
+            "<td>quant_plus_research_shadow</td>"
+            f"<td>{_num(float(research_only.get('avg_20d_rank_ic', 0.0)), 3)}</td>"
+            f"<td>{_pct(float(research_only.get('avg_20d_top_bottom_spread', 0.0)))}</td>"
+            f"<td>{_pct(float(research_only.get('event_day_hit_rate', 0.0)))}</td>"
+            "</tr>"
+            "<tr>"
+            "<td>quant_plus_all_info_shadow</td>"
+            f"<td>{_num(float(all_info_combined.get('avg_20d_rank_ic', 0.0)), 3)}</td>"
+            f"<td>{_pct(float(all_info_combined.get('avg_20d_top_bottom_spread', 0.0)))}</td>"
+            f"<td>{_pct(float(all_info_combined.get('event_day_hit_rate', 0.0)))}</td>"
             "</tr>"
         )
     event_tag_rows = "".join(
@@ -1754,6 +1782,7 @@ def write_v2_research_dashboard(
           <tr><th>影子模式</th><td>{'开启' if bool((artifacts or {}).get('info_shadow_enabled')) else '关闭'}</td></tr>
           <tr><th>信息条数</th><td>{int(info_manifest.get('info_item_count', 0) or 0)}</td></tr>
           <tr><th>信息哈希</th><td>{escape(str((artifacts or {}).get('info_hash', '')))}</td></tr>
+          <tr><th>来源分布</th><td>{escape(str(info_manifest.get('info_source_breakdown', {})))}</td></tr>
           <tr><th>市场覆盖率</th><td>{_pct(float((info_manifest.get('coverage_summary', {}) if isinstance(info_manifest, dict) else {}).get('market_coverage_ratio', 0.0)))}</td></tr>
           <tr><th>个股覆盖率</th><td>{_pct(float((info_manifest.get('coverage_summary', {}) if isinstance(info_manifest, dict) else {}).get('stock_coverage_ratio', 0.0)))}</td></tr>
         </table>

@@ -780,17 +780,34 @@ def write_v2_research_report(
         lines.append("")
         lines.append(f"- 信息条数: {info_manifest.get('info_item_count', 0)}")
         lines.append(f"- 信息类型分布: {info_manifest.get('info_type_counts', {})}")
+        lines.append(f"- 信息来源分布: {info_manifest.get('info_source_breakdown', {})}")
         lines.append(f"- 覆盖摘要: {info_manifest.get('coverage_summary', {})}")
         lines.append("")
         lines.append("| 方案 | 20日RankIC | 20日头尾价差 | 事件日命中率 |")
         lines.append("|---|---:|---:|---:|")
         quant_only = info_shadow.get("quant_only", {}) if isinstance(info_shadow, dict) else {}
         shadow_only = info_shadow.get("quant_plus_info_shadow", {}) if isinstance(info_shadow, dict) else {}
+        market_news_only = info_shadow.get("market_news_only", {}) if isinstance(info_shadow, dict) else {}
+        announcements_only = info_shadow.get("announcements_only", {}) if isinstance(info_shadow, dict) else {}
+        research_only = info_shadow.get("research_only", {}) if isinstance(info_shadow, dict) else {}
+        all_info_combined = info_shadow.get("all_info_combined", shadow_only) if isinstance(info_shadow, dict) else {}
         lines.append(
             f"| quant_only | {_to_float(float(quant_only.get('avg_20d_rank_ic', 0.0)), 3)} | {_to_percent(float(quant_only.get('avg_20d_top_bottom_spread', 0.0)))} | {_to_percent(float(quant_only.get('event_day_hit_rate', 0.0)))} |"
         )
         lines.append(
             f"| quant_plus_info_shadow | {_to_float(float(shadow_only.get('avg_20d_rank_ic', 0.0)), 3)} | {_to_percent(float(shadow_only.get('avg_20d_top_bottom_spread', 0.0)))} | {_to_percent(float(shadow_only.get('event_day_hit_rate', 0.0)))} |"
+        )
+        lines.append(
+            f"| quant_plus_market_news_shadow | {_to_float(float(market_news_only.get('avg_20d_rank_ic', 0.0)), 3)} | {_to_percent(float(market_news_only.get('avg_20d_top_bottom_spread', 0.0)))} | {_to_percent(float(market_news_only.get('event_day_hit_rate', 0.0)))} |"
+        )
+        lines.append(
+            f"| quant_plus_event_ann_shadow | {_to_float(float(announcements_only.get('avg_20d_rank_ic', 0.0)), 3)} | {_to_percent(float(announcements_only.get('avg_20d_top_bottom_spread', 0.0)))} | {_to_percent(float(announcements_only.get('event_day_hit_rate', 0.0)))} |"
+        )
+        lines.append(
+            f"| quant_plus_research_shadow | {_to_float(float(research_only.get('avg_20d_rank_ic', 0.0)), 3)} | {_to_percent(float(research_only.get('avg_20d_top_bottom_spread', 0.0)))} | {_to_percent(float(research_only.get('event_day_hit_rate', 0.0)))} |"
+        )
+        lines.append(
+            f"| quant_plus_all_info_shadow | {_to_float(float(all_info_combined.get('avg_20d_rank_ic', 0.0)), 3)} | {_to_percent(float(all_info_combined.get('avg_20d_top_bottom_spread', 0.0)))} | {_to_percent(float(all_info_combined.get('event_day_hit_rate', 0.0)))} |"
         )
         lines.append("")
         lines.append("### Top Positive Shadow Delta")

@@ -45,6 +45,8 @@ def build_parser() -> argparse.ArgumentParser:
     daily.add_argument("--info-shadow-only", dest="info_shadow_only", action="store_true", default=None, help="Keep info in shadow-only mode")
     daily.add_argument("--no-info-shadow-only", dest="info_shadow_only", action="store_false", help="Disable shadow-only flag")
     daily.add_argument("--info-types", dest="info_types", default=None, help="Comma-separated info types")
+    daily.add_argument("--info-source-mode", dest="info_source_mode", default=None, choices=["layered", "legacy"], help="Info input mode")
+    daily.add_argument("--info-subsets", dest="info_subsets", default=None, help="Comma-separated info subsets")
     daily.add_argument("--report", default="reports/v2_daily_report.md", help="Markdown report output path")
     daily.add_argument("--dashboard", default="reports/v2_daily_dashboard.html", help="HTML dashboard output path")
     daily.add_argument("--artifact-root", default="artifacts/v2", help="Published artifact root for learned policy snapshots")
@@ -69,6 +71,8 @@ def build_parser() -> argparse.ArgumentParser:
     research.add_argument("--info-shadow-only", dest="info_shadow_only", action="store_true", default=None, help="Keep info in shadow-only mode")
     research.add_argument("--no-info-shadow-only", dest="info_shadow_only", action="store_false", help="Disable shadow-only flag")
     research.add_argument("--info-types", dest="info_types", default=None, help="Comma-separated info types")
+    research.add_argument("--info-source-mode", dest="info_source_mode", default=None, choices=["layered", "legacy"], help="Info input mode")
+    research.add_argument("--info-subsets", dest="info_subsets", default=None, help="Comma-separated info subsets")
     research.add_argument("--report", default="reports/v2_research_report.md", help="Markdown report output path")
     research.add_argument("--dashboard", default="reports/v2_research_dashboard.html", help="HTML dashboard output path")
     research.add_argument("--artifact-root", default="artifacts/v2", help="Artifact output root for research runs")
@@ -136,6 +140,8 @@ def main() -> int:
             use_info_fusion=args.use_info_fusion,
             info_shadow_only=args.info_shadow_only,
             info_types=args.info_types,
+            info_source_mode=args.info_source_mode,
+            info_subsets=args.info_subsets,
             artifact_root=str(args.artifact_root),
             cache_root=str(args.cache_root),
             refresh_cache=bool(args.refresh_cache),
@@ -179,6 +185,8 @@ def main() -> int:
             use_info_fusion=args.use_info_fusion,
             info_shadow_only=args.info_shadow_only,
             info_types=args.info_types,
+            info_source_mode=args.info_source_mode,
+            info_subsets=args.info_subsets,
             skip_calibration=skip_calibration,
             skip_learning=skip_learning,
             cache_root=str(args.cache_root),
@@ -203,6 +211,8 @@ def main() -> int:
                 use_info_fusion=args.use_info_fusion,
                 info_shadow_only=args.info_shadow_only,
                 info_types=args.info_types,
+                info_source_mode=args.info_source_mode,
+                info_subsets=args.info_subsets,
                 baseline=baseline,
                 calibration=calibration,
                 learning=learning,
