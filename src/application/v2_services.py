@@ -1146,6 +1146,8 @@ def build_strategy_snapshot(
     snapshot_hash: str = "",
     config_hash: str = "",
     manifest_path: str = "",
+    use_us_index_context: bool = False,
+    us_index_source: str = "",
 ) -> StrategySnapshot:
     return StrategySnapshot(
         strategy_id=str(strategy_id).strip() or "swing_v2",
@@ -1172,6 +1174,8 @@ def build_strategy_snapshot(
         snapshot_hash=str(snapshot_hash),
         config_hash=str(config_hash),
         manifest_path=str(manifest_path),
+        use_us_index_context=bool(use_us_index_context),
+        us_index_source=str(us_index_source),
     )
 
 
@@ -1190,6 +1194,8 @@ def _load_v2_runtime_settings(
     info_types: str | None = None,
     info_source_mode: str | None = None,
     info_subsets: str | None = None,
+    use_us_index_context: bool | None = None,
+    us_index_source: str | None = None,
 ) -> dict[str, object]:
     payload: dict[str, object] = {}
     path = Path(config_path)
@@ -1219,6 +1225,16 @@ def _load_v2_runtime_settings(
         "use_margin_features": bool(pick("use_margin_features", True)),
         "margin_market_file": str(pick("margin_market_file", "input/margin_market.csv")),
         "margin_stock_file": str(pick("margin_stock_file", "input/margin_stock.csv")),
+        "use_us_index_context": (
+            bool(use_us_index_context)
+            if use_us_index_context is not None
+            else _parse_boolish(pick("use_us_index_context", False), False)
+        ),
+        "us_index_source": (
+            str(us_index_source).strip()
+            if us_index_source is not None and str(us_index_source).strip()
+            else str(pick("us_index_source", "akshare")).strip()
+        ),
         "universe_tier": (
             str(universe_tier).strip()
             if universe_tier is not None and str(universe_tier).strip()
@@ -1435,6 +1451,8 @@ def _build_market_and_cross_section_states(
     end: str,
     use_margin_features: bool,
     margin_market_file: str,
+    use_us_index_context: bool,
+    us_index_source: str,
     market_short_prob: float,
     market_two_prob: float | None,
     market_three_prob: float | None,
@@ -1457,6 +1475,8 @@ def _build_market_and_cross_section_states(
         market_dates=market_feat_base["date"],
         use_margin_features=use_margin_features,
         margin_market_file=margin_market_file,
+        use_us_index_context=use_us_index_context,
+        us_index_source=us_index_source,
     )
     market_frame = market_feat_base.merge(market_context.frame, on="date", how="left")
     latest = market_frame.sort_values("date").iloc[-1]
@@ -3253,6 +3273,8 @@ def _prepare_v2_backtest_data(
     universe_limit: int | None = None,
     universe_tier: str | None = None,
     cache_root: str = "artifacts/v2/cache",
+    use_us_index_context: bool | None = None,
+    us_index_source: str | None = None,
 ) -> _PreparedV2BacktestData | None:
     settings = _load_v2_runtime_settings(
         config_path=config_path,
@@ -3260,6 +3282,8 @@ def _prepare_v2_backtest_data(
         universe_file=universe_file,
         universe_limit=universe_limit,
         universe_tier=universe_tier,
+        use_us_index_context=use_us_index_context,
+        us_index_source=us_index_source,
     )
     settings = _resolve_v2_universe_settings(settings=settings, cache_root=cache_root)
     market_security, _, _ = load_watchlist(str(settings["watchlist"]))
@@ -3290,6 +3314,8 @@ def _prepare_v2_backtest_data(
         market_dates=market_feat_base["date"],
         use_margin_features=bool(settings["use_margin_features"]),
         margin_market_file=str(settings["margin_market_file"]),
+        use_us_index_context=bool(settings.get("use_us_index_context", False)),
+        us_index_source=str(settings.get("us_index_source", "akshare")),
     )
     market_frame = market_feat_base.merge(market_context.frame, on="date", how="left", validate="1:1")
     market_feature_cols = list(MARKET_FEATURE_COLUMNS) + list(market_context.feature_columns)
@@ -3786,9 +3812,11 @@ def _trajectory_cache_key(
     universe_tier: str | None,
     retrain_days: int,
     forecast_backend: str,
+    use_us_index_context: bool,
+    us_index_source: str,
 ) -> str:
     payload = {
-        "version": "v2-trajectory-cache-1",
+        "version": "v2-trajectory-cache-2",
         "config_path": str(Path(config_path).resolve()),
         "source": "" if source is None else str(source),
         "universe_file": "" if universe_file is None else str(Path(universe_file).resolve()),
@@ -3796,6 +3824,8 @@ def _trajectory_cache_key(
         "universe_tier": "" if universe_tier is None else str(universe_tier),
         "retrain_days": int(retrain_days),
         "forecast_backend": str(forecast_backend),
+        "use_us_index_context": bool(use_us_index_context),
+        "us_index_source": str(us_index_source),
     }
     raw = json.dumps(payload, sort_keys=True, ensure_ascii=False)
     return hashlib.sha256(raw.encode("utf-8")).hexdigest()[:24]
@@ -3841,7 +3871,7 @@ def _daily_result_cache_key(
         snapshot_path=snapshot_path,
     )
     payload = {
-        "version": "v2-daily-cache-3",
+        "version": "v2-daily-cache-4",
         "strategy_id": str(strategy_id),
         "config_path": str(Path(str(settings.get("config_path", ""))).resolve()),
         "source": str(settings.get("source", "")),
@@ -3864,6 +3894,8 @@ def _daily_result_cache_key(
         "margin_market_mtime": _file_mtime_token(settings.get("margin_market_file", "")),
         "margin_stock_file": str(settings.get("margin_stock_file", "")),
         "margin_stock_mtime": _file_mtime_token(settings.get("margin_stock_file", "")),
+        "use_us_index_context": bool(settings.get("use_us_index_context", False)),
+        "us_index_source": str(settings.get("us_index_source", "akshare")),
         "info_file": str(Path(str(_resolve_info_file_from_settings(settings) or "")).resolve()) if _resolve_info_file_from_settings(settings) else "",
         "info_file_mtime": _file_mtime_token(_resolve_info_file_from_settings(settings)),
         "info_hash": str(settings.get("info_hash", "")),
@@ -3906,6 +3938,8 @@ def _load_or_build_v2_backtest_trajectory(
     cache_root: str = "artifacts/v2/cache",
     refresh_cache: bool = False,
     forecast_backend: str = "linear",
+    use_us_index_context: bool | None = None,
+    us_index_source: str | None = None,
 ) -> _BacktestTrajectory | None:
     backend = _make_forecast_backend(forecast_backend)
     settings = _load_v2_runtime_settings(
@@ -3914,6 +3948,8 @@ def _load_or_build_v2_backtest_trajectory(
         universe_file=universe_file,
         universe_limit=universe_limit,
         universe_tier=universe_tier,
+        use_us_index_context=use_us_index_context,
+        us_index_source=us_index_source,
     )
     settings = _resolve_v2_universe_settings(settings=settings, cache_root=cache_root)
     cache_key = _trajectory_cache_key(
@@ -3930,6 +3966,8 @@ def _load_or_build_v2_backtest_trajectory(
         universe_tier=str(settings.get("universe_tier", universe_tier)),
         retrain_days=retrain_days,
         forecast_backend=backend.name,
+        use_us_index_context=bool(settings.get("use_us_index_context", False)),
+        us_index_source=str(settings.get("us_index_source", "akshare")),
     )
     cache_path = _trajectory_cache_path(cache_root=cache_root, cache_key=cache_key)
     if not refresh_cache and cache_path.exists():
@@ -3958,6 +3996,8 @@ def _load_or_build_v2_backtest_trajectory(
         ),
         universe_tier=str(settings.get("universe_tier", universe_tier)),
         cache_root=cache_root,
+        use_us_index_context=bool(settings.get("use_us_index_context", False)),
+        us_index_source=str(settings.get("us_index_source", "akshare")),
     )
     if prepared is None:
         return None
@@ -4149,6 +4189,8 @@ def _run_v2_backtest_core(
     cache_root: str = "artifacts/v2/cache",
     refresh_cache: bool = False,
     forecast_backend: str = "linear",
+    use_us_index_context: bool | None = None,
+    us_index_source: str | None = None,
 ) -> tuple[V2BacktestSummary, list[dict[str, float]]]:
     _ = strategy_id
     if trajectory is None:
@@ -4162,6 +4204,8 @@ def _run_v2_backtest_core(
             cache_root=cache_root,
             refresh_cache=refresh_cache,
             forecast_backend=forecast_backend,
+            use_us_index_context=use_us_index_context,
+            us_index_source=us_index_source,
         )
         if trajectory is None:
             return _empty_v2_backtest_result()
@@ -4193,6 +4237,8 @@ def run_v2_backtest_live(
     cache_root: str = "artifacts/v2/cache",
     refresh_cache: bool = False,
     forecast_backend: str = "linear",
+    use_us_index_context: bool | None = None,
+    us_index_source: str | None = None,
 ) -> V2BacktestSummary:
     summary, _ = _run_v2_backtest_core(
         strategy_id=strategy_id,
@@ -4211,6 +4257,8 @@ def run_v2_backtest_live(
         cache_root=cache_root,
         refresh_cache=refresh_cache,
         forecast_backend=forecast_backend,
+        use_us_index_context=use_us_index_context,
+        us_index_source=us_index_source,
     )
     return summary
 
@@ -4228,6 +4276,8 @@ def calibrate_v2_policy(
     cache_root: str = "artifacts/v2/cache",
     refresh_cache: bool = False,
     forecast_backend: str = "linear",
+    use_us_index_context: bool | None = None,
+    us_index_source: str | None = None,
 ) -> V2CalibrationResult:
     def _policy_spec_key(spec: PolicySpec) -> tuple[float, float, float, int, int, int, float, float, float]:
         return (
@@ -4255,6 +4305,8 @@ def calibrate_v2_policy(
         cache_root=cache_root,
         refresh_cache=refresh_cache,
         forecast_backend=forecast_backend,
+        use_us_index_context=use_us_index_context,
+        us_index_source=us_index_source,
     )
     exposure_sets = [
         (0.75, 0.50, 0.25),
@@ -4323,6 +4375,8 @@ def calibrate_v2_policy(
             cache_root=cache_root,
             refresh_cache=refresh_cache,
             forecast_backend=forecast_backend,
+            use_us_index_context=use_us_index_context,
+            us_index_source=us_index_source,
         )
         score = _policy_objective_score(summary)
         trials.append(
@@ -4362,6 +4416,8 @@ def learn_v2_policy_model(
     cache_root: str = "artifacts/v2/cache",
     refresh_cache: bool = False,
     forecast_backend: str = "linear",
+    use_us_index_context: bool | None = None,
+    us_index_source: str | None = None,
 ) -> V2PolicyLearningResult:
     fit_trajectory = fit_trajectory or trajectory
     evaluation_trajectory = evaluation_trajectory or trajectory
@@ -4376,6 +4432,8 @@ def learn_v2_policy_model(
         cache_root=cache_root,
         refresh_cache=refresh_cache,
         forecast_backend=forecast_backend,
+        use_us_index_context=use_us_index_context,
+        us_index_source=us_index_source,
     )
     _, rows = _run_v2_backtest_core(
         strategy_id=strategy_id,
@@ -4389,6 +4447,8 @@ def learn_v2_policy_model(
         cache_root=cache_root,
         refresh_cache=refresh_cache,
         forecast_backend=forecast_backend,
+        use_us_index_context=use_us_index_context,
+        us_index_source=us_index_source,
     )
     feature_names = _policy_feature_names()
     if not rows:
@@ -4417,6 +4477,8 @@ def learn_v2_policy_model(
             cache_root=cache_root,
             refresh_cache=refresh_cache,
             forecast_backend=forecast_backend,
+            use_us_index_context=use_us_index_context,
+            us_index_source=us_index_source,
         )
         return V2PolicyLearningResult(model=model, baseline=baseline, learned=learned_summary)
 
@@ -4459,6 +4521,8 @@ def learn_v2_policy_model(
         cache_root=cache_root,
         refresh_cache=refresh_cache,
         forecast_backend=forecast_backend,
+        use_us_index_context=use_us_index_context,
+        us_index_source=us_index_source,
     )
     return V2PolicyLearningResult(
         model=model,
@@ -4522,6 +4586,8 @@ def run_v2_research_workflow(
     info_types: str | None = None,
     info_source_mode: str | None = None,
     info_subsets: str | None = None,
+    use_us_index_context: bool | None = None,
+    us_index_source: str | None = None,
     skip_calibration: bool = False,
     skip_learning: bool = False,
     cache_root: str = "artifacts/v2/cache",
@@ -4540,6 +4606,8 @@ def run_v2_research_workflow(
         cache_root=cache_root,
         refresh_cache=refresh_cache,
         forecast_backend=forecast_backend,
+        use_us_index_context=use_us_index_context,
+        us_index_source=us_index_source,
     )
     if trajectory is None:
         empty_summary = run_v2_backtest_live(
@@ -4553,6 +4621,8 @@ def run_v2_research_workflow(
             cache_root=cache_root,
             refresh_cache=refresh_cache,
             forecast_backend=forecast_backend,
+            use_us_index_context=use_us_index_context,
+            us_index_source=us_index_source,
         )
         return empty_summary, _baseline_only_calibration(empty_summary), _placeholder_learning_result(empty_summary)
     _, validation_trajectory, holdout_trajectory = _split_research_trajectory(
@@ -4576,6 +4646,8 @@ def run_v2_research_workflow(
         cache_root=cache_root,
         refresh_cache=refresh_cache,
         forecast_backend=forecast_backend,
+        use_us_index_context=use_us_index_context,
+        us_index_source=us_index_source,
     )
     validation_baseline = None
     if not skip_calibration:
@@ -4591,6 +4663,8 @@ def run_v2_research_workflow(
             cache_root=cache_root,
             refresh_cache=refresh_cache,
             forecast_backend=forecast_backend,
+            use_us_index_context=use_us_index_context,
+            us_index_source=us_index_source,
         )
     calibration = (
         _baseline_only_calibration(baseline)
@@ -4607,6 +4681,8 @@ def run_v2_research_workflow(
             cache_root=cache_root,
             refresh_cache=refresh_cache,
             forecast_backend=forecast_backend,
+            use_us_index_context=use_us_index_context,
+            us_index_source=us_index_source,
         )
     )
     if not skip_calibration:
@@ -4623,6 +4699,8 @@ def run_v2_research_workflow(
             cache_root=cache_root,
             refresh_cache=refresh_cache,
             forecast_backend=forecast_backend,
+            use_us_index_context=use_us_index_context,
+            us_index_source=us_index_source,
         )
         calibration = V2CalibrationResult(
             best_policy=calibration.best_policy,
@@ -4650,6 +4728,8 @@ def run_v2_research_workflow(
             cache_root=cache_root,
             refresh_cache=refresh_cache,
             forecast_backend=forecast_backend,
+            use_us_index_context=use_us_index_context,
+            us_index_source=us_index_source,
         )
     )
     if skip_learning:
@@ -4668,6 +4748,8 @@ def run_v2_research_matrix(
     cache_root: str = "artifacts/v2/cache",
     refresh_cache: bool = False,
     forecast_backend: str = "linear",
+    use_us_index_context: bool | None = None,
+    us_index_source: str | None = None,
     split_mode: str = _DEFAULT_SPLIT_MODE,
     embargo_days: int = _DEFAULT_EMBARGO_DAYS,
     universe_tiers: Iterable[str] = ("favorites_16", "generated_80", "generated_150", "generated_300"),
@@ -4684,6 +4766,8 @@ def run_v2_research_matrix(
             cache_root=cache_root,
             refresh_cache=refresh_cache,
             forecast_backend=forecast_backend,
+            use_us_index_context=use_us_index_context,
+            us_index_source=us_index_source,
             split_mode=split_mode,
             embargo_days=embargo_days,
         )
@@ -4699,6 +4783,8 @@ def run_v2_research_matrix(
             cache_root=cache_root,
             forecast_backend=forecast_backend,
             publish_forecast_models=True,
+            use_us_index_context=use_us_index_context,
+            us_index_source=us_index_source,
             split_mode=split_mode,
             embargo_days=embargo_days,
         )
@@ -5033,6 +5119,11 @@ def _build_snapshot_from_manifest(
         snapshot_hash=snapshot_hash,
         config_hash=config_hash,
         manifest_path=str(manifest_path.resolve()),
+        use_us_index_context=_parse_boolish(
+            dataset_manifest.get("use_us_index_context", manifest.get("use_us_index_context", False)),
+            False,
+        ),
+        us_index_source=str(dataset_manifest.get("us_index_source", manifest.get("us_index_source", ""))),
     )
 
 
@@ -5063,6 +5154,8 @@ def publish_v2_research_artifacts(
     split_mode: str = _DEFAULT_SPLIT_MODE,
     embargo_days: int = _DEFAULT_EMBARGO_DAYS,
     update_latest: bool = True,
+    use_us_index_context: bool | None = None,
+    us_index_source: str | None = None,
 ) -> dict[str, str]:
     settings = settings or _load_v2_runtime_settings(
         config_path=config_path,
@@ -5078,6 +5171,8 @@ def publish_v2_research_artifacts(
         info_types=info_types,
         info_source_mode=info_source_mode,
         info_subsets=info_subsets,
+        use_us_index_context=use_us_index_context,
+        us_index_source=us_index_source,
     )
     settings = _resolve_v2_universe_settings(settings=dict(settings), cache_root=cache_root)
     run_id = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -5167,6 +5262,8 @@ def publish_v2_research_artifacts(
             cache_root=cache_root,
             refresh_cache=False,
             forecast_backend=forecast_backend,
+            use_us_index_context=bool(settings.get("use_us_index_context", False)),
+            us_index_source=str(settings.get("us_index_source", "akshare")),
         )
         if trajectory is not None:
             train_traj, validation_traj, holdout_traj = _split_research_trajectory(
@@ -5191,6 +5288,8 @@ def publish_v2_research_artifacts(
             "forecast_backend": str(forecast_backend),
             "split_mode": str(split_mode),
             "embargo_days": int(embargo_days),
+            "use_us_index_context": bool(settings.get("use_us_index_context", False)),
+            "us_index_source": str(settings.get("us_index_source", "akshare")),
             "model_hashes": model_hashes,
             "data_window": {
                 "start": str(settings.get("start", "")),
@@ -5264,6 +5363,8 @@ def publish_v2_research_artifacts(
                 cache_root=cache_root,
                 refresh_cache=False,
                 forecast_backend=forecast_backend,
+                use_us_index_context=bool(settings.get("use_us_index_context", False)),
+                us_index_source=str(settings.get("us_index_source", "akshare")),
             )
         info_file_path, info_items = _load_v2_info_items_for_date(
             settings=settings,
@@ -5312,6 +5413,8 @@ def publish_v2_research_artifacts(
         "symbol_count": int(settings.get("symbol_count", len(symbols))),
         "universe_hash": universe_hash,
         "config_hash": config_hash,
+        "use_us_index_context": bool(settings.get("use_us_index_context", False)),
+        "us_index_source": str(settings.get("us_index_source", "akshare")),
         "info_file": str(info_file_path),
         "info_hash": info_hash,
         "info_shadow_enabled": bool(info_shadow_enabled),
@@ -5351,6 +5454,8 @@ def publish_v2_research_artifacts(
         "model_hashes": model_hashes,
         "info_hash": info_hash,
         "info_source_mode": str(settings.get("info_source_mode", "layered")),
+        "use_us_index_context": bool(settings.get("use_us_index_context", False)),
+        "us_index_source": str(settings.get("us_index_source", "akshare")),
     }
     rolling_oos_manifest = {
         "run_id": run_id,
@@ -5478,6 +5583,8 @@ def publish_v2_research_artifacts(
         "info_source_mode": str(settings.get("info_source_mode", "layered")),
         "info_subsets": [str(item) for item in settings.get("info_subsets", [])],
         "announcement_event_tags": [str(item) for item in settings.get("announcement_event_tags", [])],
+        "use_us_index_context": bool(settings.get("use_us_index_context", False)),
+        "us_index_source": str(settings.get("us_index_source", "akshare")),
         "data_window": {
             "start": str(settings.get("start", "")),
             "end": str(settings.get("end", "")),
@@ -5537,6 +5644,8 @@ def publish_v2_research_artifacts(
         "info_hash": info_hash,
         "info_item_count": str(info_manifest.get("info_item_count", 0)),
         "info_shadow_enabled": "true" if info_shadow_enabled else "false",
+        "use_us_index_context": "true" if bool(settings.get("use_us_index_context", False)) else "false",
+        "us_index_source": str(settings.get("us_index_source", "akshare")),
         "dataset_manifest": str(dataset_path),
         "policy_calibration": str(calibration_path),
         "learned_policy_model": str(learning_path),
@@ -5570,6 +5679,8 @@ def run_daily_v2_live(
     info_types: str | None = None,
     info_source_mode: str | None = None,
     info_subsets: str | None = None,
+    use_us_index_context: bool | None = None,
+    us_index_source: str | None = None,
     artifact_root: str = "artifacts/v2",
     cache_root: str = "artifacts/v2/cache",
     refresh_cache: bool = False,
@@ -5591,6 +5702,8 @@ def run_daily_v2_live(
         info_types=info_types,
         info_source_mode=info_source_mode,
         info_subsets=info_subsets,
+        use_us_index_context=use_us_index_context,
+        us_index_source=us_index_source,
     )
     settings = _resolve_v2_universe_settings(settings=settings, cache_root=cache_root)
     manifest: dict[str, object] = {}
@@ -5684,6 +5797,13 @@ def run_daily_v2_live(
                 False,
             )
             settings["info_source_mode"] = str(dataset_manifest.get("info_source_mode", settings.get("info_source_mode", "layered")))
+            settings["use_us_index_context"] = _parse_boolish(
+                dataset_manifest.get("use_us_index_context", manifest.get("use_us_index_context", False)),
+                False,
+            )
+            settings["us_index_source"] = str(
+                dataset_manifest.get("us_index_source", manifest.get("us_index_source", "akshare"))
+            )
             settings["info_subsets"] = [
                 str(item)
                 for item in dataset_manifest.get("info_subsets", settings.get("info_subsets", []))
@@ -5717,6 +5837,8 @@ def run_daily_v2_live(
             data_window=data_window,
             config_hash=_stable_json_hash(settings),
             universe_hash=str(settings.get("universe_hash", "")) or _sha256_file(settings.get("universe_file", "")),
+            use_us_index_context=bool(settings.get("use_us_index_context", False)),
+            us_index_source=str(settings.get("us_index_source", "akshare")),
         )
 
     _emit_progress("daily", "加载观察池与候选股票池")
@@ -5753,6 +5875,8 @@ def run_daily_v2_live(
             margin_stock_file=str(settings["margin_stock_file"]),
             enable_walk_forward_eval=False,
             progress_callback=lambda message: _emit_progress("daily", message),
+            use_us_index_context=bool(settings.get("use_us_index_context", False)),
+            us_index_source=str(settings.get("us_index_source", "akshare")),
         )
 
         _emit_progress("daily", "开始构建市场状态与横截面状态")
@@ -5776,6 +5900,8 @@ def run_daily_v2_live(
             market_three_prob=_safe_float(getattr(market_forecast, "three_prob", np.nan), np.nan),
             market_five_prob=float(market_forecast.five_prob),
             market_mid_prob=float(market_forecast.mid_prob),
+            use_us_index_context=bool(settings.get("use_us_index_context", False)),
+            us_index_source=str(settings.get("us_index_source", "akshare")),
         )
         _emit_progress("daily", "开始独立板块预测")
         sector_frames = build_sector_daily_frames(
@@ -5971,6 +6097,8 @@ def summarize_daily_run(result: DailyRunResult) -> dict[str, object]:
         "info_manifest_path": result.info_manifest_path or result.snapshot.info_manifest_path,
         "info_shadow_enabled": bool(result.info_shadow_enabled or result.snapshot.info_shadow_enabled),
         "info_item_count": int(result.info_item_count),
+        "use_us_index_context": bool(result.snapshot.use_us_index_context),
+        "us_index_source": str(result.snapshot.us_index_source),
         "run_id": result.run_id or result.snapshot.run_id,
         "snapshot_hash": result.snapshot_hash or result.snapshot.snapshot_hash,
         "config_hash": result.config_hash or result.snapshot.config_hash,

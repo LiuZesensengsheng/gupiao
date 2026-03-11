@@ -487,6 +487,10 @@ def write_v2_daily_report(out_path: str | Path, result: V2DailyRunResult) -> Pat
     if result.info_hash or result.snapshot.info_hash:
         lines.append(f"- info_hash: {result.info_hash or result.snapshot.info_hash}")
     lines.append(f"- info shadow enabled: {'true' if (result.info_shadow_enabled or result.snapshot.info_shadow_enabled) else 'false'}")
+    lines.append(
+        f"- US index context: {'enabled' if result.snapshot.use_us_index_context else 'disabled'}"
+        f" ({result.snapshot.us_index_source or 'NA'})"
+    )
     if result.snapshot.manifest_path:
         lines.append(f"- source manifest path: {result.snapshot.manifest_path}")
     if result.snapshot.snapshot_hash or result.snapshot.config_hash:
@@ -672,6 +676,8 @@ def write_v2_research_report(
         lines.append(f"- info manifest path: {artifacts.get('info_manifest', 'NA')}")
         lines.append(f"- info_hash: {artifacts.get('info_hash', 'NA')}")
         lines.append(f"- info shadow enabled: {artifacts.get('info_shadow_enabled', 'false')}")
+        lines.append(f"- US index context: {artifacts.get('use_us_index_context', 'false')}")
+        lines.append(f"- US index source: {artifacts.get('us_index_source', 'NA')}")
         lines.append(f"- source manifest path: {artifacts.get('research_manifest', 'NA')}")
         lines.append(f"- snapshot_hash: {artifacts.get('snapshot_hash', 'NA')}")
         lines.append(f"- config_hash: {artifacts.get('config_hash', 'NA')}")

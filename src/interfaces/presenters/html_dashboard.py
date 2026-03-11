@@ -1339,6 +1339,8 @@ def write_v2_daily_dashboard(out_path: str | Path, result: V2DailyRunResult) -> 
           <tr><th>回撤风险</th><td>{_pct(result.composite_state.market.drawdown_risk)}</td></tr>
           <tr><th>波动状态</th><td>{escape(_v2_cn_volatility(result.composite_state.market.volatility_regime))}</td></tr>
           <tr><th>流动性压力</th><td>{_pct(result.composite_state.market.liquidity_stress)}</td></tr>
+          <tr><th>US 上下文</th><td>{'开启' if result.snapshot.use_us_index_context else '关闭'}</td></tr>
+          <tr><th>US 数据源</th><td>{escape(result.snapshot.us_index_source or 'NA')}</td></tr>
         </table>
       </div>
       <div class="card">
@@ -1516,6 +1518,8 @@ def write_v2_research_dashboard(
         f"<tr><th>{escape(str(label))}</th><td>{escape(str(path_value))}</td></tr>"
         for label, path_value in (artifacts or {}).items()
     )
+    us_context_enabled = str((artifacts or {}).get("use_us_index_context", "false")).strip().lower()
+    us_context_source = str((artifacts or {}).get("us_index_source", "NA"))
     info_manifest = _load_json_report((artifacts or {}).get("info_manifest"))
     info_shadow = _load_json_report((artifacts or {}).get("info_shadow_report"))
     info_compare_rows = ""
@@ -1739,6 +1743,8 @@ def write_v2_research_dashboard(
           <tr><th>{escape(_v2_cn_policy_field('risk_on_turnover_cap'))}</th><td>{_pct(calibration.best_policy.risk_on_turnover_cap)}</td></tr>
           <tr><th>{escape(_v2_cn_policy_field('cautious_turnover_cap'))}</th><td>{_pct(calibration.best_policy.cautious_turnover_cap)}</td></tr>
           <tr><th>{escape(_v2_cn_policy_field('risk_off_turnover_cap'))}</th><td>{_pct(calibration.best_policy.risk_off_turnover_cap)}</td></tr>
+          <tr><th>US 上下文</th><td>{'开启' if us_context_enabled == 'true' else '关闭'}</td></tr>
+          <tr><th>US 数据源</th><td>{escape(us_context_source)}</td></tr>
         </table>
       </div>
     </section>

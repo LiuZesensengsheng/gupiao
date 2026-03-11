@@ -18,6 +18,7 @@ EASTMONEY_CACHE_DIR = "_eastmoney_cache"
 AUTO_SOURCE_CHAIN = ("eastmoney", "tushare", "akshare", "baostock")
 SUPPORTED_SOURCES = {"eastmoney", "tushare", "akshare", "baostock", "local", "auto"}
 _MEM_CACHE: Dict[tuple[str, str, str, str, str], pd.DataFrame] = {}
+_US_INDEX_MEM_CACHE: Dict[tuple[str, str], pd.DataFrame] = {}
 _TUSHARE_TOKEN: str = ""
 
 
@@ -64,6 +65,61 @@ def _slice_date_range(df: pd.DataFrame, start: str, end: str) -> pd.DataFrame:
     end_ts = pd.Timestamp(end)
     out = df[(df["date"] >= start_ts) & (df["date"] <= end_ts)].copy()
     return out.sort_values("date").reset_index(drop=True)
+
+
+def _normalize_external_index_columns(df: pd.DataFrame, *, symbol: str) -> pd.DataFrame:
+    raw = df.copy()
+    lower_map = {str(col).lower(): str(col) for col in raw.columns}
+
+    date_col = lower_map.get("date") or lower_map.get("日期".lower())
+    open_col = lower_map.get("open") or lower_map.get("开盘".lower())
+    high_col = lower_map.get("high") or lower_map.get("最高".lower())
+    low_col = lower_map.get("low") or lower_map.get("最低".lower())
+    close_col = lower_map.get("close") or lower_map.get("收盘".lower())
+    volume_col = lower_map.get("volume") or lower_map.get("成交量".lower()) or lower_map.get("成交".lower())
+    amount_col = lower_map.get("amount") or lower_map.get("成交额".lower())
+
+    required = {
+        "date": date_col,
+        "open": open_col,
+        "high": high_col,
+        "low": low_col,
+        "close": close_col,
+    }
+    missing = [name for name, col in required.items() if col is None]
+    if missing:
+        raise DataError(f"{symbol}: missing required columns: {', '.join(missing)}")
+
+    out = pd.DataFrame(
+        {
+            "date": raw[required["date"]],
+            "open": raw[required["open"]],
+            "high": raw[required["high"]],
+            "low": raw[required["low"]],
+            "close": raw[required["close"]],
+        }
+    )
+    if volume_col is not None:
+        out["volume"] = raw[volume_col]
+    else:
+        out["volume"] = 0.0
+    if amount_col is not None:
+        out["amount"] = raw[amount_col]
+
+    out["date"] = pd.to_datetime(out["date"], errors="coerce")
+    for col in ["open", "high", "low", "close", "volume"]:
+        out[col] = pd.to_numeric(out[col], errors="coerce")
+    if "amount" in out.columns:
+        out["amount"] = pd.to_numeric(out["amount"], errors="coerce")
+    else:
+        out["amount"] = out["close"] * out["volume"].fillna(0.0)
+
+    out["volume"] = out["volume"].fillna(0.0).clip(lower=0.0)
+    out["amount"] = out["amount"].fillna(out["close"] * out["volume"]).clip(lower=0.0)
+    out = out.dropna(subset=["date", "open", "high", "low", "close"]).sort_values("date")
+    out = out.drop_duplicates(subset=["date"]).reset_index(drop=True)
+    out["symbol"] = str(symbol)
+    return out
 
 
 def _pick_column(df: pd.DataFrame, candidates: List[str], required: bool = True) -> pd.Series | None:
@@ -249,6 +305,41 @@ def fetch_akshare_daily(
     if amount_col is not None:
         frame["amount"] = amount_col
     return _normalize_daily_columns(frame, symbol=symbol)
+
+
+def fetch_us_index_daily(
+    symbol: str,
+    start: str = "2010-01-01",
+    end: str = "2099-12-31",
+    source: str = "akshare",
+) -> pd.DataFrame:
+    provider = str(source).strip().lower() or "akshare"
+    cache_key = (str(symbol).strip(), provider)
+    cached = _US_INDEX_MEM_CACHE.get(cache_key)
+    if cached is not None and not cached.empty:
+        return _slice_date_range(cached, start=start, end=end)
+
+    if provider != "akshare":
+        raise DataError(f"{symbol}: unsupported US index source: {source}")
+
+    try:
+        import akshare as ak
+    except Exception as exc:  # pragma: no cover - optional dependency
+        raise DataError("akshare is not installed, run: pip install akshare") from exc
+
+    try:
+        raw = ak.index_us_stock_sina(symbol=str(symbol))
+    except Exception as exc:  # pragma: no cover - network/provider dependent
+        raise DataError(f"{symbol}: akshare US index request failed: {exc}") from exc
+
+    if raw is None or raw.empty:
+        raise DataError(f"{symbol}: akshare returned no US index rows")
+
+    normalized = _normalize_external_index_columns(raw, symbol=str(symbol).strip())
+    if normalized.empty:
+        raise DataError(f"{symbol}: US index rows are empty after normalization")
+    _US_INDEX_MEM_CACHE[cache_key] = normalized
+    return _slice_date_range(normalized, start=start, end=end)
 
 
 def fetch_baostock_daily(

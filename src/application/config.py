@@ -16,6 +16,8 @@ class ForecastConfig:
     use_margin_features: bool
     margin_market_file: str
     margin_stock_file: str
+    use_us_index_context: bool
+    us_index_source: str
 
 
 @dataclass(frozen=True)

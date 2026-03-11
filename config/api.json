@@ -11,6 +11,8 @@
     "l2": 0.8,
     "max_positions": 5,
     "use_margin_features": true,
+    "use_us_index_context": true,
+    "us_index_source": "akshare",
     "margin_market_file": "input/margin_market.csv",
     "margin_stock_file": "input/margin_stock.csv"
   },

@@ -140,6 +140,8 @@ def generate_forecast(
         use_margin_features=config.use_margin_features,
         margin_market_file=config.margin_market_file,
         margin_stock_file=config.margin_stock_file,
+        use_us_index_context=config.use_us_index_context,
+        us_index_source=config.us_index_source,
         enable_walk_forward_eval=bool(enable_walk_forward_eval),
     )
     return ForecastResult(market_forecast=market_forecast, stock_rows=stock_rows)
@@ -177,6 +179,8 @@ def generate_discovery(
             use_margin_features=config.use_margin_features,
             margin_market_file=config.margin_market_file,
             margin_stock_file=config.margin_stock_file,
+            use_us_index_context=config.use_us_index_context,
+            us_index_source=config.us_index_source,
         ),
         market_security=market_security,
         stocks=universe.rows,
@@ -251,6 +255,8 @@ def _prepare_learning_frames(
         market_dates=market_feat_base["date"],
         use_margin_features=config.use_margin_features,
         margin_market_file=config.margin_market_file,
+        use_us_index_context=config.use_us_index_context,
+        us_index_source=config.us_index_source,
     )
     market_feat = market_feat_base.merge(market_context.frame, on="date", how="left", validate="1:1")
     market_feature_cols = MARKET_FEATURE_COLUMNS + market_context.feature_columns
@@ -977,6 +983,8 @@ def generate_daily_fusion(
             use_margin_features=config.use_margin_features,
             margin_market_file=config.margin_market_file,
             margin_stock_file=config.margin_stock_file,
+            use_us_index_context=config.use_us_index_context,
+            us_index_source=config.us_index_source,
         ),
         market_security=market_security,
         stocks=stocks,

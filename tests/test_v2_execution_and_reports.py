@@ -80,6 +80,8 @@ def _make_daily_result() -> DailyRunResult:
             cross_section_model_id="cross_v2",
             policy_version="policy_v2",
             execution_version="exec_v2",
+            use_us_index_context=True,
+            us_index_source="akshare",
         ),
         composite_state=composite,
         policy_decision=decision,
@@ -611,6 +613,7 @@ def test_v2_markdown_reports_keep_key_chinese_sections(tmp_path: Path) -> None:
     assert "5日上涨概率" in daily_text
     assert "5日概率" in daily_text
     assert "交易计划" in daily_text
+    assert "US index context: enabled (akshare)" in daily_text
 
     baseline = _make_backtest(0.24)
     calibrated = _make_backtest(0.26)
@@ -720,6 +723,8 @@ def test_v2_html_dashboards_keep_key_chinese_sections(tmp_path: Path) -> None:
     assert "V2 每日策略看板" in daily_html
     assert "买入" in daily_html
     assert "5日上涨概率" in daily_html
+    assert "US 上下文" in daily_html
+    assert "akshare" in daily_html
 
     baseline = _make_backtest(0.24)
     calibrated = _make_backtest(0.26)

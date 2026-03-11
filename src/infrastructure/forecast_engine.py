@@ -481,6 +481,8 @@ def run_quant_pipeline(
     use_margin_features: bool = True,
     margin_market_file: str = "input/margin_market.csv",
     margin_stock_file: str = "input/margin_stock.csv",
+    use_us_index_context: bool = False,
+    us_index_source: str = "akshare",
     enable_walk_forward_eval: bool = True,
     progress_callback: Callable[[str], None] | None = None,
 ) -> tuple[MarketForecast, list[ForecastRow]]:
@@ -505,6 +507,8 @@ def run_quant_pipeline(
         market_dates=market_feat_base["date"],
         use_margin_features=use_margin_features,
         margin_market_file=margin_market_file,
+        use_us_index_context=use_us_index_context,
+        us_index_source=us_index_source,
     )
     market_feat = market_feat_base.merge(market_context.frame, on="date", how="left", validate="1:1")
     market_feature_cols = MARKET_FEATURE_COLUMNS + market_context.feature_columns

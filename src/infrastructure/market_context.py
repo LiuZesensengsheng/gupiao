@@ -11,7 +11,7 @@ import pandas as pd
 from src.domain.symbols import SymbolError, normalize_symbol
 from src.infrastructure.features import build_features
 from src.infrastructure.margin_features import build_market_margin_features
-from src.infrastructure.market_data import DataError, load_local_daily, load_symbol_daily
+from src.infrastructure.market_data import DataError, fetch_us_index_daily, load_local_daily, load_symbol_daily
 
 
 _SYMBOL_FILE_PATTERN = re.compile(r"^(\d{6}\.(SH|SZ))\.csv$", re.IGNORECASE)
@@ -19,6 +19,11 @@ _DEFAULT_INDEX_SPECS: tuple[tuple[str, str], ...] = (
     ("000001.SH", "idx_sh"),
     ("399001.SZ", "idx_sz"),
     ("399006.SZ", "idx_cyb"),
+)
+_DEFAULT_US_INDEX_SPECS: tuple[tuple[str, str], ...] = (
+    (".INX", "us_inx"),
+    (".NDX", "us_ndx"),
+    (".DJI", "us_dji"),
 )
 _INDEX_FEATURE_BASE = [
     "ret_1",
@@ -101,6 +106,84 @@ def _build_index_context(
             merged = feat
         else:
             merged = merged.merge(feat, on="date", how="outer", validate="1:1")
+        cols.extend(rename.values())
+
+    if merged is None:
+        return pd.DataFrame(columns=["date"]), [], notes
+    merged = merged.sort_values("date").drop_duplicates(subset=["date"])
+    return merged, cols, notes
+
+
+def _align_external_context_to_next_market_date(
+    *,
+    feature_frame: pd.DataFrame,
+    market_dates: pd.Series,
+) -> pd.DataFrame:
+    if feature_frame.empty:
+        return pd.DataFrame(columns=list(feature_frame.columns))
+
+    target_dates = pd.to_datetime(market_dates, errors="coerce").dropna().drop_duplicates().sort_values()
+    if target_dates.empty:
+        return pd.DataFrame(columns=list(feature_frame.columns))
+
+    target_arr = target_dates.to_numpy(dtype="datetime64[ns]")
+    work = feature_frame.copy()
+    work["date"] = pd.to_datetime(work["date"], errors="coerce")
+    work = work.dropna(subset=["date"]).sort_values("date").drop_duplicates(subset=["date"])
+    if work.empty:
+        return pd.DataFrame(columns=list(feature_frame.columns))
+
+    source_arr = work["date"].to_numpy(dtype="datetime64[ns]")
+    positions = np.searchsorted(target_arr, source_arr, side="right")
+    valid_mask = positions < len(target_arr)
+    if not np.any(valid_mask):
+        return pd.DataFrame(columns=list(feature_frame.columns))
+
+    aligned = work.loc[valid_mask].copy()
+    aligned_positions = positions[valid_mask]
+    aligned["date"] = pd.to_datetime(target_arr[aligned_positions])
+    aligned = aligned.sort_values("date").drop_duplicates(subset=["date"], keep="last").reset_index(drop=True)
+    return aligned
+
+
+def _build_us_index_context(
+    *,
+    start: str,
+    end: str,
+    market_dates: pd.Series,
+    us_index_source: str,
+    index_specs: Sequence[tuple[str, str]],
+) -> tuple[pd.DataFrame, list[str], list[str]]:
+    notes: list[str] = []
+    merged: pd.DataFrame | None = None
+    cols: list[str] = []
+    buffered_start = str((pd.Timestamp(start) - pd.Timedelta(days=120)).date())
+
+    for symbol, prefix in index_specs:
+        try:
+            raw = fetch_us_index_daily(
+                symbol=symbol,
+                start=buffered_start,
+                end=end,
+                source=us_index_source,
+            )
+        except DataError as exc:
+            notes.append(f"US index context skipped {symbol}: {exc}")
+            continue
+        feat = build_features(raw)[["date"] + _INDEX_FEATURE_BASE].copy()
+        aligned = _align_external_context_to_next_market_date(
+            feature_frame=feat,
+            market_dates=market_dates,
+        )
+        if aligned.empty:
+            notes.append(f"US index context skipped {symbol}: no aligned A-share dates")
+            continue
+        rename = {name: f"{prefix}_{name}" for name in _INDEX_FEATURE_BASE}
+        aligned = aligned.rename(columns=rename)
+        if merged is None:
+            merged = aligned
+        else:
+            merged = merged.merge(aligned, on="date", how="outer", validate="1:1")
         cols.extend(rename.values())
 
     if merged is None:
@@ -195,13 +278,17 @@ def build_market_context_features(
     market_dates: pd.Series,
     use_margin_features: bool = True,
     margin_market_file: str = "input/margin_market.csv",
+    use_us_index_context: bool = False,
+    us_index_source: str = "akshare",
     index_specs: Sequence[tuple[str, str]] | None = None,
+    us_index_specs: Sequence[tuple[str, str]] | None = None,
     breadth_max_symbols: int = 800,
     breadth_min_coverage: int = 30,
     min_valid_ratio: float = 0.55,
     min_valid_points: int = 120,
 ) -> MarketContextBundle:
     index_specs = tuple(index_specs or _DEFAULT_INDEX_SPECS)
+    us_index_specs = tuple(us_index_specs or _DEFAULT_US_INDEX_SPECS)
     base = pd.DataFrame({"date": pd.to_datetime(market_dates, errors="coerce")}).dropna(subset=["date"])
     base = base.drop_duplicates(subset=["date"]).sort_values("date").reset_index(drop=True)
     if base.empty:
@@ -216,6 +303,18 @@ def build_market_context_features(
         index_specs=index_specs,
     )
     notes.extend(idx_notes)
+
+    us_frame = pd.DataFrame(columns=["date"])
+    us_cols: list[str] = []
+    if use_us_index_context:
+        us_frame, us_cols, us_notes = _build_us_index_context(
+            start=start,
+            end=end,
+            market_dates=base["date"],
+            us_index_source=us_index_source,
+            index_specs=us_index_specs,
+        )
+        notes.extend(us_notes)
 
     exclude = [x[0] for x in index_specs] + ["000300.SH", "000905.SH", "000852.SH"]
     breadth_frame, breadth_cols, breadth_notes = _build_breadth_context(
@@ -238,12 +337,14 @@ def build_market_context_features(
     merged = base.copy()
     if not idx_frame.empty:
         merged = merged.merge(idx_frame, on="date", how="left", validate="1:1")
+    if not us_frame.empty:
+        merged = merged.merge(us_frame, on="date", how="left", validate="1:1")
     if not breadth_frame.empty:
         merged = merged.merge(breadth_frame, on="date", how="left", validate="1:1")
     if not margin_frame.empty:
         merged = merged.merge(margin_frame, on="date", how="left", validate="1:1")
 
-    candidate_cols = [col for col in idx_cols + breadth_cols + margin_cols if col in merged.columns]
+    candidate_cols = [col for col in idx_cols + us_cols + breadth_cols + margin_cols if col in merged.columns]
     selected_cols: list[str] = []
     for col in candidate_cols:
         valid_n = int(merged[col].notna().sum())

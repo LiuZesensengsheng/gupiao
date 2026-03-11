@@ -714,6 +714,8 @@ def run_portfolio_backtest(
     use_margin_features: bool = True,
     margin_market_file: str = "input/margin_market.csv",
     margin_stock_file: str = "input/margin_stock.csv",
+    use_us_index_context: bool = False,
+    us_index_source: str = "akshare",
     use_state_engine: bool = True,
     use_tradeability_guard: bool = True,
     tradeability_limit_tolerance: float = 0.002,
@@ -766,6 +768,8 @@ def run_portfolio_backtest(
         market_dates=market_frame_base["date"],
         use_margin_features=use_margin_features,
         margin_market_file=margin_market_file,
+        use_us_index_context=use_us_index_context,
+        us_index_source=us_index_source,
     )
     market_frame = market_frame_base.merge(market_context.frame, on="date", how="left", validate="1:1")
     market_feature_cols = MARKET_FEATURE_COLUMNS + market_context.feature_columns

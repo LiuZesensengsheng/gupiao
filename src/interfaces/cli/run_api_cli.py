@@ -30,6 +30,8 @@ DEFAULT_COMMON: dict[str, Any] = {
     "use_margin_features": True,
     "margin_market_file": "input/margin_market.csv",
     "margin_stock_file": "input/margin_stock.csv",
+    "use_us_index_context": False,
+    "us_index_source": "akshare",
 }
 
 DEFAULT_TASK: dict[str, dict[str, Any]] = {
@@ -305,6 +307,20 @@ def build_parser() -> argparse.ArgumentParser:
         dest="margin_stock_file",
         default=None,
         help="CSV path for stock-level margin data",
+    )
+    config_parent.add_argument(
+        "--use-us-index-context",
+        dest="use_us_index_context",
+        choices=["true", "false"],
+        default=None,
+        help="Enable US index context features for A-share training",
+    )
+    config_parent.add_argument(
+        "--us-index-source",
+        dest="us_index_source",
+        choices=["akshare"],
+        default=None,
+        help="US index feature source",
     )
 
     sub = parser.add_subparsers(dest="task", required=True)
@@ -757,6 +773,8 @@ def run_daily(settings: dict[str, Any]) -> int:
         use_margin_features=_parse_bool(settings["use_margin_features"]),
         margin_market_file=settings["margin_market_file"],
         margin_stock_file=settings["margin_stock_file"],
+        use_us_index_context=_parse_bool(settings["use_us_index_context"]),
+        us_index_source=str(settings["us_index_source"]),
         positions_file=str(settings["positions_file"]).strip(),
         portfolio_nav=max(0.0, float(settings["portfolio_nav"])),
         trade_lot_size=max(1, int(settings["trade_lot_size"])),
@@ -839,6 +857,8 @@ def run_forecast(settings: dict[str, Any]) -> int:
         use_margin_features=_parse_bool(settings["use_margin_features"]),
         margin_market_file=settings["margin_market_file"],
         margin_stock_file=settings["margin_stock_file"],
+        use_us_index_context=_parse_bool(settings["use_us_index_context"]),
+        us_index_source=str(settings["us_index_source"]),
     )
     result = generate_forecast(config=config, market_security=market_security, stocks=stocks)
     path = write_forecast_report(settings["report"], result.market_forecast, result.stock_rows)
@@ -861,6 +881,8 @@ def run_discover(settings: dict[str, Any]) -> int:
         use_margin_features=_parse_bool(settings["use_margin_features"]),
         margin_market_file=settings["margin_market_file"],
         margin_stock_file=settings["margin_stock_file"],
+        use_us_index_context=_parse_bool(settings["use_us_index_context"]),
+        us_index_source=str(settings["us_index_source"]),
         universe_file=settings["universe_file"],
         candidate_limit=int(settings["candidate_limit"]),
         top_k=int(settings["top_k"]),

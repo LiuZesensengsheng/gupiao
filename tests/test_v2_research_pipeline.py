@@ -448,6 +448,8 @@ def test_publish_artifacts_records_universe_metadata_and_keeps_non_default_lates
             "info_source_mode": "layered",
             "info_subsets": ["market_news", "announcements", "research"],
             "announcement_event_tags": ["earnings_negative"],
+            "use_us_index_context": True,
+            "us_index_source": "akshare",
         },
         baseline=baseline,
         calibration=calibration,
@@ -462,6 +464,8 @@ def test_publish_artifacts_records_universe_metadata_and_keeps_non_default_lates
     assert dataset_manifest["source_universe_manifest_path"]
     assert dataset_manifest["info_file"] == str(info_dir)
     assert dataset_manifest["info_hash"]
+    assert dataset_manifest["use_us_index_context"] is True
+    assert dataset_manifest["us_index_source"] == "akshare"
     assert dataset_manifest["info_item_count"] == 3
     assert dataset_manifest["info_source_mode"] == "layered"
     assert dataset_manifest["info_subsets"] == ["market_news", "announcements", "research"]
@@ -472,6 +476,8 @@ def test_publish_artifacts_records_universe_metadata_and_keeps_non_default_lates
     assert manifest["info_manifest"]
     assert manifest["info_shadow_report"]
     assert manifest["info_hash"]
+    assert manifest["use_us_index_context"] is True
+    assert manifest["us_index_source"] == "akshare"
     assert not (tmp_path / "swing_v2" / "latest_research_manifest.json").exists()
     assert (tmp_path / "swing_v2" / "latest_research_manifest.generated_80.json").exists()
     info_manifest = json.loads(Path(paths["info_manifest"]).read_text(encoding="utf-8"))

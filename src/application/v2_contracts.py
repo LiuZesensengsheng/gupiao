@@ -195,6 +195,8 @@ class StrategySnapshot:
     snapshot_hash: str = ""
     config_hash: str = ""
     manifest_path: str = ""
+    use_us_index_context: bool = False
+    us_index_source: str = ""
 
 
 @dataclass(frozen=True)
