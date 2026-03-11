@@ -16,8 +16,11 @@ from src.application.v2_services import (
     summarize_daily_run,
 )
 from src.application.v2_contracts import (
+    CapitalFlowState,
     CrossSectionForecastState,
+    InfoAggregateState,
     MarketForecastState,
+    MacroContextState,
     SectorForecastState,
     StockForecastState,
 )
@@ -85,6 +88,58 @@ def test_v2_policy_returns_bounded_exposure_and_weights() -> None:
     assert 1 <= decision.target_position_count <= 5
     assert sum(decision.symbol_target_weights.values()) <= decision.target_exposure + 1e-9
     assert all(weight >= 0.0 for weight in decision.symbol_target_weights.values())
+
+
+def test_v2_policy_trims_for_event_and_macro_risk() -> None:
+    market, sectors, stocks, cross_section = _make_demo_state()
+    base_state = compose_state(
+        market=market,
+        sectors=sectors,
+        stocks=stocks,
+        cross_section=cross_section,
+    )
+    stressed_state = base_state.__class__(
+        market=base_state.market,
+        cross_section=base_state.cross_section,
+        sectors=base_state.sectors,
+        stocks=base_state.stocks,
+        strategy_mode=base_state.strategy_mode,
+        risk_regime=base_state.risk_regime,
+        market_info_state=InfoAggregateState(event_risk_level=0.82, negative_event_risk=0.70),
+        sector_info_states=base_state.sector_info_states,
+        stock_info_states={
+            "000630.SZ": InfoAggregateState(event_risk_level=0.78, catalyst_strength=0.10),
+            "600160.SH": InfoAggregateState(catalyst_strength=0.42, coverage_confidence=0.80),
+        },
+        capital_flow_state=CapitalFlowState(
+            northbound_net_flow=-0.30,
+            margin_balance_change=-0.18,
+            turnover_heat=0.36,
+            large_order_bias=-0.24,
+            flow_regime="strong_outflow",
+        ),
+        macro_context_state=MacroContextState(
+            style_regime="defensive",
+            commodity_pressure=0.72,
+            fx_pressure=0.68,
+            index_breadth_proxy=0.28,
+            macro_risk_level="high",
+        ),
+    )
+
+    decision = apply_policy(
+        PolicyInput(
+            composite_state=stressed_state,
+            current_weights={},
+            current_cash=1.0,
+            total_equity=1.0,
+        )
+    )
+
+    assert decision.target_exposure < 0.60
+    assert any("Event risk elevated" in note for note in decision.risk_notes)
+    assert any("Macro risk high" in note for note in decision.risk_notes)
+    assert any("strong_outflow" in note for note in decision.risk_notes)
 
 
 def test_v2_policy_reduces_exposure_under_risk_off_inputs() -> None:

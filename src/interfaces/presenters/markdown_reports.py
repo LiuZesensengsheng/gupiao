@@ -487,6 +487,15 @@ def write_v2_daily_report(out_path: str | Path, result: V2DailyRunResult) -> Pat
     if result.info_hash or result.snapshot.info_hash:
         lines.append(f"- info_hash: {result.info_hash or result.snapshot.info_hash}")
     lines.append(f"- info shadow enabled: {'true' if (result.info_shadow_enabled or result.snapshot.info_shadow_enabled) else 'false'}")
+    if result.external_signal_manifest_path or result.snapshot.external_signal_manifest_path:
+        lines.append(
+            f"- external signal manifest path: {result.external_signal_manifest_path or result.snapshot.external_signal_manifest_path}"
+        )
+    lines.append(
+        f"- external signals enabled: {'true' if (result.external_signal_enabled or result.snapshot.external_signal_enabled) else 'false'}"
+    )
+    if result.external_signal_version or result.snapshot.external_signal_version:
+        lines.append(f"- external signal version: {result.external_signal_version or result.snapshot.external_signal_version}")
     lines.append(
         f"- US index context: {'enabled' if result.snapshot.use_us_index_context else 'disabled'}"
         f" ({result.snapshot.us_index_source or 'NA'})"
@@ -500,6 +509,44 @@ def write_v2_daily_report(out_path: str | Path, result: V2DailyRunResult) -> Pat
     lines.append(f"- 策略模式: {result.composite_state.strategy_mode}")
     lines.append(f"- 风险状态: {result.composite_state.risk_regime}")
     lines.append("")
+    if result.memory_path:
+        recall = result.memory_recall
+        lines.append("## 策略记忆")
+        lines.append("")
+        lines.append(f"- memory path: {result.memory_path}")
+        if recall.latest_research_run_id:
+            gate_text = "通过" if recall.latest_research_release_gate_passed else "未通过"
+            lines.append(
+                f"- 最近研究: run_id={recall.latest_research_run_id}, "
+                f"截止={recall.latest_research_end_date or 'NA'}, "
+                f"超额年化={_to_percent(recall.latest_research_excess_annual_return)}, "
+                f"IR={_to_float(recall.latest_research_information_ratio, 2)}, "
+                f"release gate={gate_text}"
+            )
+        if recall.recent_daily_run_count:
+            lines.append(
+                f"- 近期日运行: {recall.recent_daily_run_count} 次, "
+                f"平均目标仓位={_to_percent(recall.average_target_exposure)}, "
+                f"调仓触发占比={_to_percent(recall.rebalance_ratio)}, "
+                f"仓位趋势={_to_percent(recall.exposure_trend)}"
+            )
+        if recall.recurring_symbols:
+            lines.append(f"- 高频标的: {', '.join(recall.recurring_symbols)}")
+        if recall.recurring_risk_tags:
+            lines.append(f"- 重复风险: {', '.join(recall.recurring_risk_tags)}")
+        if recall.recurring_positive_tags:
+            lines.append(f"- 正向线索: {', '.join(recall.recurring_positive_tags)}")
+        if recall.recurring_event_risk_tags:
+            lines.append(f"- 高频事件风险: {', '.join(recall.recurring_event_risk_tags)}")
+        if recall.recurring_catalyst_tags:
+            lines.append(f"- 高频催化标签: {', '.join(recall.recurring_catalyst_tags)}")
+        if recall.recent_flow_regimes:
+            lines.append(f"- 近期资金状态: {', '.join(recall.recent_flow_regimes)}")
+        if recall.recurring_macro_risk_levels:
+            lines.append(f"- 宏观风险持续性: {', '.join(recall.recurring_macro_risk_levels)}")
+        for item in recall.narrative:
+            lines.append(f"- {item}")
+        lines.append("")
     lines.append("## 大盘状态")
     lines.append("")
     lines.append("| 指标 | 数值 |")
@@ -561,6 +608,22 @@ def write_v2_daily_report(out_path: str | Path, result: V2DailyRunResult) -> Pat
                 lines.append(
                     f"| {item.name} | {_to_percent(item.quant_prob_20d)} | {_to_percent(item.info_prob_20d)} | {_to_percent(item.shadow_prob_20d)} | {_to_percent(item.gap)} |"
                 )
+        lines.append("")
+    if result.external_signal_enabled or result.snapshot.external_signal_enabled:
+        lines.append("## 外部信号")
+        lines.append("")
+        lines.append("| 指标 | 数值 |")
+        lines.append("|---|---:|")
+        lines.append(f"| 资金状态 | {result.composite_state.capital_flow_state.flow_regime} |")
+        lines.append(f"| 北向净流 | {_to_float(result.composite_state.capital_flow_state.northbound_net_flow, 3)} |")
+        lines.append(f"| 两融变化 | {_to_float(result.composite_state.capital_flow_state.margin_balance_change, 3)} |")
+        lines.append(f"| 成交热度 | {_to_percent(result.composite_state.capital_flow_state.turnover_heat)} |")
+        lines.append(f"| 大单偏向 | {_to_float(result.composite_state.capital_flow_state.large_order_bias, 3)} |")
+        lines.append(f"| 宏观风险 | {result.composite_state.macro_context_state.macro_risk_level} |")
+        lines.append(f"| 风格状态 | {result.composite_state.macro_context_state.style_regime} |")
+        lines.append(f"| 商品压力 | {_to_percent(result.composite_state.macro_context_state.commodity_pressure)} |")
+        lines.append(f"| 汇率压力 | {_to_percent(result.composite_state.macro_context_state.fx_pressure)} |")
+        lines.append(f"| 宽度代理 | {_to_percent(result.composite_state.macro_context_state.index_breadth_proxy)} |")
         lines.append("")
     lines.append("## 横截面状态")
     lines.append("")
@@ -676,6 +739,9 @@ def write_v2_research_report(
         lines.append(f"- info manifest path: {artifacts.get('info_manifest', 'NA')}")
         lines.append(f"- info_hash: {artifacts.get('info_hash', 'NA')}")
         lines.append(f"- info shadow enabled: {artifacts.get('info_shadow_enabled', 'false')}")
+        lines.append(f"- external signal manifest: {artifacts.get('external_signal_manifest', 'NA')}")
+        lines.append(f"- external signal version: {artifacts.get('external_signal_version', 'NA')}")
+        lines.append(f"- external signal enabled: {artifacts.get('external_signal_enabled', 'false')}")
         lines.append(f"- US index context: {artifacts.get('use_us_index_context', 'false')}")
         lines.append(f"- US index source: {artifacts.get('us_index_source', 'NA')}")
         lines.append(f"- source manifest path: {artifacts.get('research_manifest', 'NA')}")

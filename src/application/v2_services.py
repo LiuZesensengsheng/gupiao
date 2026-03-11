@@ -4,7 +4,7 @@ import hashlib
 import json
 import pickle
 import time
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
 from datetime import datetime
 from pathlib import Path
 from typing import Iterable, Protocol, Sequence
@@ -13,6 +13,7 @@ import numpy as np
 import pandas as pd
 
 from src.application.v2_contracts import (
+    CapitalFlowState,
     CompositeState,
     CrossSectionForecastState,
     V2BacktestSummary,
@@ -25,12 +26,39 @@ from src.application.v2_contracts import (
     InfoSignalRecord,
     LearnedPolicyModel,
     MarketForecastState,
+    MacroContextState,
     PolicyDecision,
     PolicyInput,
     PolicySpec,
     SectorForecastState,
     StockForecastState,
     StrategySnapshot,
+)
+from src.application.v2_external_signal_support import (
+    attach_external_signals_to_state,
+    build_external_signal_package,
+    ensure_external_signal_manifest_path,
+    merge_external_signal_manifest_summary,
+)
+from src.application.v2_daily_runtime import (
+    build_daily_symbol_names as _build_daily_symbol_names_external,
+    load_daily_cached_result as _load_daily_cached_result_external,
+)
+from src.application.v2_publish_support import (
+    load_backtest_payload_for_run as _load_backtest_payload_for_run_external,
+    load_backtest_payload_from_manifest as _load_backtest_payload_from_manifest_external,
+    pass_default_switch_gate as _pass_default_switch_gate_external,
+    pass_release_gate as _pass_release_gate_external,
+    summary_from_payload as _summary_from_payload_external,
+    tier_latest_manifest_path as _tier_latest_manifest_path_external,
+    tier_latest_policy_path as _tier_latest_policy_path_external,
+)
+from src.application.v2_snapshot_support import (
+    build_frozen_daily_state_payload as _build_frozen_daily_state_payload_external,
+    decode_composite_state as _decode_composite_state_external,
+    load_research_manifest_for_daily as _load_research_manifest_for_daily_external,
+    resolve_manifest_entry_path as _path_from_manifest_entry_external,
+    serialize_composite_state as _serialize_composite_state_external,
 )
 from src.application.watchlist import load_watchlist
 from src.domain.entities import TradeAction
@@ -66,6 +94,7 @@ from src.infrastructure.modeling import (
 from src.infrastructure.panel_dataset import build_stock_panel_dataset
 from src.infrastructure.sector_data import build_sector_daily_frames
 from src.infrastructure.sector_forecast import run_sector_forecast
+from src.infrastructure.strategy_memory import remember_daily_run, remember_research_run
 
 
 def _clip(value: float, lo: float, hi: float) -> float:
@@ -193,6 +222,9 @@ def _logit_prob(p: float) -> float:
 
 
 def _resolve_info_file_from_settings(settings: dict[str, object]) -> str:
+    event_file = str(settings.get("event_file", "")).strip()
+    if event_file and Path(event_file).exists():
+        return event_file
     info_file = str(settings.get("info_file", "")).strip()
     if info_file and Path(info_file).exists():
         return info_file
@@ -213,8 +245,8 @@ def _load_v2_info_items_for_date(
         return "", []
     lookback_days = int(
         settings.get(
-            "learned_info_lookback_days" if learned_window else "info_lookback_days",
-            settings.get("info_lookback_days", 45),
+            "learned_info_lookback_days" if learned_window else "event_lookback_days",
+            settings.get("event_lookback_days", settings.get("info_lookback_days", 45)),
         )
     )
     items = load_v2_info_items(
@@ -444,6 +476,61 @@ def _enrich_state_with_info(
         market_info_state=market_info_state,
         sector_info_states=updated_sector_states,
         stock_info_states=updated_stock_states,
+        capital_flow_state=state.capital_flow_state,
+        macro_context_state=state.macro_context_state,
+    )
+
+
+def _build_external_signal_package_for_date(
+    *,
+    settings: dict[str, object],
+    as_of_date: pd.Timestamp,
+    info_items: list[InfoItem],
+) -> dict[str, object]:
+    if not bool(settings.get("external_signals", True)):
+        return {
+            "capital_flow_state": CapitalFlowState(),
+            "macro_context_state": MacroContextState(),
+            "capital_flow_snapshot": asdict(CapitalFlowState()),
+            "macro_context_snapshot": asdict(MacroContextState()),
+            "manifest": {
+                "as_of_date": str(as_of_date.date()),
+                "external_signal_version": str(settings.get("external_signal_version", "v1")),
+                "external_signal_enabled": False,
+                "sources": {},
+                "windows": {},
+                "coverage": {},
+                "event_summary": {},
+                "capital_flow_snapshot": asdict(CapitalFlowState()),
+                "macro_context_snapshot": asdict(MacroContextState()),
+            },
+        }
+    return build_external_signal_package(
+        settings=settings,
+        as_of_date=as_of_date,
+        info_items=info_items,
+    )
+
+
+def _attach_external_signals_to_composite_state(
+    *,
+    state: CompositeState,
+    settings: dict[str, object],
+    as_of_date: pd.Timestamp,
+    info_items: list[InfoItem],
+) -> tuple[CompositeState, dict[str, object]]:
+    package = _build_external_signal_package_for_date(
+        settings=settings,
+        as_of_date=as_of_date,
+        info_items=info_items,
+    )
+    return (
+        attach_external_signals_to_state(
+            state=state,
+            capital_flow_state=package["capital_flow_state"],
+            macro_context_state=package["macro_context_state"],
+        ),
+        package,
     )
 
 
@@ -476,15 +563,7 @@ def _resolve_manifest_path(
 
 
 def _path_from_manifest_entry(entry: object, *, run_dir: Path) -> Path | None:
-    if entry is None:
-        return None
-    text = str(entry).strip()
-    if not text:
-        return None
-    path = Path(text)
-    if path.is_absolute():
-        return path
-    return (run_dir / path).resolve()
+    return _path_from_manifest_entry_external(entry, run_dir=run_dir)
 
 
 def _compose_run_snapshot_hash(
@@ -1137,6 +1216,11 @@ def build_strategy_snapshot(
     info_manifest_path: str = "",
     info_hash: str = "",
     info_shadow_enabled: bool = False,
+    external_signal_manifest_path: str = "",
+    external_signal_version: str = "",
+    external_signal_enabled: bool = False,
+    capital_flow_snapshot: dict[str, object] | None = None,
+    macro_context_snapshot: dict[str, object] | None = None,
     run_id: str = "",
     data_window: str = "",
     model_hashes: dict[str, str] | None = None,
@@ -1165,6 +1249,11 @@ def build_strategy_snapshot(
         info_manifest_path=str(info_manifest_path),
         info_hash=str(info_hash),
         info_shadow_enabled=bool(info_shadow_enabled),
+        external_signal_manifest_path=str(external_signal_manifest_path),
+        external_signal_version=str(external_signal_version),
+        external_signal_enabled=bool(external_signal_enabled),
+        capital_flow_snapshot=dict(capital_flow_snapshot or {}),
+        macro_context_snapshot=dict(macro_context_snapshot or {}),
         run_id=str(run_id),
         data_window=str(data_window),
         model_hashes=dict(model_hashes or {}),
@@ -1194,6 +1283,10 @@ def _load_v2_runtime_settings(
     info_types: str | None = None,
     info_source_mode: str | None = None,
     info_subsets: str | None = None,
+    external_signals: bool | None = None,
+    event_file: str | None = None,
+    capital_flow_file: str | None = None,
+    macro_file: str | None = None,
     use_us_index_context: bool | None = None,
     us_index_source: str | None = None,
 ) -> dict[str, object]:
@@ -1251,12 +1344,27 @@ def _load_v2_runtime_settings(
         "info_file": (
             str(info_file).strip()
             if info_file is not None and str(info_file).strip()
-            else str(pick("info_file", pick("news_file", "input/info_parts")))
+            else (
+                str(event_file).strip()
+                if event_file is not None and str(event_file).strip()
+                else str(pick("info_file", pick("news_file", "input/info_parts")))
+            )
+        ),
+        "event_file": (
+            str(event_file).strip()
+            if event_file is not None and str(event_file).strip()
+            else str(pick("event_file", pick("info_file", "input/info_parts")))
         ),
         "info_lookback_days": int(
             info_lookback_days
             if info_lookback_days is not None
             else int(pick("info_lookback_days", pick("news_lookback_days", 45)))
+        ),
+        "event_lookback_days": int(
+            pick(
+                "event_lookback_days",
+                info_lookback_days if info_lookback_days is not None else pick("info_lookback_days", 45),
+            )
         ),
         "learned_info_lookback_days": int(pick("learned_info_lookback_days", pick("learned_news_lookback_days", 720))),
         "info_half_life_days": float(
@@ -1264,6 +1372,27 @@ def _load_v2_runtime_settings(
             if info_half_life_days is not None
             else float(pick("info_half_life_days", pick("news_half_life_days", 10.0)))
         ),
+        "capital_flow_file": (
+            str(capital_flow_file).strip()
+            if capital_flow_file is not None and str(capital_flow_file).strip()
+            else str(pick("capital_flow_file", ""))
+        ),
+        "macro_file": (
+            str(macro_file).strip()
+            if macro_file is not None and str(macro_file).strip()
+            else str(pick("macro_file", ""))
+        ),
+        "capital_flow_lookback_days": int(pick("capital_flow_lookback_days", 20)),
+        "macro_lookback_days": int(pick("macro_lookback_days", 60)),
+        "external_signals": (
+            bool(external_signals)
+            if external_signals is not None
+            else _parse_boolish(pick("external_signals", True), True)
+        ),
+        "external_signal_version": str(pick("external_signal_version", "v1")),
+        "event_risk_cutoff": float(pick("event_risk_cutoff", 0.55)),
+        "catalyst_boost_cap": float(pick("catalyst_boost_cap", 0.12)),
+        "flow_exposure_cap": float(pick("flow_exposure_cap", 0.08)),
         "market_info_strength": float(pick("market_info_strength", pick("market_news_strength", 0.9))),
         "stock_info_strength": float(pick("stock_info_strength", pick("stock_news_strength", 1.1))),
         "use_info_fusion": (
@@ -1783,6 +1912,8 @@ def _cap_sector_budgets(
             overflow += float(weight - max_sector_weight)
             clipped[sector] = float(max_sector_weight)
             notes.append(f"{sector}: sector budget capped for concentration control.")
+    if len(clipped) == 1:
+        return clipped, notes
     if overflow <= 1e-9:
         return clipped, notes
     receivers = [sector for sector, weight in clipped.items() if weight < max_sector_weight - 1e-9]
@@ -2008,6 +2139,76 @@ def _finalize_target_weights(
     return adjusted, notes
 
 
+def _apply_external_signal_weight_tilts(
+    *,
+    weights: dict[str, float],
+    state: CompositeState,
+    target_exposure: float,
+    risk_cutoff: float,
+    catalyst_boost_cap: float,
+) -> tuple[dict[str, float], list[str]]:
+    adjusted = {str(symbol): max(0.0, float(weight)) for symbol, weight in weights.items() if float(weight) > 1e-9}
+    if not adjusted:
+        return adjusted, []
+    notes: list[str] = []
+    stock_map = {item.symbol: item for item in state.stocks}
+    for symbol in list(adjusted):
+        info_state = state.stock_info_states.get(symbol, InfoAggregateState())
+        event_risk = float(info_state.event_risk_level)
+        catalyst = float(info_state.catalyst_strength)
+        alpha_advantage = 0.0
+        stock = stock_map.get(symbol)
+        if stock is not None:
+            alpha_source = getattr(stock, "alpha_score", None)
+            if alpha_source is None:
+                try:
+                    alpha_source = _stock_policy_score(stock)
+                except Exception:
+                    alpha_source = 0.55
+            alpha_advantage = max(0.0, float(alpha_source) - 0.55)
+        if event_risk >= float(risk_cutoff):
+            adjusted[symbol] *= max(0.0, 1.0 - min(0.85, event_risk))
+            notes.append(f"{symbol}: event risk above cutoff, target trimmed.")
+        elif catalyst > 0.0 and alpha_advantage > 0.0:
+            boost = min(float(catalyst_boost_cap), 0.35 * catalyst + 0.80 * alpha_advantage)
+            adjusted[symbol] *= 1.0 + boost
+            notes.append(f"{symbol}: catalyst aligned with alpha, target boosted.")
+    total = float(sum(adjusted.values()))
+    if total <= 1e-9:
+        return {}, notes
+    scale = float(target_exposure) / total if target_exposure > 1e-9 else 0.0
+    return (
+        {
+            symbol: float(weight) * scale
+            for symbol, weight in adjusted.items()
+            if float(weight) * scale > 1e-6
+        },
+        notes,
+    )
+
+
+def _enforce_single_name_cap(
+    *,
+    weights: dict[str, float],
+    max_single_position: float,
+) -> dict[str, float]:
+    adjusted = {
+        str(symbol): max(0.0, float(weight))
+        for symbol, weight in weights.items()
+        if float(weight) > 1e-9
+    }
+    cap = max(0.0, float(max_single_position))
+    if not adjusted or cap <= 1e-9:
+        return adjusted
+    for symbol in list(adjusted):
+        adjusted[symbol] = min(adjusted[symbol], cap)
+    return {
+        symbol: float(weight)
+        for symbol, weight in adjusted.items()
+        if float(weight) > 1e-6
+    }
+
+
 def _sector_budgets_from_weights(
     *,
     symbol_weights: dict[str, float],
@@ -2061,6 +2262,9 @@ def apply_policy(
     alpha_headroom = float(alpha_metrics["alpha_headroom"])
     alpha_breadth = float(alpha_metrics["breadth_ratio"])
     top_alpha = float(alpha_metrics["top_score"])
+    market_info = getattr(state, "market_info_state", InfoAggregateState())
+    capital_flow = getattr(state, "capital_flow_state", CapitalFlowState())
+    macro_context = getattr(state, "macro_context_state", MacroContextState())
     near_term_stack = float(
         0.20 * float(market.up_1d_prob)
         + 0.22 * float(getattr(market, "up_2d_prob", 0.5))
@@ -2098,6 +2302,28 @@ def apply_policy(
     if near_term_stack < 0.50:
         target_exposure *= 0.95
         risk_notes.append("Near-term market stack below 0.50: mild exposure trim.")
+    if float(market_info.event_risk_level) >= float(policy_spec.event_risk_cutoff):
+        target_exposure *= 0.90
+        target_position_count = max(1, target_position_count - 1)
+        turnover_cap = min(turnover_cap, 0.20)
+        risk_notes.append("Event risk elevated: exposure trimmed and concentration reduced.")
+    if macro_context.macro_risk_level == "high":
+        target_exposure *= 0.88
+        turnover_cap = min(turnover_cap, 0.18)
+        risk_notes.append("Macro risk high: exposure trimmed and turnover capped.")
+    elif macro_context.macro_risk_level == "elevated":
+        target_exposure *= 0.94
+        risk_notes.append("Macro risk elevated: mild exposure trim.")
+    if capital_flow.flow_regime in {"outflow", "strong_outflow"}:
+        flow_penalty = float(policy_spec.flow_exposure_cap) * (1.0 if capital_flow.flow_regime == "strong_outflow" else 0.65)
+        target_exposure = max(regime_floor, target_exposure - flow_penalty)
+        turnover_cap = min(turnover_cap, 0.22 if capital_flow.flow_regime == "outflow" else 0.18)
+        risk_notes.append(f"Capital flow {capital_flow.flow_regime}: exposure trimmed.")
+    elif capital_flow.flow_regime in {"inflow", "strong_inflow"} and state.risk_regime != "risk_off":
+        flow_boost = float(policy_spec.flow_exposure_cap) * (0.60 if capital_flow.flow_regime == "inflow" else 1.0)
+        target_exposure = min(1.0, target_exposure + flow_boost)
+        turnover_cap = min(0.45, turnover_cap + 0.02)
+        risk_notes.append(f"Capital flow {capital_flow.flow_regime}: measured exposure boost.")
     if market.drawdown_risk >= 0.50:
         target_exposure *= 0.90
         turnover_cap = min(turnover_cap, 0.22)
@@ -2171,6 +2397,18 @@ def apply_policy(
         target_position_count=int(target_position_count),
         max_single_position=float(max_single_position),
     )
+    desired_symbol_target_weights, external_signal_notes = _apply_external_signal_weight_tilts(
+        weights=desired_symbol_target_weights,
+        state=state,
+        target_exposure=float(target_exposure),
+        risk_cutoff=float(policy_spec.event_risk_cutoff),
+        catalyst_boost_cap=float(policy_spec.catalyst_boost_cap),
+    )
+    desired_symbol_target_weights = _enforce_single_name_cap(
+        weights=desired_symbol_target_weights,
+        max_single_position=float(max_single_position),
+    )
+    risk_notes.extend(external_signal_notes)
     symbol_target_weights, execution_notes = _finalize_target_weights(
         desired_weights=desired_symbol_target_weights,
         current_weights=policy_input.current_weights,
@@ -2179,6 +2417,10 @@ def apply_policy(
         target_exposure=target_exposure,
         min_trade_delta=min(0.02, 0.25 * float(turnover_cap)),
         min_holding_days=min_holding_days,
+    )
+    symbol_target_weights = _enforce_single_name_cap(
+        weights=symbol_target_weights,
+        max_single_position=float(max_single_position),
     )
     risk_notes.extend(execution_notes)
     sector_budgets = _sector_budgets_from_weights(
@@ -4586,6 +4828,10 @@ def run_v2_research_workflow(
     info_types: str | None = None,
     info_source_mode: str | None = None,
     info_subsets: str | None = None,
+    external_signals: bool | None = None,
+    event_file: str | None = None,
+    capital_flow_file: str | None = None,
+    macro_file: str | None = None,
     use_us_index_context: bool | None = None,
     us_index_source: str | None = None,
     skip_calibration: bool = False,
@@ -4596,6 +4842,7 @@ def run_v2_research_workflow(
     split_mode: str = _DEFAULT_SPLIT_MODE,
     embargo_days: int = _DEFAULT_EMBARGO_DAYS,
 ) -> tuple[V2BacktestSummary, V2CalibrationResult, V2PolicyLearningResult]:
+    _ = (external_signals, event_file, capital_flow_file, macro_file)
     _emit_progress("research", f"载入研究轨迹: backend={forecast_backend}")
     trajectory = _load_or_build_v2_backtest_trajectory(
         config_path=config_path,
@@ -4861,65 +5108,11 @@ def _with_backtest_metadata(
 
 
 def _decode_composite_state(payload: object) -> CompositeState | None:
-    if not isinstance(payload, dict):
-        return None
-    market_raw = payload.get("market")
-    cross_raw = payload.get("cross_section")
-    sectors_raw = payload.get("sectors")
-    stocks_raw = payload.get("stocks")
-    if not isinstance(market_raw, dict) or not isinstance(cross_raw, dict):
-        return None
-    if not isinstance(sectors_raw, list) or not isinstance(stocks_raw, list):
-        return None
-    try:
-        market = MarketForecastState(**market_raw)
-        cross = CrossSectionForecastState(**cross_raw)
-        sectors = [SectorForecastState(**item) for item in sectors_raw if isinstance(item, dict)]
-        stocks = [StockForecastState(**item) for item in stocks_raw if isinstance(item, dict)]
-        market_info_raw = payload.get("market_info_state", {})
-        sector_info_raw = payload.get("sector_info_states", {})
-        stock_info_raw = payload.get("stock_info_states", {})
-        return CompositeState(
-            market=market,
-            cross_section=cross,
-            sectors=sectors,
-            stocks=stocks,
-            strategy_mode=str(payload.get("strategy_mode", "")),
-            risk_regime=str(payload.get("risk_regime", "")),
-            market_info_state=InfoAggregateState(**market_info_raw) if isinstance(market_info_raw, dict) else InfoAggregateState(),
-            sector_info_states={
-                str(key): InfoAggregateState(**value)
-                for key, value in sector_info_raw.items()
-                if isinstance(value, dict)
-            } if isinstance(sector_info_raw, dict) else {},
-            stock_info_states={
-                str(key): InfoAggregateState(**value)
-                for key, value in stock_info_raw.items()
-                if isinstance(value, dict)
-            } if isinstance(stock_info_raw, dict) else {},
-        )
-    except Exception:
-        return None
+    return _decode_composite_state_external(payload)
 
 
 def _serialize_composite_state(state: CompositeState) -> dict[str, object]:
-    return {
-        "market": asdict(getattr(state, "market")),
-        "cross_section": asdict(getattr(state, "cross_section")),
-        "sectors": [asdict(item) for item in getattr(state, "sectors", [])],
-        "stocks": [asdict(item) for item in getattr(state, "stocks", [])],
-        "strategy_mode": str(getattr(state, "strategy_mode", "")),
-        "risk_regime": str(getattr(state, "risk_regime", "")),
-        "market_info_state": asdict(getattr(state, "market_info_state", InfoAggregateState())),
-        "sector_info_states": {
-            str(key): asdict(value)
-            for key, value in getattr(state, "sector_info_states", {}).items()
-        },
-        "stock_info_states": {
-            str(key): asdict(value)
-            for key, value in getattr(state, "stock_info_states", {}).items()
-        },
-    }
+    return _serialize_composite_state_external(state)
 
 
 def _build_frozen_daily_state_payload(
@@ -4928,22 +5121,12 @@ def _build_frozen_daily_state_payload(
     split_mode: str,
     embargo_days: int,
 ) -> dict[str, object]:
-    if trajectory is None or not trajectory.steps:
-        return {}
-    _, _, holdout = _split_research_trajectory(
-        trajectory,
+    return _build_frozen_daily_state_payload_external(
+        trajectory=trajectory,
         split_mode=split_mode,
         embargo_days=embargo_days,
+        split_trajectory=_split_research_trajectory,
     )
-    steps = holdout.steps or trajectory.steps
-    if not steps:
-        return {}
-    last_step = steps[-1]
-    return {
-        "as_of_date": str(last_step.date.date()),
-        "next_date": str(last_step.next_date.date()),
-        "composite_state": _serialize_composite_state(last_step.composite_state),
-    }
 
 
 def _pass_release_gate(
@@ -4951,50 +5134,40 @@ def _pass_release_gate(
     baseline: V2BacktestSummary,
     candidate: V2BacktestSummary,
 ) -> tuple[bool, list[str]]:
-    reasons: list[str] = []
-    if float(candidate.excess_annual_return) <= float(_RELEASE_GATE_THRESHOLD["excess_annual_return_min"]):
-        reasons.append("holdout excess_annual_return <= 0")
-    if float(candidate.information_ratio) <= float(_RELEASE_GATE_THRESHOLD["information_ratio_min"]):
-        reasons.append("holdout information_ratio <= 0.30")
-    drawdown_diff = abs(float(candidate.max_drawdown)) - abs(float(baseline.max_drawdown))
-    if drawdown_diff > float(_RELEASE_GATE_THRESHOLD["max_drawdown_worse_limit"]):
-        reasons.append("holdout max_drawdown worse than baseline by > 5pp")
-    return (len(reasons) == 0), reasons
+    return _pass_release_gate_external(
+        baseline=baseline,
+        candidate=candidate,
+        threshold=_RELEASE_GATE_THRESHOLD,
+    )
 
 
 def _tier_latest_manifest_path(*, artifact_root: str, strategy_id: str, universe_tier: str) -> Path:
-    suffix = str(universe_tier).strip() or "custom"
-    if not str(universe_tier).strip():
-        return Path(str(artifact_root)) / str(strategy_id) / "latest_research_manifest.json"
-    return Path(str(artifact_root)) / str(strategy_id) / f"latest_research_manifest.{suffix}.json"
+    return _tier_latest_manifest_path_external(
+        artifact_root=artifact_root,
+        strategy_id=strategy_id,
+        universe_tier=universe_tier,
+    )
 
 
 def _tier_latest_policy_path(*, artifact_root: str, strategy_id: str, universe_tier: str) -> Path:
-    suffix = str(universe_tier).strip() or "custom"
-    if not str(universe_tier).strip():
-        return Path(str(artifact_root)) / str(strategy_id) / "latest_policy_model.json"
-    return Path(str(artifact_root)) / str(strategy_id) / f"latest_policy_model.{suffix}.json"
+    return _tier_latest_policy_path_external(
+        artifact_root=artifact_root,
+        strategy_id=strategy_id,
+        universe_tier=universe_tier,
+    )
 
 
 def _summary_from_payload(template: V2BacktestSummary, payload: dict[str, object]) -> V2BacktestSummary:
-    base = asdict(template)
-    return V2BacktestSummary(
-        **{
-            **base,
-            **{k: v for k, v in payload.items() if k in base},
-        }
-    )
+    return _summary_from_payload_external(template, payload)
 
 
 def _load_backtest_payload_from_manifest(manifest_payload: dict[str, object], manifest_path: Path) -> dict[str, object]:
-    backtest_path = _path_from_manifest_entry(
-        manifest_payload.get("backtest_summary"),
-        run_dir=manifest_path.parent,
+    return _load_backtest_payload_from_manifest_external(
+        manifest_payload,
+        manifest_path,
+        path_from_manifest_entry=lambda entry: _path_from_manifest_entry(entry, run_dir=manifest_path.parent),
+        load_json_dict=_load_json_dict,
     )
-    if backtest_path is None:
-        return {}
-    loaded = _load_json_dict(backtest_path)
-    return loaded if isinstance(loaded, dict) else {}
 
 
 def _load_backtest_payload_for_run(
@@ -5003,11 +5176,12 @@ def _load_backtest_payload_for_run(
     strategy_id: str,
     run_id: str,
 ) -> dict[str, object]:
-    if not str(run_id).strip():
-        return {}
-    backtest_path = Path(str(artifact_root)) / str(strategy_id) / str(run_id).strip() / "backtest_summary.json"
-    loaded = _load_json_dict(backtest_path)
-    return loaded if isinstance(loaded, dict) else {}
+    return _load_backtest_payload_for_run_external(
+        artifact_root=artifact_root,
+        strategy_id=strategy_id,
+        run_id=run_id,
+        load_json_dict=_load_json_dict,
+    )
 
 
 def _pass_default_switch_gate(
@@ -5015,23 +5189,11 @@ def _pass_default_switch_gate(
     baseline_reference: V2BacktestSummary,
     candidate: V2BacktestSummary,
 ) -> tuple[bool, list[str], dict[str, float]]:
-    reasons: list[str] = []
-    excess_delta = float(candidate.excess_annual_return) - float(baseline_reference.excess_annual_return)
-    ir_delta = float(candidate.information_ratio) - float(baseline_reference.information_ratio)
-    drawdown_diff = abs(float(candidate.max_drawdown)) - abs(float(baseline_reference.max_drawdown))
-    if not (
-        excess_delta >= float(_DEFAULT_SWITCH_GATE_THRESHOLD["excess_annual_return_delta_min"])
-        or ir_delta >= float(_DEFAULT_SWITCH_GATE_THRESHOLD["information_ratio_delta_min"])
-    ):
-        reasons.append("switch gate unmet: excess_annual_return < +2pp and information_ratio < +0.10 vs baseline reference")
-    if drawdown_diff > float(_DEFAULT_SWITCH_GATE_THRESHOLD["max_drawdown_worse_limit"]):
-        reasons.append("switch gate unmet: max_drawdown worse than baseline reference by > 2pp")
-    deltas = {
-        "excess_annual_return_delta": float(excess_delta),
-        "information_ratio_delta": float(ir_delta),
-        "max_drawdown_diff": float(drawdown_diff),
-    }
-    return (len(reasons) == 0), reasons, deltas
+    return _pass_default_switch_gate_external(
+        baseline_reference=baseline_reference,
+        candidate=candidate,
+        threshold=_DEFAULT_SWITCH_GATE_THRESHOLD,
+    )
 
 
 def _load_research_manifest_for_daily(
@@ -5041,30 +5203,14 @@ def _load_research_manifest_for_daily(
     run_id: str | None,
     snapshot_path: str | None,
 ) -> tuple[dict[str, object], Path]:
-    manifest_path = _resolve_manifest_path(
+    return _load_research_manifest_for_daily_external(
         strategy_id=strategy_id,
         artifact_root=artifact_root,
         run_id=run_id,
         snapshot_path=snapshot_path,
+        resolve_manifest_path=_resolve_manifest_path,
+        load_json_dict=_load_json_dict,
     )
-    payload = _load_json_dict(manifest_path)
-    if not payload:
-        raise FileNotFoundError(
-            f"Missing research manifest for daily-run: {manifest_path}. "
-            "Run `research-run` first or pass `--allow-retrain`."
-        )
-    manifest_run_id = str(payload.get("run_id", "")).strip()
-    requested_run_id = "" if run_id is None else str(run_id).strip()
-    if requested_run_id and manifest_run_id and manifest_run_id != requested_run_id:
-        raise ValueError(
-            f"run_id mismatch: requested={requested_run_id}, manifest={manifest_run_id} ({manifest_path})"
-        )
-    manifest_strategy = str(payload.get("strategy_id", "")).strip()
-    if manifest_strategy and manifest_strategy != str(strategy_id):
-        raise ValueError(
-            f"strategy mismatch in manifest: requested={strategy_id}, manifest={manifest_strategy}"
-        )
-    return payload, manifest_path
 
 
 def _build_snapshot_from_manifest(
@@ -5110,6 +5256,14 @@ def _build_snapshot_from_manifest(
         info_manifest_path=str(manifest.get("info_manifest", "")),
         info_hash=str(manifest.get("info_hash", dataset_manifest.get("info_hash", ""))),
         info_shadow_enabled=_parse_boolish(manifest.get("info_shadow_enabled", dataset_manifest.get("info_shadow_enabled", False)), False),
+        external_signal_manifest_path=str(manifest.get("external_signal_manifest", dataset_manifest.get("external_signal_manifest", ""))),
+        external_signal_version=str(manifest.get("external_signal_version", dataset_manifest.get("external_signal_version", "v1"))),
+        external_signal_enabled=_parse_boolish(
+            manifest.get("external_signal_enabled", dataset_manifest.get("external_signal_enabled", False)),
+            False,
+        ),
+        capital_flow_snapshot=dict(manifest.get("capital_flow_snapshot", dataset_manifest.get("capital_flow_snapshot", {}))),
+        macro_context_snapshot=dict(manifest.get("macro_context_snapshot", dataset_manifest.get("macro_context_snapshot", {}))),
         run_id=run_id,
         data_window=data_window,
         model_hashes=model_hashes,
@@ -5144,6 +5298,10 @@ def publish_v2_research_artifacts(
     info_types: str | None = None,
     info_source_mode: str | None = None,
     info_subsets: str | None = None,
+    external_signals: bool | None = None,
+    event_file: str | None = None,
+    capital_flow_file: str | None = None,
+    macro_file: str | None = None,
     settings: dict[str, object] | None = None,
     baseline: V2BacktestSummary,
     calibration: V2CalibrationResult,
@@ -5171,6 +5329,10 @@ def publish_v2_research_artifacts(
         info_types=info_types,
         info_source_mode=info_source_mode,
         info_subsets=info_subsets,
+        external_signals=external_signals,
+        event_file=event_file,
+        capital_flow_file=capital_flow_file,
+        macro_file=macro_file,
         use_us_index_context=use_us_index_context,
         us_index_source=us_index_source,
     )
@@ -5308,6 +5470,7 @@ def publish_v2_research_artifacts(
     rolling_oos_path = base_dir / "rolling_oos_report.json"
     info_manifest_path = base_dir / "info_manifest.json"
     info_shadow_report_path = base_dir / "info_shadow_report.json"
+    external_signal_manifest_path = ensure_external_signal_manifest_path(base_dir)
     manifest_path = base_dir / "research_manifest.json"
     latest_policy_path = Path(str(artifact_root)) / str(strategy_id) / "latest_policy_model.json"
     latest_manifest_path = Path(str(artifact_root)) / str(strategy_id) / "latest_research_manifest.json"
@@ -5394,6 +5557,34 @@ def publish_v2_research_artifacts(
         shadow_report=info_shadow_report,
     )
     info_hash = str(info_manifest.get("info_hash", ""))
+    external_signal_package = _build_external_signal_package_for_date(
+        settings=settings,
+        as_of_date=info_as_of_date,
+        info_items=info_items,
+    )
+    external_signal_manifest = dict(external_signal_package.get("manifest", {}))
+    info_manifest = merge_external_signal_manifest_summary(
+        info_manifest=info_manifest,
+        external_signal_manifest=external_signal_manifest,
+    )
+
+    if publish_forecast_models and frozen_daily_state:
+        frozen_composite = _decode_composite_state(frozen_daily_state.get("composite_state"))
+        if frozen_composite is not None:
+            if bool(settings.get("use_info_fusion", False)) and info_items:
+                frozen_composite = _enrich_state_with_info(
+                    state=frozen_composite,
+                    as_of_date=info_as_of_date,
+                    info_items=info_items,
+                    settings=settings,
+                )
+            frozen_composite, _ = _attach_external_signals_to_composite_state(
+                state=frozen_composite,
+                settings=settings,
+                as_of_date=info_as_of_date,
+                info_items=info_items,
+            )
+            frozen_daily_state["composite_state"] = _serialize_composite_state(frozen_composite)
 
     dataset_manifest = {
         "strategy_id": str(strategy_id),
@@ -5416,6 +5607,7 @@ def publish_v2_research_artifacts(
         "use_us_index_context": bool(settings.get("use_us_index_context", False)),
         "us_index_source": str(settings.get("us_index_source", "akshare")),
         "info_file": str(info_file_path),
+        "event_file": str(settings.get("event_file", info_file_path)),
         "info_hash": info_hash,
         "info_shadow_enabled": bool(info_shadow_enabled),
         "info_shadow_only": bool(settings.get("info_shadow_only", True)),
@@ -5423,6 +5615,19 @@ def publish_v2_research_artifacts(
         "info_source_mode": str(settings.get("info_source_mode", "layered")),
         "info_subsets": [str(item) for item in settings.get("info_subsets", [])],
         "announcement_event_tags": [str(item) for item in settings.get("announcement_event_tags", [])],
+        "capital_flow_file": str(settings.get("capital_flow_file", "")),
+        "macro_file": str(settings.get("macro_file", "")),
+        "external_signal_manifest": str(external_signal_manifest_path),
+        "external_signal_version": str(settings.get("external_signal_version", "v1")),
+        "external_signal_enabled": bool(settings.get("external_signals", True)),
+        "event_lookback_days": int(settings.get("event_lookback_days", settings.get("info_lookback_days", 45))),
+        "capital_flow_lookback_days": int(settings.get("capital_flow_lookback_days", 20)),
+        "macro_lookback_days": int(settings.get("macro_lookback_days", 60)),
+        "event_risk_cutoff": float(settings.get("event_risk_cutoff", 0.55)),
+        "catalyst_boost_cap": float(settings.get("catalyst_boost_cap", 0.12)),
+        "flow_exposure_cap": float(settings.get("flow_exposure_cap", 0.08)),
+        "capital_flow_snapshot": dict(external_signal_package.get("capital_flow_snapshot", {})),
+        "macro_context_snapshot": dict(external_signal_package.get("macro_context_snapshot", {})),
         "active_default_universe_tier": active_default_universe_tier,
         "candidate_default_universe_tier": candidate_default_universe_tier,
     }
@@ -5454,6 +5659,8 @@ def publish_v2_research_artifacts(
         "model_hashes": model_hashes,
         "info_hash": info_hash,
         "info_source_mode": str(settings.get("info_source_mode", "layered")),
+        "external_signal_enabled": bool(settings.get("external_signals", True)),
+        "external_signal_version": str(settings.get("external_signal_version", "v1")),
         "use_us_index_context": bool(settings.get("use_us_index_context", False)),
         "us_index_source": str(settings.get("us_index_source", "akshare")),
     }
@@ -5493,6 +5700,10 @@ def publish_v2_research_artifacts(
     rolling_oos_path.write_text(json.dumps(rolling_oos_manifest, ensure_ascii=False, indent=2), encoding="utf-8")
     info_manifest_path.write_text(json.dumps(info_manifest, ensure_ascii=False, indent=2), encoding="utf-8")
     info_shadow_report_path.write_text(json.dumps(info_shadow_report, ensure_ascii=False, indent=2), encoding="utf-8")
+    external_signal_manifest_path.write_text(
+        json.dumps(external_signal_manifest, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
 
     gate_ok, gate_reasons = _pass_release_gate(
         baseline=baseline_meta,
@@ -5583,6 +5794,10 @@ def publish_v2_research_artifacts(
         "info_source_mode": str(settings.get("info_source_mode", "layered")),
         "info_subsets": [str(item) for item in settings.get("info_subsets", [])],
         "announcement_event_tags": [str(item) for item in settings.get("announcement_event_tags", [])],
+        "external_signal_version": str(settings.get("external_signal_version", "v1")),
+        "external_signal_enabled": bool(settings.get("external_signals", True)),
+        "capital_flow_snapshot": dict(external_signal_package.get("capital_flow_snapshot", {})),
+        "macro_context_snapshot": dict(external_signal_package.get("macro_context_snapshot", {})),
         "use_us_index_context": bool(settings.get("use_us_index_context", False)),
         "us_index_source": str(settings.get("us_index_source", "akshare")),
         "data_window": {
@@ -5606,6 +5821,7 @@ def publish_v2_research_artifacts(
         "rolling_oos_report": str(rolling_oos_path),
         "info_manifest": str(info_manifest_path),
         "info_shadow_report": str(info_shadow_report_path),
+        "external_signal_manifest": str(external_signal_manifest_path),
         "published_policy_model": str(latest_policy_path),
         "latest_research_manifest": str(latest_manifest_path),
         "tier_published_policy_model": str(tier_latest_policy_path),
@@ -5631,6 +5847,21 @@ def publish_v2_research_artifacts(
     elif not release_gate_passed:
         _emit_progress("publish", "门禁未通过，本次不更新 latest policy/manifest")
 
+    memory_path = remember_research_run(
+        memory_root=Path(str(artifact_root)) / "memory",
+        strategy_id=strategy_id,
+        run_id=run_id,
+        baseline=baseline_meta,
+        calibration=calibration,
+        learning=learning,
+        release_gate_passed=release_gate_passed,
+        universe_id=universe_id,
+        universe_tier=universe_tier_value,
+        universe_size=int(universe_size),
+        external_signal_version=str(settings.get("external_signal_version", "v1")),
+        external_signal_enabled=bool(settings.get("external_signals", True)),
+    )
+
     return {
         "run_dir": str(base_dir),
         "run_id": run_id,
@@ -5644,6 +5875,9 @@ def publish_v2_research_artifacts(
         "info_hash": info_hash,
         "info_item_count": str(info_manifest.get("info_item_count", 0)),
         "info_shadow_enabled": "true" if info_shadow_enabled else "false",
+        "external_signal_manifest": str(external_signal_manifest_path),
+        "external_signal_version": str(settings.get("external_signal_version", "v1")),
+        "external_signal_enabled": "true" if bool(settings.get("external_signals", True)) else "false",
         "use_us_index_context": "true" if bool(settings.get("use_us_index_context", False)) else "false",
         "us_index_source": str(settings.get("us_index_source", "akshare")),
         "dataset_manifest": str(dataset_path),
@@ -5656,6 +5890,9 @@ def publish_v2_research_artifacts(
         "rolling_oos_report": str(rolling_oos_path),
         "research_manifest": str(manifest_path),
         "published_policy_model": str(latest_policy_path),
+        "strategy_memory": str(memory_path),
+        "capital_flow_snapshot": json.dumps(external_signal_package.get("capital_flow_snapshot", {}), ensure_ascii=False),
+        "macro_context_snapshot": json.dumps(external_signal_package.get("macro_context_snapshot", {}), ensure_ascii=False),
         "release_gate_passed": "true" if release_gate_passed else "false",
         "default_switch_gate_passed": "true" if default_switch_gate_passed else "false",
         "snapshot_hash": snapshot_hash,
@@ -5663,31 +5900,162 @@ def publish_v2_research_artifacts(
     }
 
 
-def run_daily_v2_live(
+@dataclass(frozen=True)
+class _DailySnapshotContext:
+    settings: dict[str, object]
+    manifest: dict[str, object]
+    manifest_path: Path | None
+    snapshot: StrategySnapshot
+    resolved_run_id: str
+
+
+@dataclass(frozen=True)
+class _DailyUniverseContext:
+    market_security: object
+    current_holdings: list[object]
+    stocks: list[object]
+    sector_map: dict[str, str]
+
+
+def _load_daily_cached_result(
     *,
-    strategy_id: str = "swing_v2",
-    config_path: str = "config/api.json",
-    source: str | None = None,
-    universe_file: str | None = None,
-    universe_limit: int | None = None,
-    universe_tier: str | None = None,
-    info_file: str | None = None,
-    info_lookback_days: int | None = None,
-    info_half_life_days: float | None = None,
-    use_info_fusion: bool | None = None,
-    info_shadow_only: bool | None = None,
-    info_types: str | None = None,
-    info_source_mode: str | None = None,
-    info_subsets: str | None = None,
-    use_us_index_context: bool | None = None,
-    us_index_source: str | None = None,
-    artifact_root: str = "artifacts/v2",
-    cache_root: str = "artifacts/v2/cache",
-    refresh_cache: bool = False,
-    run_id: str | None = None,
-    snapshot_path: str | None = None,
-    allow_retrain: bool = False,
-) -> DailyRunResult:
+    cache_path: Path,
+    refresh_cache: bool,
+    memory_root: Path,
+) -> DailyRunResult | None:
+    return _load_daily_cached_result_external(
+        cache_path=cache_path,
+        refresh_cache=refresh_cache,
+        memory_root=memory_root,
+        emit_progress=_emit_progress,
+    )
+
+
+def _hydrate_daily_settings_from_dataset_manifest(
+    *,
+    settings: dict[str, object],
+    manifest: dict[str, object],
+    manifest_path: Path,
+    universe_tier: str | None,
+    universe_file: str | None,
+) -> dict[str, object]:
+    dataset_path = _path_from_manifest_entry(manifest.get("dataset_manifest"), run_dir=manifest_path.parent)
+    dataset_manifest = _load_json_dict(dataset_path) if dataset_path is not None else {}
+    if not dataset_manifest:
+        return settings
+
+    manifest_universe_tier = str(dataset_manifest.get("universe_tier", "")).strip()
+    manifest_universe_file = str(dataset_manifest.get("universe_file", "")).strip()
+    requested_universe_tier = str(settings.get("universe_tier", "")).strip()
+    requested_universe_file = str(settings.get("universe_file", "")).strip()
+    if universe_tier is not None and requested_universe_tier and manifest_universe_tier and requested_universe_tier != manifest_universe_tier:
+        raise ValueError(
+            f"universe tier mismatch: requested={requested_universe_tier}, manifest={manifest_universe_tier}"
+        )
+    if universe_file is not None and requested_universe_file and manifest_universe_file:
+        requested_path = str(Path(requested_universe_file).resolve())
+        manifest_path_resolved = str(Path(manifest_universe_file).resolve())
+        if requested_path != manifest_path_resolved:
+            raise ValueError(
+                f"universe file mismatch: requested={requested_path}, manifest={manifest_path_resolved}"
+            )
+
+    hydrated = dict(settings)
+    hydrated["universe_file"] = str(dataset_manifest.get("universe_file", hydrated.get("universe_file", "")))
+    hydrated["universe_limit"] = int(dataset_manifest.get("universe_limit", hydrated.get("universe_limit", 0)))
+    hydrated["universe_tier"] = str(dataset_manifest.get("universe_tier", hydrated.get("universe_tier", "")))
+    hydrated["universe_id"] = str(dataset_manifest.get("universe_id", hydrated.get("universe_id", "")))
+    hydrated["universe_size"] = int(
+        dataset_manifest.get("universe_size", dataset_manifest.get("symbol_count", hydrated.get("universe_size", 0)))
+    )
+    hydrated["universe_generation_rule"] = str(
+        dataset_manifest.get("universe_generation_rule", hydrated.get("universe_generation_rule", ""))
+    )
+    hydrated["source_universe_manifest_path"] = str(
+        dataset_manifest.get("source_universe_manifest_path", hydrated.get("source_universe_manifest_path", ""))
+    )
+    hydrated["symbols"] = [
+        str(item)
+        for item in dataset_manifest.get("symbols", hydrated.get("symbols", []))
+        if str(item).strip()
+    ]
+    hydrated["symbol_count"] = int(dataset_manifest.get("symbol_count", len(hydrated["symbols"])))
+    hydrated["universe_hash"] = str(dataset_manifest.get("universe_hash", hydrated.get("universe_hash", "")))
+    hydrated["info_file"] = str(dataset_manifest.get("info_file", hydrated.get("info_file", "")))
+    hydrated["event_file"] = str(dataset_manifest.get("event_file", hydrated.get("event_file", hydrated.get("info_file", ""))))
+    hydrated["info_hash"] = str(dataset_manifest.get("info_hash", hydrated.get("info_hash", "")))
+    hydrated["info_shadow_enabled"] = _parse_boolish(
+        dataset_manifest.get("info_shadow_enabled", hydrated.get("info_shadow_enabled", False)),
+        False,
+    )
+    hydrated["capital_flow_file"] = str(dataset_manifest.get("capital_flow_file", hydrated.get("capital_flow_file", "")))
+    hydrated["macro_file"] = str(dataset_manifest.get("macro_file", hydrated.get("macro_file", "")))
+    hydrated["external_signals"] = _parse_boolish(
+        dataset_manifest.get("external_signal_enabled", hydrated.get("external_signals", True)),
+        True,
+    )
+    hydrated["external_signal_version"] = str(
+        dataset_manifest.get("external_signal_version", hydrated.get("external_signal_version", "v1"))
+    )
+    hydrated["event_lookback_days"] = int(dataset_manifest.get("event_lookback_days", hydrated.get("event_lookback_days", hydrated.get("info_lookback_days", 45))))
+    hydrated["capital_flow_lookback_days"] = int(
+        dataset_manifest.get("capital_flow_lookback_days", hydrated.get("capital_flow_lookback_days", 20))
+    )
+    hydrated["macro_lookback_days"] = int(
+        dataset_manifest.get("macro_lookback_days", hydrated.get("macro_lookback_days", 60))
+    )
+    hydrated["event_risk_cutoff"] = float(dataset_manifest.get("event_risk_cutoff", hydrated.get("event_risk_cutoff", 0.55)))
+    hydrated["catalyst_boost_cap"] = float(dataset_manifest.get("catalyst_boost_cap", hydrated.get("catalyst_boost_cap", 0.12)))
+    hydrated["flow_exposure_cap"] = float(dataset_manifest.get("flow_exposure_cap", hydrated.get("flow_exposure_cap", 0.08)))
+    hydrated["info_source_mode"] = str(dataset_manifest.get("info_source_mode", hydrated.get("info_source_mode", "layered")))
+    hydrated["use_us_index_context"] = _parse_boolish(
+        dataset_manifest.get("use_us_index_context", manifest.get("use_us_index_context", False)),
+        False,
+    )
+    hydrated["us_index_source"] = str(
+        dataset_manifest.get("us_index_source", manifest.get("us_index_source", "akshare"))
+    )
+    hydrated["info_subsets"] = [
+        str(item)
+        for item in dataset_manifest.get("info_subsets", hydrated.get("info_subsets", []))
+        if str(item).strip()
+    ]
+    hydrated["announcement_event_tags"] = [
+        str(item)
+        for item in dataset_manifest.get("announcement_event_tags", hydrated.get("announcement_event_tags", []))
+        if str(item).strip()
+    ]
+    return hydrated
+
+
+def _build_daily_snapshot_context(
+    *,
+    strategy_id: str,
+    config_path: str,
+    source: str | None,
+    universe_file: str | None,
+    universe_limit: int | None,
+    universe_tier: str | None,
+    info_file: str | None,
+    info_lookback_days: int | None,
+    info_half_life_days: float | None,
+    use_info_fusion: bool | None,
+    info_shadow_only: bool | None,
+    info_types: str | None,
+    info_source_mode: str | None,
+    info_subsets: str | None,
+    external_signals: bool | None,
+    event_file: str | None,
+    capital_flow_file: str | None,
+    macro_file: str | None,
+    use_us_index_context: bool | None,
+    us_index_source: str | None,
+    artifact_root: str,
+    cache_root: str,
+    run_id: str | None,
+    snapshot_path: str | None,
+    allow_retrain: bool,
+) -> _DailySnapshotContext:
     settings = _load_v2_runtime_settings(
         config_path=config_path,
         source=source,
@@ -5702,10 +6070,15 @@ def run_daily_v2_live(
         info_types=info_types,
         info_source_mode=info_source_mode,
         info_subsets=info_subsets,
+        external_signals=external_signals,
+        event_file=event_file,
+        capital_flow_file=capital_flow_file,
+        macro_file=macro_file,
         use_us_index_context=use_us_index_context,
         us_index_source=us_index_source,
     )
     settings = _resolve_v2_universe_settings(settings=settings, cache_root=cache_root)
+
     manifest: dict[str, object] = {}
     manifest_path: Path | None = None
     try:
@@ -5718,102 +6091,21 @@ def run_daily_v2_live(
     except Exception:
         if not allow_retrain:
             raise
+
     resolved_run_id = ""
     if manifest:
         resolved_run_id = str(manifest.get("run_id", "")).strip()
     elif run_id is not None:
         resolved_run_id = str(run_id).strip()
 
-    cache_key = _daily_result_cache_key(
-        strategy_id=strategy_id,
-        settings=settings,
-        artifact_root=artifact_root,
-        run_id=resolved_run_id,
-        snapshot_path=str(snapshot_path or ""),
-        allow_retrain=allow_retrain,
-    )
-    cache_path = _daily_result_cache_path(
-        cache_root=cache_root,
-        cache_key=cache_key,
-    )
-    if not refresh_cache and cache_path.exists():
-        _emit_progress("daily", "命中日运行缓存，直接复用结果")
-        try:
-            with cache_path.open("rb") as f:
-                cached = pickle.load(f)
-            if isinstance(cached, DailyRunResult):
-                return cached
-        except Exception:
-            pass
-    else:
-        _emit_progress("daily", "日运行缓存未命中，开始重建")
     if manifest and manifest_path is not None:
-        dataset_path = _path_from_manifest_entry(manifest.get("dataset_manifest"), run_dir=manifest_path.parent)
-        dataset_manifest = _load_json_dict(dataset_path) if dataset_path is not None else {}
-        if dataset_manifest:
-            manifest_universe_tier = str(dataset_manifest.get("universe_tier", "")).strip()
-            manifest_universe_file = str(dataset_manifest.get("universe_file", "")).strip()
-            requested_universe_tier = str(settings.get("universe_tier", "")).strip()
-            requested_universe_file = str(settings.get("universe_file", "")).strip()
-            if universe_tier is not None and requested_universe_tier and manifest_universe_tier and requested_universe_tier != manifest_universe_tier:
-                raise ValueError(
-                    f"universe tier mismatch: requested={requested_universe_tier}, manifest={manifest_universe_tier}"
-                )
-            if universe_file is not None and requested_universe_file and manifest_universe_file:
-                requested_path = str(Path(requested_universe_file).resolve())
-                manifest_path_resolved = str(Path(manifest_universe_file).resolve())
-                if requested_path != manifest_path_resolved:
-                    raise ValueError(
-                        f"universe file mismatch: requested={requested_path}, manifest={manifest_path_resolved}"
-                    )
-            settings["universe_file"] = str(
-                dataset_manifest.get("universe_file", settings.get("universe_file", ""))
-            )
-            settings["universe_limit"] = int(
-                dataset_manifest.get("universe_limit", settings.get("universe_limit", 0))
-            )
-            settings["universe_tier"] = str(dataset_manifest.get("universe_tier", settings.get("universe_tier", "")))
-            settings["universe_id"] = str(dataset_manifest.get("universe_id", settings.get("universe_id", "")))
-            settings["universe_size"] = int(
-                dataset_manifest.get("universe_size", dataset_manifest.get("symbol_count", settings.get("universe_size", 0)))
-            )
-            settings["universe_generation_rule"] = str(
-                dataset_manifest.get("universe_generation_rule", settings.get("universe_generation_rule", ""))
-            )
-            settings["source_universe_manifest_path"] = str(
-                dataset_manifest.get("source_universe_manifest_path", settings.get("source_universe_manifest_path", ""))
-            )
-            settings["symbols"] = [
-                str(item)
-                for item in dataset_manifest.get("symbols", settings.get("symbols", []))
-                if str(item).strip()
-            ]
-            settings["symbol_count"] = int(dataset_manifest.get("symbol_count", len(settings["symbols"])))
-            settings["universe_hash"] = str(dataset_manifest.get("universe_hash", settings.get("universe_hash", "")))
-            settings["info_file"] = str(dataset_manifest.get("info_file", settings.get("info_file", "")))
-            settings["info_hash"] = str(dataset_manifest.get("info_hash", settings.get("info_hash", "")))
-            settings["info_shadow_enabled"] = _parse_boolish(
-                dataset_manifest.get("info_shadow_enabled", settings.get("info_shadow_enabled", False)),
-                False,
-            )
-            settings["info_source_mode"] = str(dataset_manifest.get("info_source_mode", settings.get("info_source_mode", "layered")))
-            settings["use_us_index_context"] = _parse_boolish(
-                dataset_manifest.get("use_us_index_context", manifest.get("use_us_index_context", False)),
-                False,
-            )
-            settings["us_index_source"] = str(
-                dataset_manifest.get("us_index_source", manifest.get("us_index_source", "akshare"))
-            )
-            settings["info_subsets"] = [
-                str(item)
-                for item in dataset_manifest.get("info_subsets", settings.get("info_subsets", []))
-                if str(item).strip()
-            ]
-            settings["announcement_event_tags"] = [
-                str(item)
-                for item in dataset_manifest.get("announcement_event_tags", settings.get("announcement_event_tags", []))
-                if str(item).strip()
-            ]
+        settings = _hydrate_daily_settings_from_dataset_manifest(
+            settings=settings,
+            manifest=manifest,
+            manifest_path=manifest_path,
+            universe_tier=universe_tier,
+            universe_file=universe_file,
+        )
         snapshot = _build_snapshot_from_manifest(
             strategy_id=strategy_id,
             settings=settings,
@@ -5833,6 +6125,11 @@ def run_daily_v2_live(
             info_manifest_path=str(settings.get("info_manifest_path", "")),
             info_hash=str(settings.get("info_hash", "")),
             info_shadow_enabled=_parse_boolish(settings.get("info_shadow_enabled", False), False),
+            external_signal_manifest_path=str(settings.get("external_signal_manifest", "")),
+            external_signal_version=str(settings.get("external_signal_version", "v1")),
+            external_signal_enabled=_parse_boolish(settings.get("external_signals", True), True),
+            capital_flow_snapshot=dict(settings.get("capital_flow_snapshot", {})),
+            macro_context_snapshot=dict(settings.get("macro_context_snapshot", {})),
             run_id=resolved_run_id,
             data_window=data_window,
             config_hash=_stable_json_hash(settings),
@@ -5841,6 +6138,16 @@ def run_daily_v2_live(
             us_index_source=str(settings.get("us_index_source", "akshare")),
         )
 
+    return _DailySnapshotContext(
+        settings=settings,
+        manifest=manifest,
+        manifest_path=manifest_path,
+        snapshot=snapshot,
+        resolved_run_id=resolved_run_id,
+    )
+
+
+def _build_daily_universe_context(settings: dict[str, object]) -> _DailyUniverseContext:
     _emit_progress("daily", "加载观察池与候选股票池")
     market_security, current_holdings, base_sector_map = load_watchlist(str(settings["watchlist"]))
     universe = build_candidate_universe(
@@ -5855,13 +6162,29 @@ def run_daily_v2_live(
         stock.symbol: (stock.sector or base_sector_map.get(stock.symbol, "其他"))
         for stock in stocks
     }
+    return _DailyUniverseContext(
+        market_security=market_security,
+        current_holdings=current_holdings,
+        stocks=stocks,
+        sector_map=sector_map,
+    )
 
-    stock_rows = []
+
+def _build_daily_composite_state(
+    *,
+    settings: dict[str, object],
+    manifest: dict[str, object],
+    manifest_path: Path | None,
+    snapshot: StrategySnapshot,
+    allow_retrain: bool,
+    universe_ctx: _DailyUniverseContext,
+) -> tuple[CompositeState, list[object]]:
+    stock_rows: list[object] = []
     if allow_retrain:
-        _emit_progress("daily", f"开始量化预测: universe={len(stocks)}")
+        _emit_progress("daily", f"开始量化预测: universe={len(universe_ctx.stocks)}")
         market_forecast, stock_rows = run_quant_pipeline(
-            market_security=market_security,
-            stock_securities=stocks,
+            market_security=universe_ctx.market_security,
+            stock_securities=universe_ctx.stocks,
             source=str(settings["source"]),
             data_dir=str(settings["data_dir"]),
             start=str(settings["start"]),
@@ -5878,17 +6201,16 @@ def run_daily_v2_live(
             use_us_index_context=bool(settings.get("use_us_index_context", False)),
             us_index_source=str(settings.get("us_index_source", "akshare")),
         )
-
         _emit_progress("daily", "开始构建市场状态与横截面状态")
         market_raw = load_symbol_daily(
-            symbol=market_security.symbol,
+            symbol=universe_ctx.market_security.symbol,
             source=str(settings["source"]),
             data_dir=str(settings["data_dir"]),
             start=str(settings["start"]),
             end=str(settings["end"]),
         )
         market_state, cross_section = _build_market_and_cross_section_states(
-            market_symbol=market_security.symbol,
+            market_symbol=universe_ctx.market_security.symbol,
             source=str(settings["source"]),
             data_dir=str(settings["data_dir"]),
             start=str(settings["start"]),
@@ -5905,8 +6227,8 @@ def run_daily_v2_live(
         )
         _emit_progress("daily", "开始独立板块预测")
         sector_frames = build_sector_daily_frames(
-            stock_securities=stocks,
-            sector_map=sector_map,
+            stock_securities=universe_ctx.stocks,
+            sector_map=universe_ctx.sector_map,
             source=str(settings["source"]),
             data_dir=str(settings["data_dir"]),
             start=str(settings["start"]),
@@ -5929,7 +6251,11 @@ def run_daily_v2_live(
             for item in sector_records
         ]
         sector_strength_map = {item.sector: float(item.excess_vs_market_prob - 0.5) for item in sector_records}
-        stocks_state = _build_stock_states_from_rows(stock_rows, sector_map, sector_strength_map=sector_strength_map)
+        stocks_state = _build_stock_states_from_rows(
+            stock_rows,
+            universe_ctx.sector_map,
+            sector_strength_map=sector_strength_map,
+        )
         _emit_progress("daily", "开始策略决策与交易计划生成")
         composite_state = compose_state(
             market=market_state,
@@ -5937,44 +6263,61 @@ def run_daily_v2_live(
             stocks=stocks_state,
             cross_section=cross_section,
         )
-    else:
-        if not manifest or manifest_path is None:
-            raise RuntimeError(
-                "daily-run default mode requires a published research manifest. "
-                "Use `research-run` first, pass `--snapshot-path/--run-id`, or set `--allow-retrain`."
-            )
-        frozen_state_path = _path_from_manifest_entry(
-            manifest.get("frozen_daily_state"),
-            run_dir=manifest_path.parent,
+        return composite_state, stock_rows
+
+    if not manifest or manifest_path is None:
+        raise RuntimeError(
+            "daily-run default mode requires a published research manifest. "
+            "Use `research-run` first, pass `--snapshot-path/--run-id`, or set `--allow-retrain`."
         )
-        frozen_state_payload = _load_json_dict(frozen_state_path) if frozen_state_path is not None else {}
-        composite_payload = frozen_state_payload.get("composite_state")
-        composite_state = _decode_composite_state(composite_payload)
-        if composite_state is None:
-            raise RuntimeError(
-                f"Snapshot {manifest_path} does not contain usable frozen daily state. "
-                "Re-run research with `--publish-forecast-models` or set `--allow-retrain`."
-            )
-        _emit_progress("daily", f"已加载发布快照: run_id={snapshot.run_id or 'NA'}")
+    frozen_state_path = _path_from_manifest_entry(
+        manifest.get("frozen_daily_state"),
+        run_dir=manifest_path.parent,
+    )
+    frozen_state_payload = _load_json_dict(frozen_state_path) if frozen_state_path is not None else {}
+    composite_payload = frozen_state_payload.get("composite_state")
+    composite_state = _decode_composite_state(composite_payload)
+    if composite_state is None:
+        raise RuntimeError(
+            f"Snapshot {manifest_path} does not contain usable frozen daily state. "
+            "Re-run research with `--publish-forecast-models` or set `--allow-retrain`."
+        )
+    _emit_progress("daily", f"已加载发布快照: run_id={snapshot.run_id or 'NA'}")
+    return composite_state, stock_rows
 
-    current_weights = {}
-    if current_holdings:
-        equal_weight = 1.0 / float(len(current_holdings))
-        current_weights = {item.symbol: float(equal_weight) for item in current_holdings}
-    symbol_names: dict[str, str] = {}
-    for item in current_holdings:
-        if getattr(item, "name", None):
-            symbol_names[str(item.symbol)] = str(item.name)
-    for item in stocks:
-        if getattr(item, "name", None):
-            symbol_names[str(item.symbol)] = str(item.name)
-    for row in stock_rows:
-        name = getattr(row, "name", "")
-        if name:
-            symbol_names[str(row.symbol)] = str(name)
-    for state in composite_state.stocks:
-        symbol_names.setdefault(str(state.symbol), str(state.symbol))
 
+def _build_daily_symbol_names(
+    *,
+    current_holdings: list[object],
+    stocks: list[object],
+    stock_rows: list[object],
+    composite_state: CompositeState,
+) -> dict[str, str]:
+    return _build_daily_symbol_names_external(
+        current_holdings=current_holdings,
+        stocks=stocks,
+        stock_rows=stock_rows,
+        composite_state=composite_state,
+    )
+
+
+def _attach_daily_info_overlay(
+    *,
+    snapshot: StrategySnapshot,
+    settings: dict[str, object],
+    composite_state: CompositeState,
+    symbol_names: dict[str, str],
+) -> tuple[
+    CompositeState,
+    str,
+    str,
+    bool,
+    int,
+    list[InfoSignalRecord],
+    list[InfoSignalRecord],
+    list[InfoDivergenceRecord],
+    list[InfoItem],
+]:
     info_hash = str(snapshot.info_hash or settings.get("info_hash", ""))
     info_manifest_path = str(snapshot.info_manifest_path or settings.get("info_manifest_path", ""))
     info_shadow_enabled = bool(snapshot.info_shadow_enabled)
@@ -5982,6 +6325,7 @@ def run_daily_v2_live(
     top_negative_info_events: list[InfoSignalRecord] = []
     top_positive_info_signals: list[InfoSignalRecord] = []
     quant_info_divergence: list[InfoDivergenceRecord] = []
+    info_items: list[InfoItem] = []
     if bool(settings.get("use_info_fusion", False)):
         info_file_path, info_items = _load_v2_info_items_for_date(
             settings=settings,
@@ -6012,7 +6356,62 @@ def run_daily_v2_live(
                 composite_state,
                 symbol_names=symbol_names,
             )
+    return (
+        composite_state,
+        info_hash,
+        info_manifest_path,
+        info_shadow_enabled,
+        info_item_count,
+        top_negative_info_events,
+        top_positive_info_signals,
+        quant_info_divergence,
+        info_items,
+    )
 
+
+def _attach_daily_external_signal_overlay(
+    *,
+    snapshot: StrategySnapshot,
+    settings: dict[str, object],
+    composite_state: CompositeState,
+    info_items: list[InfoItem],
+    allow_rebuild: bool,
+) -> tuple[CompositeState, str, str, bool, dict[str, object], dict[str, object]]:
+    manifest_path = str(snapshot.external_signal_manifest_path or settings.get("external_signal_manifest", ""))
+    version = str(snapshot.external_signal_version or settings.get("external_signal_version", "v1"))
+    enabled = bool(snapshot.external_signal_enabled or settings.get("external_signals", True))
+    capital_flow_snapshot = dict(snapshot.capital_flow_snapshot or asdict(composite_state.capital_flow_state))
+    macro_context_snapshot = dict(snapshot.macro_context_snapshot or asdict(composite_state.macro_context_state))
+
+    if allow_rebuild or not snapshot.external_signal_enabled:
+        composite_state, package = _attach_external_signals_to_composite_state(
+            state=composite_state,
+            settings=settings,
+            as_of_date=pd.Timestamp(composite_state.market.as_of_date),
+            info_items=info_items,
+        )
+        manifest_path = str(manifest_path or settings.get("external_signal_manifest", ""))
+        version = str(package.get("manifest", {}).get("external_signal_version", version))
+        enabled = bool(package.get("manifest", {}).get("external_signal_enabled", enabled))
+        capital_flow_snapshot = dict(package.get("capital_flow_snapshot", capital_flow_snapshot))
+        macro_context_snapshot = dict(package.get("macro_context_snapshot", macro_context_snapshot))
+    return (
+        composite_state,
+        manifest_path,
+        version,
+        enabled,
+        capital_flow_snapshot,
+        macro_context_snapshot,
+    )
+
+
+def _resolve_daily_policy_model(
+    *,
+    strategy_id: str,
+    artifact_root: str,
+    manifest: dict[str, object],
+    manifest_path: Path | None,
+) -> LearnedPolicyModel | None:
     learned_policy = None
     if manifest and manifest_path is not None:
         model_path = _path_from_manifest_entry(
@@ -6026,12 +6425,160 @@ def run_daily_v2_live(
             strategy_id=strategy_id,
             artifact_root=artifact_root,
         )
+    return learned_policy
+
+
+def run_daily_v2_live(
+    *,
+    strategy_id: str = "swing_v2",
+    config_path: str = "config/api.json",
+    source: str | None = None,
+    universe_file: str | None = None,
+    universe_limit: int | None = None,
+    universe_tier: str | None = None,
+    info_file: str | None = None,
+    info_lookback_days: int | None = None,
+    info_half_life_days: float | None = None,
+    use_info_fusion: bool | None = None,
+    info_shadow_only: bool | None = None,
+    info_types: str | None = None,
+    info_source_mode: str | None = None,
+    info_subsets: str | None = None,
+    external_signals: bool | None = None,
+    event_file: str | None = None,
+    capital_flow_file: str | None = None,
+    macro_file: str | None = None,
+    use_us_index_context: bool | None = None,
+    us_index_source: str | None = None,
+    artifact_root: str = "artifacts/v2",
+    cache_root: str = "artifacts/v2/cache",
+    refresh_cache: bool = False,
+    run_id: str | None = None,
+    snapshot_path: str | None = None,
+    allow_retrain: bool = False,
+) -> DailyRunResult:
+    memory_root = Path(str(artifact_root)) / "memory"
+    snapshot_ctx = _build_daily_snapshot_context(
+        strategy_id=strategy_id,
+        config_path=config_path,
+        source=source,
+        universe_file=universe_file,
+        universe_limit=universe_limit,
+        universe_tier=universe_tier,
+        info_file=info_file,
+        info_lookback_days=info_lookback_days,
+        info_half_life_days=info_half_life_days,
+        use_info_fusion=use_info_fusion,
+        info_shadow_only=info_shadow_only,
+        info_types=info_types,
+        info_source_mode=info_source_mode,
+        info_subsets=info_subsets,
+        external_signals=external_signals,
+        event_file=event_file,
+        capital_flow_file=capital_flow_file,
+        macro_file=macro_file,
+        use_us_index_context=use_us_index_context,
+        us_index_source=us_index_source,
+        artifact_root=artifact_root,
+        cache_root=cache_root,
+        run_id=run_id,
+        snapshot_path=snapshot_path,
+        allow_retrain=allow_retrain,
+    )
+    settings = snapshot_ctx.settings
+
+    cache_key = _daily_result_cache_key(
+        strategy_id=strategy_id,
+        settings=settings,
+        artifact_root=artifact_root,
+        run_id=snapshot_ctx.resolved_run_id,
+        snapshot_path=str(snapshot_path or ""),
+        allow_retrain=allow_retrain,
+    )
+    cache_path = _daily_result_cache_path(
+        cache_root=cache_root,
+        cache_key=cache_key,
+    )
+    cached = _load_daily_cached_result(
+        cache_path=cache_path,
+        refresh_cache=refresh_cache,
+        memory_root=memory_root,
+    )
+    if cached is not None:
+        return cached
+
+    snapshot = snapshot_ctx.snapshot
+    manifest = snapshot_ctx.manifest
+    manifest_path = snapshot_ctx.manifest_path
+    universe_ctx = _build_daily_universe_context(settings)
+    composite_state, stock_rows = _build_daily_composite_state(
+        settings=settings,
+        manifest=manifest,
+        manifest_path=manifest_path,
+        snapshot=snapshot,
+        allow_retrain=allow_retrain,
+        universe_ctx=universe_ctx,
+    )
+
+    current_weights = {}
+    if universe_ctx.current_holdings:
+        equal_weight = 1.0 / float(len(universe_ctx.current_holdings))
+        current_weights = {item.symbol: float(equal_weight) for item in universe_ctx.current_holdings}
+    symbol_names = _build_daily_symbol_names(
+        current_holdings=universe_ctx.current_holdings,
+        stocks=universe_ctx.stocks,
+        stock_rows=stock_rows,
+        composite_state=composite_state,
+    )
+    (
+        composite_state,
+        info_hash,
+        info_manifest_path,
+        info_shadow_enabled,
+        info_item_count,
+        top_negative_info_events,
+        top_positive_info_signals,
+        quant_info_divergence,
+        info_items,
+    ) = _attach_daily_info_overlay(
+        snapshot=snapshot,
+        settings=settings,
+        composite_state=composite_state,
+        symbol_names=symbol_names,
+    )
+    (
+        composite_state,
+        external_signal_manifest_path,
+        external_signal_version,
+        external_signal_enabled,
+        capital_flow_snapshot,
+        macro_context_snapshot,
+    ) = _attach_daily_external_signal_overlay(
+        snapshot=snapshot,
+        settings=settings,
+        composite_state=composite_state,
+        info_items=info_items,
+        allow_rebuild=allow_retrain,
+    )
+
+    learned_policy = _resolve_daily_policy_model(
+        strategy_id=strategy_id,
+        artifact_root=artifact_root,
+        manifest=manifest,
+        manifest_path=manifest_path,
+    )
     active_policy_spec = None
     if learned_policy is not None:
         active_policy_spec = _policy_spec_from_model(
             state=composite_state,
             model=learned_policy,
         )
+    active_policy_spec = replace(
+        active_policy_spec or PolicySpec(),
+        event_risk_cutoff=float(settings.get("event_risk_cutoff", 0.55)),
+        catalyst_boost_cap=float(settings.get("catalyst_boost_cap", 0.12)),
+        flow_exposure_cap=float(settings.get("flow_exposure_cap", 0.08)),
+    )
 
     policy_decision = apply_policy(
         PolicyInput(
@@ -6057,6 +6604,11 @@ def run_daily_v2_live(
         info_manifest_path=info_manifest_path,
         info_shadow_enabled=info_shadow_enabled,
         info_item_count=info_item_count,
+        external_signal_manifest_path=external_signal_manifest_path,
+        external_signal_version=external_signal_version,
+        external_signal_enabled=external_signal_enabled,
+        capital_flow_snapshot=capital_flow_snapshot,
+        macro_context_snapshot=macro_context_snapshot,
         top_negative_info_events=top_negative_info_events,
         top_positive_info_signals=top_positive_info_signals,
         quant_info_divergence=quant_info_divergence,
@@ -6064,6 +6616,10 @@ def run_daily_v2_live(
         snapshot_hash=snapshot.snapshot_hash,
         config_hash=snapshot.config_hash,
         manifest_path=snapshot.manifest_path,
+    )
+    result = remember_daily_run(
+        memory_root=memory_root,
+        result=result,
     )
     try:
         with cache_path.open("wb") as f:
@@ -6097,16 +6653,25 @@ def summarize_daily_run(result: DailyRunResult) -> dict[str, object]:
         "info_manifest_path": result.info_manifest_path or result.snapshot.info_manifest_path,
         "info_shadow_enabled": bool(result.info_shadow_enabled or result.snapshot.info_shadow_enabled),
         "info_item_count": int(result.info_item_count),
+        "external_signal_manifest_path": result.external_signal_manifest_path or result.snapshot.external_signal_manifest_path,
+        "external_signal_version": result.external_signal_version or result.snapshot.external_signal_version,
+        "external_signal_enabled": bool(result.external_signal_enabled or result.snapshot.external_signal_enabled),
+        "capital_flow_snapshot": dict(result.capital_flow_snapshot or result.snapshot.capital_flow_snapshot),
+        "macro_context_snapshot": dict(result.macro_context_snapshot or result.snapshot.macro_context_snapshot),
         "use_us_index_context": bool(result.snapshot.use_us_index_context),
         "us_index_source": str(result.snapshot.us_index_source),
         "run_id": result.run_id or result.snapshot.run_id,
         "snapshot_hash": result.snapshot_hash or result.snapshot.snapshot_hash,
         "config_hash": result.config_hash or result.snapshot.config_hash,
         "manifest_path": result.manifest_path or result.snapshot.manifest_path,
+        "memory_path": result.memory_path,
+        "memory_recall": asdict(result.memory_recall),
         "strategy_mode": result.composite_state.strategy_mode,
         "risk_regime": result.composite_state.risk_regime,
         "market": asdict(result.composite_state.market),
         "market_info_state": asdict(result.composite_state.market_info_state),
+        "capital_flow_state": asdict(result.composite_state.capital_flow_state),
+        "macro_context_state": asdict(result.composite_state.macro_context_state),
         "policy": policy_payload,
         "top_negative_info_events": [asdict(item) for item in result.top_negative_info_events],
         "top_positive_info_signals": [asdict(item) for item in result.top_positive_info_signals],

@@ -3,15 +3,19 @@ from __future__ import annotations
 import json
 from dataclasses import asdict
 from pathlib import Path
+from types import SimpleNamespace
 
 import pandas as pd
 import pytest
 
 from src.application.v2_contracts import (
+    CapitalFlowState,
     CompositeState,
     CrossSectionForecastState,
+    InfoAggregateState,
     LearnedPolicyModel,
     MarketForecastState,
+    MacroContextState,
     PolicySpec,
     SectorForecastState,
     StockForecastState,
@@ -35,6 +39,7 @@ from src.application.v2_services import (
     _tensorize_temporal_frame,
     load_published_v2_policy_model,
     publish_v2_research_artifacts,
+    run_daily_v2_live,
     run_v2_research_workflow,
 )
 
@@ -71,6 +76,25 @@ def _make_state() -> CompositeState:
         ],
         strategy_mode="trend_follow",
         risk_regime="risk_on",
+        market_info_state=InfoAggregateState(catalyst_strength=0.20, coverage_confidence=0.65),
+        stock_info_states={
+            "AAA": InfoAggregateState(catalyst_strength=0.35, event_risk_level=0.12, coverage_confidence=0.80),
+            "BBB": InfoAggregateState(catalyst_strength=0.10, event_risk_level=0.18, coverage_confidence=0.55),
+        },
+        capital_flow_state=CapitalFlowState(
+            northbound_net_flow=0.25,
+            margin_balance_change=0.12,
+            turnover_heat=0.68,
+            large_order_bias=0.18,
+            flow_regime="inflow",
+        ),
+        macro_context_state=MacroContextState(
+            style_regime="quality",
+            commodity_pressure=0.22,
+            fx_pressure=0.18,
+            index_breadth_proxy=0.61,
+            macro_risk_level="neutral",
+        ),
     )
 
 
@@ -488,6 +512,365 @@ def test_publish_artifacts_records_universe_metadata_and_keeps_non_default_lates
     assert info_manifest["info_source_breakdown"]["market_news"] == 1
     assert info_manifest["info_source_breakdown"]["announcements"] == 1
     assert info_manifest["info_source_breakdown"]["research"] == 1
+
+
+def test_daily_run_can_consume_published_relative_snapshot(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "config").mkdir(parents=True, exist_ok=True)
+    (tmp_path / "config" / "universe_smoke_5.json").write_text('["AAA","BBB"]', encoding="utf-8")
+
+    state = _make_state()
+    step = _TrajectoryStep(
+        date=pd.Timestamp("2026-03-01"),
+        next_date=pd.Timestamp("2026-03-02"),
+        composite_state=state,
+        stock_states=list(state.stocks),
+        horizon_metrics={},
+    )
+    trajectory = _BacktestTrajectory(prepared=object(), steps=[step])
+    monkeypatch.setattr("src.application.v2_services._load_or_build_v2_backtest_trajectory", lambda **_: trajectory)
+    monkeypatch.setattr(
+        "src.application.v2_services._split_research_trajectory",
+        lambda trajectory, *args, **kwargs: (trajectory, trajectory, trajectory),
+    )
+
+    baseline = _make_backtest(0.20, 0.18)
+    calibrated = _make_backtest(0.22, 0.20)
+    learned = _make_backtest(0.24, 0.22)
+    paths = publish_v2_research_artifacts(
+        strategy_id="swing_v2",
+        artifact_root="artifacts/v2",
+        cache_root="artifacts/v2/cache",
+        settings={
+            "config_path": "config/api.json",
+            "source": "local",
+            "watchlist": "config/watchlist.json",
+            "universe_file": "config/universe_smoke_5.json",
+            "universe_limit": 5,
+            "universe_tier": "favorites_16",
+            "universe_id": "favorites_16",
+            "universe_size": 2,
+            "universe_generation_rule": "manual_favorites_locked",
+            "source_universe_manifest_path": "config/universe_smoke_5.json",
+            "symbols": ["AAA", "BBB"],
+            "symbol_count": 2,
+            "use_us_index_context": True,
+            "us_index_source": "akshare",
+            "start": "2024-01-01",
+            "end": "2026-03-01",
+        },
+        baseline=baseline,
+        calibration=V2CalibrationResult(
+            best_policy=PolicySpec(),
+            best_score=0.12,
+            baseline=baseline,
+            calibrated=calibrated,
+            trials=[],
+        ),
+        learning=V2PolicyLearningResult(
+            model=LearnedPolicyModel(
+                feature_names=["x1"],
+                exposure_intercept=0.55,
+                exposure_coef=[0.1],
+                position_intercept=2.5,
+                position_coef=[0.05],
+                turnover_intercept=0.20,
+                turnover_coef=[0.01],
+                train_rows=88,
+                train_r2_exposure=0.33,
+                train_r2_positions=0.25,
+                train_r2_turnover=0.19,
+            ),
+            baseline=baseline,
+            learned=learned,
+        ),
+        publish_forecast_models=True,
+    )
+
+    monkeypatch.setattr(
+        "src.application.v2_services._load_v2_runtime_settings",
+        lambda **_: {
+            "config_path": "config/api.json",
+            "watchlist": "config/watchlist.json",
+            "source": "local",
+            "data_dir": "data",
+            "start": "2024-01-01",
+            "end": "2026-03-01",
+            "universe_file": "config/universe_smoke_5.json",
+            "universe_limit": 5,
+            "universe_tier": "favorites_16",
+            "use_info_fusion": False,
+            "use_us_index_context": True,
+            "us_index_source": "akshare",
+        },
+    )
+    monkeypatch.setattr("src.application.v2_services._resolve_v2_universe_settings", lambda settings, cache_root: settings)
+    monkeypatch.setattr(
+        "src.application.v2_services.load_watchlist",
+        lambda _: (SimpleNamespace(symbol="000001.SH"), [], {}),
+    )
+    monkeypatch.setattr(
+        "src.application.v2_services.build_candidate_universe",
+        lambda **_: SimpleNamespace(rows=[]),
+    )
+
+    result = run_daily_v2_live(
+        strategy_id="swing_v2",
+        artifact_root="artifacts/v2",
+        cache_root="artifacts/v2/cache",
+        snapshot_path=paths["research_manifest"],
+    )
+
+    assert result.snapshot.run_id == paths["run_id"]
+    assert result.composite_state.market.as_of_date == "2026-03-01"
+    assert result.policy_decision.symbol_target_weights
+
+
+def test_daily_run_reports_clear_error_when_frozen_state_missing(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    run_dir = tmp_path / "artifacts" / "v2" / "swing_v2" / "20260311_100000"
+    run_dir.mkdir(parents=True, exist_ok=True)
+    dataset_path = run_dir / "dataset_manifest.json"
+    dataset_path.write_text(
+        json.dumps(
+            {
+                "universe_file": "config/universe_smoke_5.json",
+                "universe_limit": 5,
+                "universe_tier": "favorites_16",
+                "universe_id": "favorites_16",
+                "universe_size": 2,
+                "universe_generation_rule": "manual_favorites_locked",
+                "source_universe_manifest_path": "config/universe_smoke_5.json",
+                "symbols": ["AAA", "BBB"],
+                "symbol_count": 2,
+                "use_us_index_context": True,
+                "us_index_source": "akshare",
+            },
+            ensure_ascii=False,
+            indent=2,
+        ),
+        encoding="utf-8",
+    )
+    manifest_path = run_dir / "research_manifest.json"
+    manifest_path.write_text(
+        json.dumps(
+            {
+                "run_id": "20260311_100000",
+                "strategy_id": "swing_v2",
+                "dataset_manifest": str(dataset_path),
+                "frozen_daily_state": "artifacts/v2/swing_v2/20260311_100000/missing_frozen_daily_state.json",
+                "config_hash": "cfg",
+                "snapshot_hash": "snap",
+                "policy_hash": "policy",
+                "universe_hash": "uni",
+                "model_hashes": {},
+            },
+            ensure_ascii=False,
+            indent=2,
+        ),
+        encoding="utf-8",
+    )
+
+    monkeypatch.setattr(
+        "src.application.v2_services._load_v2_runtime_settings",
+        lambda **_: {
+            "config_path": "config/api.json",
+            "watchlist": "config/watchlist.json",
+            "source": "local",
+            "data_dir": "data",
+            "start": "2024-01-01",
+            "end": "2026-03-01",
+            "universe_file": "config/universe_smoke_5.json",
+            "universe_limit": 5,
+            "universe_tier": "favorites_16",
+            "use_info_fusion": False,
+            "use_us_index_context": True,
+            "us_index_source": "akshare",
+        },
+    )
+    monkeypatch.setattr("src.application.v2_services._resolve_v2_universe_settings", lambda settings, cache_root: settings)
+    monkeypatch.setattr(
+        "src.application.v2_services.load_watchlist",
+        lambda _: (SimpleNamespace(symbol="000001.SH"), [], {}),
+    )
+    monkeypatch.setattr(
+        "src.application.v2_services.build_candidate_universe",
+        lambda **_: SimpleNamespace(rows=[]),
+    )
+
+    with pytest.raises(RuntimeError, match="does not contain usable frozen daily state"):
+        run_daily_v2_live(
+            strategy_id="swing_v2",
+            artifact_root=str(tmp_path / "artifacts" / "v2"),
+            cache_root=str(tmp_path / "artifacts" / "v2" / "cache"),
+            snapshot_path=str(manifest_path),
+        )
+
+
+def test_publish_research_artifacts_freezes_external_signal_states(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    info_root = tmp_path / "input" / "info_parts"
+    (info_root / "market_news").mkdir(parents=True, exist_ok=True)
+    (info_root / "market_news" / "core.csv").write_text(
+        "date,target_type,target,direction,title,info_type\n"
+        "2024-12-28,market,MARKET,bullish,市场情绪修复,news\n",
+        encoding="utf-8",
+    )
+    capital_flow_path = tmp_path / "capital_flow.csv"
+    capital_flow_path.write_text(
+        "date,northbound_net_flow,margin_balance_change,turnover_heat,large_order_bias\n"
+        "2024-12-28,0.35,0.20,0.72,0.25\n",
+        encoding="utf-8",
+    )
+    macro_path = tmp_path / "macro.csv"
+    macro_path.write_text(
+        "date,style_regime,commodity_pressure,fx_pressure,index_breadth_proxy\n"
+        "2024-12-28,quality,0.20,0.15,0.64\n",
+        encoding="utf-8",
+    )
+
+    state = _make_state()
+    trajectory = _BacktestTrajectory(
+        prepared=SimpleNamespace(
+            stock_frames={},
+            settings={"source": "local", "universe_tier": "favorites_16"},
+        ),
+        steps=[
+            _TrajectoryStep(
+                date=pd.Timestamp("2026-02-28"),
+                next_date=pd.Timestamp("2026-03-03"),
+                composite_state=state,
+                stock_states=list(state.stocks),
+                horizon_metrics={},
+            )
+        ],
+    )
+    monkeypatch.setattr("src.application.v2_services._load_or_build_v2_backtest_trajectory", lambda **_: trajectory)
+    monkeypatch.setattr("src.application.v2_services._split_research_trajectory", lambda *args, **kwargs: (trajectory, trajectory, trajectory))
+
+    paths = publish_v2_research_artifacts(
+        strategy_id="swing_v2",
+        artifact_root=str(tmp_path / "artifacts" / "v2"),
+        cache_root=str(tmp_path / "artifacts" / "v2" / "cache"),
+        baseline=_make_backtest(0.10, 0.08),
+        calibration=V2CalibrationResult(best_policy=PolicySpec(), best_score=0.2, baseline=_make_backtest(0.10, 0.08), calibrated=_make_backtest(0.11, 0.09)),
+        learning=V2PolicyLearningResult(model=LearnedPolicyModel(feature_names=["x1"], exposure_intercept=0.5, exposure_coef=[0.0], position_intercept=2.0, position_coef=[0.0], turnover_intercept=0.2, turnover_coef=[0.0], train_rows=1, train_r2_exposure=0.0, train_r2_positions=0.0, train_r2_turnover=0.0), baseline=_make_backtest(0.10, 0.08), learned=_make_backtest(0.12, 0.10)),
+        settings={
+            "config_path": "config/api.json",
+            "source": "local",
+            "watchlist": "config/watchlist.json",
+            "universe_tier": "favorites_16",
+            "universe_id": "favorites_16",
+            "universe_size": 2,
+            "universe_generation_rule": "manual",
+            "source_universe_manifest_path": "config/universe_smoke_5.json",
+            "universe_file": "config/universe_smoke_5.json",
+            "universe_limit": 2,
+            "start": "2024-01-01",
+            "end": "2026-03-01",
+            "symbols": ["AAA", "BBB"],
+            "symbol_count": 2,
+            "info_file": str(info_root),
+            "event_file": str(info_root),
+            "use_info_fusion": False,
+            "info_shadow_only": False,
+            "info_source_mode": "layered",
+            "info_subsets": ["market_news"],
+            "announcement_event_tags": ["earnings_negative"],
+            "capital_flow_file": str(capital_flow_path),
+            "macro_file": str(macro_path),
+            "external_signals": True,
+            "external_signal_version": "v1",
+            "use_us_index_context": False,
+            "us_index_source": "akshare",
+        },
+    )
+
+    frozen_payload = json.loads(Path(paths["frozen_daily_state"]).read_text(encoding="utf-8"))
+    composite_payload = frozen_payload["composite_state"]
+    assert composite_payload["capital_flow_state"]["flow_regime"] == "strong_inflow"
+    assert composite_payload["macro_context_state"]["style_regime"] == "quality"
+
+    manifest_payload = json.loads(Path(paths["research_manifest"]).read_text(encoding="utf-8"))
+    assert manifest_payload["external_signal_enabled"] is True
+    assert manifest_payload["external_signal_manifest"]
+
+
+def test_daily_run_prefers_frozen_external_signal_states(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    run_dir = tmp_path / "artifacts" / "v2" / "swing_v2" / "20260311_100100"
+    run_dir.mkdir(parents=True, exist_ok=True)
+    frozen_state = {
+        "as_of_date": "2026-03-01",
+        "next_date": "2026-03-02",
+        "composite_state": {
+            "market": asdict(_make_state().market),
+            "cross_section": asdict(_make_state().cross_section),
+            "sectors": [asdict(item) for item in _make_state().sectors],
+            "stocks": [asdict(item) for item in _make_state().stocks],
+            "strategy_mode": "trend_follow",
+            "risk_regime": "risk_on",
+            "market_info_state": asdict(_make_state().market_info_state),
+            "sector_info_states": {},
+            "stock_info_states": {key: asdict(value) for key, value in _make_state().stock_info_states.items()},
+            "capital_flow_state": {"northbound_net_flow": 0.42, "margin_balance_change": 0.16, "turnover_heat": 0.75, "large_order_bias": 0.22, "flow_regime": "strong_inflow"},
+            "macro_context_state": {"style_regime": "quality", "commodity_pressure": 0.18, "fx_pressure": 0.12, "index_breadth_proxy": 0.67, "macro_risk_level": "neutral"},
+        },
+    }
+    frozen_path = run_dir / "frozen_daily_state.json"
+    frozen_path.write_text(json.dumps(frozen_state, ensure_ascii=False, indent=2), encoding="utf-8")
+    dataset_path = run_dir / "dataset_manifest.json"
+    dataset_path.write_text(
+        json.dumps(
+            {
+                "universe_tier": "favorites_16",
+                "universe_id": "favorites_16",
+                "universe_size": 2,
+                "universe_generation_rule": "manual",
+                "source_universe_manifest_path": "config/universe_smoke_5.json",
+                "universe_file": "config/universe_smoke_5.json",
+                "universe_limit": 2,
+                "symbols": ["AAA", "BBB"],
+                "symbol_count": 2,
+                "external_signal_enabled": True,
+                "external_signal_version": "v1",
+            },
+            ensure_ascii=False,
+            indent=2,
+        ),
+        encoding="utf-8",
+    )
+    manifest_path = run_dir / "research_manifest.json"
+    manifest_path.write_text(
+        json.dumps(
+            {
+                "run_id": "20260311_100100",
+                "strategy_id": "swing_v2",
+                "universe_tier": "favorites_16",
+                "dataset_manifest": str(dataset_path),
+                "frozen_daily_state": str(frozen_path),
+                "learned_policy_model": "",
+                "external_signal_enabled": True,
+                "external_signal_version": "v1",
+            },
+            ensure_ascii=False,
+            indent=2,
+        ),
+        encoding="utf-8",
+    )
+
+    monkeypatch.setattr("src.application.v2_services._load_v2_runtime_settings", lambda **_: {"watchlist": "config/watchlist.json", "source": "local", "data_dir": "data", "universe_file": "config/universe_smoke_5.json", "universe_limit": 2, "use_info_fusion": False, "external_signals": True, "universe_tier": "favorites_16"})
+    monkeypatch.setattr("src.application.v2_services._resolve_v2_universe_settings", lambda **kwargs: dict(kwargs["settings"]))
+    monkeypatch.setattr("src.application.v2_services.load_watchlist", lambda *_: (SimpleNamespace(symbol="000001.SH"), [], {}))
+    monkeypatch.setattr("src.application.v2_services.build_candidate_universe", lambda **_: SimpleNamespace(rows=[]))
+
+    result = run_daily_v2_live(
+        strategy_id="swing_v2",
+        artifact_root=str(tmp_path / "artifacts" / "v2"),
+        cache_root=str(tmp_path / "artifacts" / "v2" / "cache"),
+        snapshot_path=str(manifest_path),
+    )
+
+    assert result.composite_state.capital_flow_state.flow_regime == "strong_inflow"
+    assert result.composite_state.macro_context_state.style_regime == "quality"
+    assert result.external_signal_enabled is True
 
 
 def test_backtest_summary_carries_cross_section_metrics() -> None:

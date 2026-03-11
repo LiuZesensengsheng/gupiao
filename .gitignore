@@ -4,6 +4,7 @@ __pycache__/
 *.pyo
 *.pyd
 *.py,cover
+.venv/
 
 # Large/local datasets
 data/

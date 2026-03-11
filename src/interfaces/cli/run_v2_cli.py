@@ -47,6 +47,11 @@ def build_parser() -> argparse.ArgumentParser:
     daily.add_argument("--info-types", dest="info_types", default=None, help="Comma-separated info types")
     daily.add_argument("--info-source-mode", dest="info_source_mode", default=None, choices=["layered", "legacy"], help="Info input mode")
     daily.add_argument("--info-subsets", dest="info_subsets", default=None, help="Comma-separated info subsets")
+    daily.add_argument("--external-signals", dest="external_signals", action="store_true", default=None, help="Enable external signal overlay")
+    daily.add_argument("--no-external-signals", dest="external_signals", action="store_false", help="Disable external signal overlay")
+    daily.add_argument("--event-file", dest="event_file", default=None, help="Optional event/news/announcement input override")
+    daily.add_argument("--capital-flow-file", dest="capital_flow_file", default=None, help="Optional capital flow input override")
+    daily.add_argument("--macro-file", dest="macro_file", default=None, help="Optional macro context input override")
     daily.add_argument("--use-us-index-context", dest="use_us_index_context", action="store_true", default=None, help="Enable US index context features")
     daily.add_argument("--no-use-us-index-context", dest="use_us_index_context", action="store_false", help="Disable US index context features")
     daily.add_argument("--us-index-source", dest="us_index_source", default=None, choices=["akshare"], help="US index feature source")
@@ -76,6 +81,11 @@ def build_parser() -> argparse.ArgumentParser:
     research.add_argument("--info-types", dest="info_types", default=None, help="Comma-separated info types")
     research.add_argument("--info-source-mode", dest="info_source_mode", default=None, choices=["layered", "legacy"], help="Info input mode")
     research.add_argument("--info-subsets", dest="info_subsets", default=None, help="Comma-separated info subsets")
+    research.add_argument("--external-signals", dest="external_signals", action="store_true", default=None, help="Enable external signal overlay")
+    research.add_argument("--no-external-signals", dest="external_signals", action="store_false", help="Disable external signal overlay")
+    research.add_argument("--event-file", dest="event_file", default=None, help="Optional event/news/announcement input override")
+    research.add_argument("--capital-flow-file", dest="capital_flow_file", default=None, help="Optional capital flow input override")
+    research.add_argument("--macro-file", dest="macro_file", default=None, help="Optional macro context input override")
     research.add_argument("--use-us-index-context", dest="use_us_index_context", action="store_true", default=None, help="Enable US index context features")
     research.add_argument("--no-use-us-index-context", dest="use_us_index_context", action="store_false", help="Disable US index context features")
     research.add_argument("--us-index-source", dest="us_index_source", default=None, choices=["akshare"], help="US index feature source")
@@ -148,6 +158,10 @@ def main() -> int:
             info_types=args.info_types,
             info_source_mode=args.info_source_mode,
             info_subsets=args.info_subsets,
+            external_signals=args.external_signals,
+            event_file=args.event_file,
+            capital_flow_file=args.capital_flow_file,
+            macro_file=args.macro_file,
             use_us_index_context=args.use_us_index_context,
             us_index_source=args.us_index_source,
             artifact_root=str(args.artifact_root),
@@ -195,6 +209,10 @@ def main() -> int:
             info_types=args.info_types,
             info_source_mode=args.info_source_mode,
             info_subsets=args.info_subsets,
+            external_signals=args.external_signals,
+            event_file=args.event_file,
+            capital_flow_file=args.capital_flow_file,
+            macro_file=args.macro_file,
             use_us_index_context=args.use_us_index_context,
             us_index_source=args.us_index_source,
             skip_calibration=skip_calibration,
@@ -223,6 +241,10 @@ def main() -> int:
                 info_types=args.info_types,
                 info_source_mode=args.info_source_mode,
                 info_subsets=args.info_subsets,
+                external_signals=args.external_signals,
+                event_file=args.event_file,
+                capital_flow_file=args.capital_flow_file,
+                macro_file=args.macro_file,
                 use_us_index_context=args.use_us_index_context,
                 us_index_source=args.us_index_source,
                 baseline=baseline,

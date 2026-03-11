@@ -1152,6 +1152,13 @@ def write_v2_daily_dashboard(out_path: str | Path, result: V2DailyRunResult) -> 
 
     all_notes = list(result.policy_decision.risk_notes) + list(result.policy_decision.execution_notes)
     risk_notes = "".join(f"<li>{escape(note)}</li>" for note in all_notes) or "<li>无</li>"
+    memory_notes = "".join(f"<li>{escape(note)}</li>" for note in result.memory_recall.narrative) or "<li>无历史记忆</li>"
+    recurring_symbols = ", ".join(result.memory_recall.recurring_symbols) or "无"
+    recurring_risks = ", ".join(result.memory_recall.recurring_risk_tags) or "无"
+    recurring_event_risks = ", ".join(result.memory_recall.recurring_event_risk_tags) or "无"
+    recurring_catalysts = ", ".join(result.memory_recall.recurring_catalyst_tags) or "无"
+    recurring_flows = ", ".join(result.memory_recall.recent_flow_regimes) or "无"
+    recurring_macro_risks = ", ".join(result.memory_recall.recurring_macro_risk_levels) or "无"
     sector_chart = _v2_hbar_chart_html(
         [
             (sector.sector, float(result.policy_decision.sector_budgets.get(sector.sector, 0.0)))
@@ -1377,6 +1384,24 @@ def write_v2_daily_dashboard(out_path: str | Path, result: V2DailyRunResult) -> 
 
     <section class="grid two">
       <div class="card">
+        <h2>策略记忆</h2>
+        <table>
+          <tr><th>记忆文件</th><td>{escape(result.memory_path or 'NA')}</td></tr>
+          <tr><th>最近研究</th><td>{escape(result.memory_recall.latest_research_run_id or 'NA')}</td></tr>
+          <tr><th>研究超额年化</th><td>{_pct(result.memory_recall.latest_research_excess_annual_return)}</td></tr>
+          <tr><th>近期平均仓位</th><td>{_pct(result.memory_recall.average_target_exposure)}</td></tr>
+          <tr><th>调仓触发占比</th><td>{_pct(result.memory_recall.rebalance_ratio)}</td></tr>
+          <tr><th>高频标的</th><td>{escape(recurring_symbols)}</td></tr>
+          <tr><th>重复风险</th><td>{escape(recurring_risks)}</td></tr>
+          <tr><th>事件风险</th><td>{escape(recurring_event_risks)}</td></tr>
+          <tr><th>催化标签</th><td>{escape(recurring_catalysts)}</td></tr>
+          <tr><th>资金状态</th><td>{escape(recurring_flows)}</td></tr>
+          <tr><th>宏观风险</th><td>{escape(recurring_macro_risks)}</td></tr>
+        </table>
+        <div class="label" style="margin-top:12px;">记忆摘要</div>
+        <ul>{memory_notes}</ul>
+      </div>
+      <div class="card">
         <h2>策略决策</h2>
         <div class="pill">持仓数 {result.policy_decision.target_position_count}</div>
         <table>
@@ -1398,6 +1423,23 @@ def write_v2_daily_dashboard(out_path: str | Path, result: V2DailyRunResult) -> 
     </section>
 
     <section class="grid two">
+      <div class="card">
+        <h2>外部信号摘要</h2>
+        <table>
+          <tr><th>外部信号</th><td>{'开启' if (result.external_signal_enabled or result.snapshot.external_signal_enabled) else '关闭'}</td></tr>
+          <tr><th>版本</th><td>{escape(result.external_signal_version or result.snapshot.external_signal_version or 'NA')}</td></tr>
+          <tr><th>资金状态</th><td>{escape(result.composite_state.capital_flow_state.flow_regime)}</td></tr>
+          <tr><th>北向净流</th><td>{_num(result.composite_state.capital_flow_state.northbound_net_flow, 3)}</td></tr>
+          <tr><th>两融变化</th><td>{_num(result.composite_state.capital_flow_state.margin_balance_change, 3)}</td></tr>
+          <tr><th>成交热度</th><td>{_pct(result.composite_state.capital_flow_state.turnover_heat)}</td></tr>
+          <tr><th>大单偏向</th><td>{_num(result.composite_state.capital_flow_state.large_order_bias, 3)}</td></tr>
+          <tr><th>宏观风险</th><td>{escape(result.composite_state.macro_context_state.macro_risk_level)}</td></tr>
+          <tr><th>风格状态</th><td>{escape(result.composite_state.macro_context_state.style_regime)}</td></tr>
+          <tr><th>商品压力</th><td>{_pct(result.composite_state.macro_context_state.commodity_pressure)}</td></tr>
+          <tr><th>汇率压力</th><td>{_pct(result.composite_state.macro_context_state.fx_pressure)}</td></tr>
+          <tr><th>宽度代理</th><td>{_pct(result.composite_state.macro_context_state.index_breadth_proxy)}</td></tr>
+        </table>
+      </div>
       <div class="card">
         <h2>信息影子摘要</h2>
         <table>
@@ -1788,6 +1830,8 @@ def write_v2_research_dashboard(
           <tr><th>影子模式</th><td>{'开启' if bool((artifacts or {}).get('info_shadow_enabled')) else '关闭'}</td></tr>
           <tr><th>信息条数</th><td>{int(info_manifest.get('info_item_count', 0) or 0)}</td></tr>
           <tr><th>信息哈希</th><td>{escape(str((artifacts or {}).get('info_hash', '')))}</td></tr>
+          <tr><th>外部信号</th><td>{'开启' if str((artifacts or {}).get('external_signal_enabled', 'false')).lower() == 'true' else '关闭'}</td></tr>
+          <tr><th>外部版本</th><td>{escape(str((artifacts or {}).get('external_signal_version', 'NA')))}</td></tr>
           <tr><th>来源分布</th><td>{escape(str(info_manifest.get('info_source_breakdown', {})))}</td></tr>
           <tr><th>市场覆盖率</th><td>{_pct(float((info_manifest.get('coverage_summary', {}) if isinstance(info_manifest, dict) else {}).get('market_coverage_ratio', 0.0)))}</td></tr>
           <tr><th>个股覆盖率</th><td>{_pct(float((info_manifest.get('coverage_summary', {}) if isinstance(info_manifest, dict) else {}).get('stock_coverage_ratio', 0.0)))}</td></tr>

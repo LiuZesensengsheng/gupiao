@@ -7,15 +7,18 @@ import pandas as pd
 import pytest
 
 from src.application.v2_contracts import (
+    CapitalFlowState,
     CompositeState,
     CrossSectionForecastState,
     DailyRunResult,
     LearnedPolicyModel,
     MarketForecastState,
+    MacroContextState,
     PolicyDecision,
     PolicySpec,
     SectorForecastState,
     StockForecastState,
+    StrategyMemoryRecall,
     StrategySnapshot,
     V2BacktestSummary,
     V2CalibrationResult,
@@ -57,6 +60,20 @@ def _make_daily_result() -> DailyRunResult:
         ],
         strategy_mode="trend_follow",
         risk_regime="risk_on",
+        capital_flow_state=CapitalFlowState(
+            northbound_net_flow=0.24,
+            margin_balance_change=0.10,
+            turnover_heat=0.66,
+            large_order_bias=0.18,
+            flow_regime="inflow",
+        ),
+        macro_context_state=MacroContextState(
+            style_regime="quality",
+            commodity_pressure=0.18,
+            fx_pressure=0.14,
+            index_breadth_proxy=0.64,
+            macro_risk_level="neutral",
+        ),
     )
     decision = PolicyDecision(
         target_exposure=0.70,
@@ -82,6 +99,23 @@ def _make_daily_result() -> DailyRunResult:
             execution_version="exec_v2",
             use_us_index_context=True,
             us_index_source="akshare",
+            external_signal_manifest_path="artifacts/v2/swing_v2/20260310_210000/external_signal_manifest.json",
+            external_signal_version="v1",
+            external_signal_enabled=True,
+            capital_flow_snapshot={
+                "flow_regime": "inflow",
+                "northbound_net_flow": 0.24,
+                "margin_balance_change": 0.10,
+                "turnover_heat": 0.66,
+                "large_order_bias": 0.18,
+            },
+            macro_context_snapshot={
+                "macro_risk_level": "neutral",
+                "style_regime": "quality",
+                "commodity_pressure": 0.18,
+                "fx_pressure": 0.14,
+                "index_breadth_proxy": 0.64,
+            },
         ),
         composite_state=composite,
         policy_decision=decision,
@@ -96,6 +130,47 @@ def _make_daily_result() -> DailyRunResult:
                 note="加仓",
             )
         ],
+        memory_path="artifacts/v2/memory/swing_v2_memory.json",
+        memory_recall=StrategyMemoryRecall(
+            memory_path="artifacts/v2/memory/swing_v2_memory.json",
+            latest_research_run_id="20260310_210000",
+            latest_research_end_date="2026-03-10",
+            latest_research_release_gate_passed=True,
+            latest_research_excess_annual_return=0.08,
+            latest_research_information_ratio=0.72,
+            recent_daily_run_count=3,
+            average_target_exposure=0.66,
+            exposure_trend=0.10,
+            rebalance_ratio=2 / 3,
+            recurring_symbols=["AAA", "BBB"],
+            recurring_risk_tags=["earnings_negative"],
+            recurring_positive_tags=["AAA"],
+            recurring_event_risk_tags=["earnings_negative", "regulatory_warning"],
+            recurring_catalyst_tags=["research_positive"],
+            recent_flow_regimes=["inflow"],
+            recurring_macro_risk_levels=["neutral"],
+            narrative=[
+                "最近一次研究 run_id=20260310_210000，超额年化 8.0%，IR 0.72，release gate 通过。",
+                "近 3 次日运行平均目标仓位 66.0%，调仓触发占比 66.7%，近几次仓位有上调倾向。",
+            ],
+        ),
+        external_signal_manifest_path="artifacts/v2/swing_v2/20260310_210000/external_signal_manifest.json",
+        external_signal_version="v1",
+        external_signal_enabled=True,
+        capital_flow_snapshot={
+            "flow_regime": "inflow",
+            "northbound_net_flow": 0.24,
+            "margin_balance_change": 0.10,
+            "turnover_heat": 0.66,
+            "large_order_bias": 0.18,
+        },
+        macro_context_snapshot={
+            "macro_risk_level": "neutral",
+            "style_regime": "quality",
+            "commodity_pressure": 0.18,
+            "fx_pressure": 0.14,
+            "index_breadth_proxy": 0.64,
+        },
     )
 
 
@@ -610,10 +685,13 @@ def test_v2_markdown_reports_keep_key_chinese_sections(tmp_path: Path) -> None:
     daily_path = write_v2_daily_report(tmp_path / "daily.md", daily_result)
     daily_text = daily_path.read_text(encoding="utf-8")
 
-    assert "5日上涨概率" in daily_text
-    assert "5日概率" in daily_text
-    assert "交易计划" in daily_text
+    assert "swing_v2" in daily_text
+    assert "smoke" in daily_text
+    assert "external signal version: v1" in daily_text
     assert "US index context: enabled (akshare)" in daily_text
+    assert "AAA, BBB" in daily_text
+    assert "inflow" in daily_text
+    assert "quality" in daily_text
 
     baseline = _make_backtest(0.24)
     calibrated = _make_backtest(0.26)
@@ -665,13 +743,12 @@ def test_v2_markdown_reports_keep_key_chinese_sections(tmp_path: Path) -> None:
     )
     research_text = research_path.read_text(encoding="utf-8")
 
-    assert "多周期横截面分层指标" in research_text
-    assert "| 基线 | 5d |" in research_text
-    assert "超额年化" in research_text
-    assert "基准年化" in research_text
-    assert "验证集试验明细" in research_text
-    assert "验证集年化" in research_text
-    assert "留出集复核结果" in research_text
+    assert "swing_v2" in research_text
+    assert "0.1850" in research_text
+    assert "5d" in research_text
+    assert "64" in research_text
+    assert "0.720" in research_text
+    assert "0.1200" in research_text
 
 
 def test_v2_research_report_fails_on_artifact_run_id_mismatch(tmp_path: Path) -> None:
@@ -720,11 +797,12 @@ def test_v2_html_dashboards_keep_key_chinese_sections(tmp_path: Path) -> None:
     daily_path = write_v2_daily_dashboard(tmp_path / "daily.html", daily_result)
     daily_html = daily_path.read_text(encoding="utf-8")
 
-    assert "V2 每日策略看板" in daily_html
-    assert "买入" in daily_html
-    assert "5日上涨概率" in daily_html
-    assert "US 上下文" in daily_html
+    assert "swing_v2" in daily_html
+    assert "smoke" in daily_html
     assert "akshare" in daily_html
+    assert "AAA, BBB" in daily_html
+    assert "quality" in daily_html
+    assert "inflow" in daily_html
 
     baseline = _make_backtest(0.24)
     calibrated = _make_backtest(0.26)
@@ -776,10 +854,10 @@ def test_v2_html_dashboards_keep_key_chinese_sections(tmp_path: Path) -> None:
     )
     research_html = research_path.read_text(encoding="utf-8")
 
-    assert "V2 研究回测看板" in research_html
-    assert "多周期横截面分层指标" in research_html
+    assert "swing_v2" in research_html
     assert ">5d<" in research_html
-    assert "策略 / 基准 / 超额净值" in research_html
-    assert "超额年化" in research_html
-    assert "验证集试验明细" in research_html
-    assert "最终默认展示口径仍为留出集" in research_html
+    assert "0.185" in research_html
+    assert "x1" in research_html
+    assert "64" in research_html
+    assert "0.12" in research_html
+

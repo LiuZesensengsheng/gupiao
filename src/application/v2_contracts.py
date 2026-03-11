@@ -61,6 +61,28 @@ class InfoAggregateState:
     shadow_prob_1d: float = 0.5
     shadow_prob_5d: float = 0.5
     shadow_prob_20d: float = 0.5
+    event_risk_level: float = 0.0
+    catalyst_strength: float = 0.0
+    coverage_confidence: float = 0.0
+    source_diversity: float = 0.0
+
+
+@dataclass(frozen=True)
+class CapitalFlowState:
+    northbound_net_flow: float = 0.0
+    margin_balance_change: float = 0.0
+    turnover_heat: float = 0.5
+    large_order_bias: float = 0.0
+    flow_regime: str = "neutral"
+
+
+@dataclass(frozen=True)
+class MacroContextState:
+    style_regime: str = "balanced"
+    commodity_pressure: float = 0.0
+    fx_pressure: float = 0.0
+    index_breadth_proxy: float = 0.5
+    macro_risk_level: str = "neutral"
 
 
 @dataclass(frozen=True)
@@ -129,6 +151,8 @@ class CompositeState:
     market_info_state: InfoAggregateState = field(default_factory=InfoAggregateState)
     sector_info_states: Dict[str, InfoAggregateState] = field(default_factory=dict)
     stock_info_states: Dict[str, InfoAggregateState] = field(default_factory=dict)
+    capital_flow_state: CapitalFlowState = field(default_factory=CapitalFlowState)
+    macro_context_state: MacroContextState = field(default_factory=MacroContextState)
 
 
 @dataclass(frozen=True)
@@ -151,6 +175,9 @@ class PolicySpec:
     risk_on_turnover_cap: float = 0.40
     cautious_turnover_cap: float = 0.28
     risk_off_turnover_cap: float = 0.20
+    event_risk_cutoff: float = 0.55
+    catalyst_boost_cap: float = 0.12
+    flow_exposure_cap: float = 0.08
 
 
 @dataclass(frozen=True)
@@ -186,6 +213,11 @@ class StrategySnapshot:
     info_manifest_path: str = ""
     info_hash: str = ""
     info_shadow_enabled: bool = False
+    external_signal_manifest_path: str = ""
+    external_signal_version: str = ""
+    external_signal_enabled: bool = False
+    capital_flow_snapshot: Dict[str, object] = field(default_factory=dict)
+    macro_context_snapshot: Dict[str, object] = field(default_factory=dict)
     run_id: str = ""
     data_window: str = ""
     model_hashes: Dict[str, str] = field(default_factory=dict)
@@ -210,6 +242,11 @@ class DailyRunResult:
     info_manifest_path: str = ""
     info_shadow_enabled: bool = False
     info_item_count: int = 0
+    external_signal_manifest_path: str = ""
+    external_signal_version: str = ""
+    external_signal_enabled: bool = False
+    capital_flow_snapshot: Dict[str, object] = field(default_factory=dict)
+    macro_context_snapshot: Dict[str, object] = field(default_factory=dict)
     top_negative_info_events: List[InfoSignalRecord] = field(default_factory=list)
     top_positive_info_signals: List[InfoSignalRecord] = field(default_factory=list)
     quant_info_divergence: List[InfoDivergenceRecord] = field(default_factory=list)
@@ -217,6 +254,32 @@ class DailyRunResult:
     snapshot_hash: str = ""
     config_hash: str = ""
     manifest_path: str = ""
+    memory_path: str = ""
+    memory_recall: "StrategyMemoryRecall" = field(default_factory=lambda: StrategyMemoryRecall())
+
+
+@dataclass(frozen=True)
+class StrategyMemoryRecall:
+    memory_path: str = ""
+    updated_at: str = ""
+    latest_research_run_id: str = ""
+    latest_research_end_date: str = ""
+    latest_research_release_gate_passed: bool = False
+    latest_research_excess_annual_return: float = 0.0
+    latest_research_information_ratio: float = 0.0
+    recent_daily_run_count: int = 0
+    average_target_exposure: float = 0.0
+    exposure_trend: float = 0.0
+    rebalance_ratio: float = 0.0
+    recurring_symbols: List[str] = field(default_factory=list)
+    recurring_sectors: List[str] = field(default_factory=list)
+    recurring_risk_tags: List[str] = field(default_factory=list)
+    recurring_positive_tags: List[str] = field(default_factory=list)
+    recurring_event_risk_tags: List[str] = field(default_factory=list)
+    recurring_catalyst_tags: List[str] = field(default_factory=list)
+    recent_flow_regimes: List[str] = field(default_factory=list)
+    recurring_macro_risk_levels: List[str] = field(default_factory=list)
+    narrative: List[str] = field(default_factory=list)
 
 
 @dataclass(frozen=True)
