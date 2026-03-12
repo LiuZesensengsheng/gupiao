@@ -44,6 +44,12 @@ from src.application.v2_daily_runtime import (
     build_daily_symbol_names as _build_daily_symbol_names_external,
     load_daily_cached_result as _load_daily_cached_result_external,
 )
+from src.application.v2_backtest_cache_support import (
+    build_prepared_backtest_cache_key as _build_prepared_backtest_cache_key_external,
+    load_pickle_cache as _load_pickle_cache_external,
+    prepared_backtest_cache_path as _prepared_backtest_cache_path_external,
+    store_pickle_cache as _store_pickle_cache_external,
+)
 from src.application.v2_publish_support import (
     load_backtest_payload_for_run as _load_backtest_payload_for_run_external,
     load_backtest_payload_from_manifest as _load_backtest_payload_from_manifest_external,
@@ -59,6 +65,13 @@ from src.application.v2_snapshot_support import (
     load_research_manifest_for_daily as _load_research_manifest_for_daily_external,
     resolve_manifest_entry_path as _path_from_manifest_entry_external,
     serialize_composite_state as _serialize_composite_state_external,
+)
+from src.application.v2_sector_support import (
+    allocate_sector_slots as _allocate_sector_slots_external,
+    allocate_with_sector_budgets as _allocate_with_sector_budgets_external,
+    build_sector_states as _build_sector_states_external,
+    cap_sector_budgets as _cap_sector_budgets_external,
+    ranked_sector_budgets_with_alpha as _ranked_sector_budgets_with_alpha_external,
 )
 from src.application.watchlist import load_watchlist
 from src.domain.entities import TradeAction
@@ -1872,37 +1885,12 @@ def _ranked_sector_budgets_with_alpha(
     stocks: Iterable[StockForecastState],
     target_exposure: float,
 ) -> dict[str, float]:
-    sector_rows = list(sectors)
-    if not sector_rows:
-        return {}
-    stock_rows = [
-        stock for stock in stocks
-        if _is_actionable_status(getattr(stock, "tradability_status", "normal"))
-    ]
-    sector_alpha: dict[str, list[float]] = {}
-    for stock in stock_rows:
-        sector_alpha.setdefault(str(stock.sector), []).append(_stock_policy_score(stock))
-
-    raw_scores: list[float] = []
-    for item in sector_rows:
-        base_score = max(0.0, float(item.up_20d_prob) - 0.50) + max(0.0, float(item.relative_strength))
-        stock_scores = sorted(sector_alpha.get(item.sector, []), reverse=True)
-        if stock_scores:
-            top_slice = stock_scores[: min(2, len(stock_scores))]
-            alpha_top = float(sum(top_slice) / max(1, len(top_slice)))
-            alpha_breadth = float(sum(1 for score in stock_scores if score >= 0.56) / max(1, len(stock_scores)))
-            alpha_score = max(0.0, alpha_top - 0.50) + 0.25 * alpha_breadth
-        else:
-            alpha_score = 0.0
-        raw_scores.append(0.55 * base_score + 0.45 * alpha_score)
-
-    total = float(sum(raw_scores))
-    if total <= 1e-9:
-        return _ranked_sector_budgets(sector_rows, target_exposure=target_exposure)
-    return {
-        item.sector: float(target_exposure) * float(score) / total
-        for item, score in zip(sector_rows, raw_scores)
-    }
+    return _ranked_sector_budgets_with_alpha_external(
+        sectors=sectors,
+        stocks=stocks,
+        target_exposure=target_exposure,
+        stock_score_fn=_stock_policy_score,
+    )
 
 
 def _cap_sector_budgets(
@@ -1912,56 +1900,12 @@ def _cap_sector_budgets(
     risk_regime: str,
     breadth_strength: float,
 ) -> tuple[dict[str, float], list[str]]:
-    if not sector_budgets:
-        return {}, []
-    notes: list[str] = []
-    active = {sector: max(0.0, float(weight)) for sector, weight in sector_budgets.items() if float(weight) > 1e-9}
-    if not active:
-        return {}, notes
-    if len(active) == 1 and "其他" in active:
-        return active, notes
-    if risk_regime == "risk_on":
-        cap_ratio = 0.68
-    elif risk_regime == "cautious":
-        cap_ratio = 0.58
-    else:
-        cap_ratio = 0.50
-    if float(breadth_strength) < 0.10:
-        cap_ratio = min(cap_ratio, 0.50)
-    max_sector_weight = float(target_exposure) * float(cap_ratio)
-    if max_sector_weight <= 1e-9:
-        return active, notes
-    clipped = dict(active)
-    overflow = 0.0
-    for sector, weight in list(clipped.items()):
-        if weight > max_sector_weight + 1e-9:
-            overflow += float(weight - max_sector_weight)
-            clipped[sector] = float(max_sector_weight)
-            notes.append(f"{sector}: sector budget capped for concentration control.")
-    if len(clipped) == 1:
-        return clipped, notes
-    if overflow <= 1e-9:
-        return clipped, notes
-    receivers = [sector for sector, weight in clipped.items() if weight < max_sector_weight - 1e-9]
-    while overflow > 1e-9 and receivers:
-        headroom_total = float(sum(max(0.0, max_sector_weight - clipped[sector]) for sector in receivers))
-        if headroom_total <= 1e-9:
-            break
-        for sector in list(receivers):
-            headroom = max(0.0, max_sector_weight - clipped[sector])
-            if headroom <= 1e-9:
-                continue
-            take = min(headroom, overflow * headroom / headroom_total)
-            clipped[sector] = float(clipped[sector] + take)
-            overflow -= float(take)
-            if overflow <= 1e-9:
-                break
-        receivers = [sector for sector, weight in clipped.items() if weight < max_sector_weight - 1e-9]
-    total = float(sum(clipped.values()))
-    if total > float(target_exposure) + 1e-9 and total > 1e-9:
-        scale = float(target_exposure) / total
-        clipped = {sector: float(weight) * scale for sector, weight in clipped.items()}
-    return clipped, notes
+    return _cap_sector_budgets_external(
+        sector_budgets=sector_budgets,
+        target_exposure=target_exposure,
+        risk_regime=risk_regime,
+        breadth_strength=breadth_strength,
+    )
 
 
 def _stock_policy_score(stock: StockForecastState) -> float:
@@ -1983,40 +1927,14 @@ def _allocate_sector_slots(
     sector_budgets: dict[str, float],
     available_by_sector: dict[str, list[tuple[StockForecastState, float]]],
     total_slots: int,
+    sector_strengths: dict[str, float] | None = None,
 ) -> dict[str, int]:
-    active_sectors = [
-        sector for sector, budget in sector_budgets.items()
-        if float(budget) > 1e-9 and available_by_sector.get(sector)
-    ]
-    if not active_sectors or total_slots <= 0:
-        return {}
-
-    slots = {sector: 0 for sector in active_sectors}
-    ordered = sorted(active_sectors, key=lambda sector: float(sector_budgets.get(sector, 0.0)), reverse=True)
-
-    for sector in ordered:
-        if total_slots <= 0:
-            break
-        slots[sector] = 1
-        total_slots -= 1
-
-    while total_slots > 0:
-        expandable = [
-            sector for sector in ordered
-            if slots[sector] < len(available_by_sector.get(sector, []))
-        ]
-        if not expandable:
-            break
-        best = max(
-            expandable,
-            key=lambda sector: (
-                float(sector_budgets.get(sector, 0.0)) / float(max(1, slots[sector] + 1)),
-                len(available_by_sector.get(sector, [])),
-            ),
-        )
-        slots[best] += 1
-        total_slots -= 1
-    return slots
+    return _allocate_sector_slots_external(
+        sector_budgets=sector_budgets,
+        available_by_sector=available_by_sector,
+        total_slots=total_slots,
+        sector_strengths=sector_strengths,
+    )
 
 
 def _allocate_with_sector_budgets(
@@ -2024,57 +1942,17 @@ def _allocate_with_sector_budgets(
     stocks: list[StockForecastState],
     sector_budgets: dict[str, float],
     target_position_count: int,
+    sector_strengths: dict[str, float] | None = None,
     max_single_position: float = 0.35,
 ) -> dict[str, float]:
-    available_by_sector: dict[str, list[tuple[StockForecastState, float]]] = {}
-    for stock in stocks:
-        if not _is_actionable_status(getattr(stock, "tradability_status", "normal")):
-            continue
-        score = _stock_policy_score(stock)
-        available_by_sector.setdefault(stock.sector, []).append((stock, score))
-    for sector in list(available_by_sector):
-        available_by_sector[sector].sort(key=lambda item: item[1], reverse=True)
-
-    slots_by_sector = _allocate_sector_slots(
+    return _allocate_with_sector_budgets_external(
+        stocks=stocks,
         sector_budgets=sector_budgets,
-        available_by_sector=available_by_sector,
-        total_slots=max(1, int(target_position_count)),
+        target_position_count=target_position_count,
+        stock_score_fn=_stock_policy_score,
+        sector_strengths=sector_strengths,
+        max_single_position=max_single_position,
     )
-    symbol_target_weights: dict[str, float] = {}
-    for sector, slots in slots_by_sector.items():
-        sector_budget = float(sector_budgets.get(sector, 0.0))
-        picks = available_by_sector.get(sector, [])[: max(0, int(slots))]
-        if not picks or sector_budget <= 1e-9:
-            continue
-        cap = min(float(max_single_position), float(sector_budget))
-        remaining = float(sector_budget)
-        uncapped = list(picks)
-        while uncapped and remaining > 1e-9:
-            sector_scores = [max(0.0, score - 0.50) for _, score in uncapped]
-            sector_total = float(sum(sector_scores))
-            if sector_total <= 1e-9:
-                provisional = [remaining / float(len(uncapped))] * len(uncapped)
-            else:
-                provisional = [remaining * float(score) / sector_total for score in sector_scores]
-            over_limit = [
-                idx for idx, weight in enumerate(provisional)
-                if float(weight) > cap + 1e-9
-            ]
-            if not over_limit:
-                for (stock, _), weight in zip(uncapped, provisional):
-                    symbol_target_weights[stock.symbol] = float(weight)
-                remaining = 0.0
-                break
-            next_uncapped: list[tuple[StockForecastState, float]] = []
-            for idx, pair in enumerate(uncapped):
-                stock, score = pair
-                if idx in over_limit:
-                    symbol_target_weights[stock.symbol] = float(cap)
-                    remaining -= float(cap)
-                else:
-                    next_uncapped.append((stock, score))
-            uncapped = next_uncapped
-    return symbol_target_weights
 
 
 def _finalize_target_weights(
@@ -2421,6 +2299,10 @@ def apply_policy(
         stocks=state.stocks,
         sector_budgets=desired_sector_budgets,
         target_position_count=int(target_position_count),
+        sector_strengths={
+            sector: float(weight) / max(float(target_exposure), 1e-9)
+            for sector, weight in desired_sector_budgets.items()
+        },
         max_single_position=float(max_single_position),
     )
     desired_symbol_target_weights, external_signal_notes = _apply_external_signal_weight_tilts(
@@ -3541,6 +3423,7 @@ def _prepare_v2_backtest_data(
     universe_limit: int | None = None,
     universe_tier: str | None = None,
     cache_root: str = "artifacts/v2/cache",
+    refresh_cache: bool = False,
     use_us_index_context: bool | None = None,
     us_index_source: str | None = None,
 ) -> _PreparedV2BacktestData | None:
@@ -3554,6 +3437,16 @@ def _prepare_v2_backtest_data(
         us_index_source=us_index_source,
     )
     settings = _resolve_v2_universe_settings(settings=settings, cache_root=cache_root)
+    prepared_cache_key = _build_prepared_backtest_cache_key_external(settings)
+    prepared_cache_path = _prepared_backtest_cache_path_external(
+        cache_root=cache_root,
+        cache_key=prepared_cache_key,
+    )
+    if not refresh_cache:
+        cached_prepared = _load_pickle_cache_external(prepared_cache_path)
+        if cached_prepared is not None:
+            _emit_progress("cache", "命中 prepared data 缓存")
+            return cached_prepared
     market_security, _, _ = load_watchlist(str(settings["watchlist"]))
     universe = build_candidate_universe(
         source=str(settings["source"]),
@@ -3625,7 +3518,7 @@ def _prepare_v2_backtest_data(
     if len(dates) <= min_train_days + 1:
         return None
 
-    return _PreparedV2BacktestData(
+    prepared = _PreparedV2BacktestData(
         settings=settings,
         market_valid=market_valid,
         market_feature_cols=market_feature_cols,
@@ -3634,6 +3527,12 @@ def _prepare_v2_backtest_data(
         stock_frames=stock_frames,
         dates=dates,
     )
+    try:
+        _store_pickle_cache_external(prepared_cache_path, prepared)
+        _emit_progress("cache", "prepared data 缓存已写入")
+    except Exception:
+        pass
+    return prepared
 
 
 def _tensorize_temporal_frame(
@@ -3817,27 +3716,10 @@ class LinearForecastBackend:
                 )
                 if not stock_states:
                     continue
-                grouped: dict[str, list[StockForecastState]] = {}
-                for stock_state in stock_states:
-                    grouped.setdefault(stock_state.sector, []).append(stock_state)
-                sector_states: list[SectorForecastState] = []
-                for sector, items in grouped.items():
-                    n = max(1, len(items))
-                    up5 = sum(item.up_5d_prob for item in items) / n
-                    up20 = sum(item.up_20d_prob for item in items) / n
-                    rel = sum(item.up_20d_prob - 0.5 for item in items) / n
-                    rotation = sum(abs(item.up_5d_prob - item.up_20d_prob) for item in items) / n
-                    crowding = sum(max(0.0, item.up_20d_prob - 0.5) for item in items) / n
-                    sector_states.append(
-                        SectorForecastState(
-                            sector=sector,
-                            up_5d_prob=float(up5),
-                            up_20d_prob=float(up20),
-                            relative_strength=float(rel),
-                            rotation_speed=float(_clip(rotation, 0.0, 1.0)),
-                            crowding_score=float(_clip(crowding, 0.0, 1.0)),
-                        )
-                    )
+                sector_states = _build_sector_states_external(
+                    stock_states,
+                    stock_score_fn=_stock_policy_score,
+                )
                 composite_state = compose_state(
                     market=market_state,
                     sectors=sector_states,
@@ -4022,27 +3904,10 @@ class DeepForecastBackend:
                 )
                 if not stock_states:
                     continue
-                grouped: dict[str, list[StockForecastState]] = {}
-                for stock_state in stock_states:
-                    grouped.setdefault(stock_state.sector, []).append(stock_state)
-                sector_states: list[SectorForecastState] = []
-                for sector, items in grouped.items():
-                    n = max(1, len(items))
-                    up5 = sum(item.up_5d_prob for item in items) / n
-                    up20 = sum(item.up_20d_prob for item in items) / n
-                    rel = sum(item.up_20d_prob - 0.5 for item in items) / n
-                    rotation = sum(abs(item.up_5d_prob - item.up_20d_prob) for item in items) / n
-                    crowding = sum(max(0.0, item.up_20d_prob - 0.5) for item in items) / n
-                    sector_states.append(
-                        SectorForecastState(
-                            sector=sector,
-                            up_5d_prob=float(up5),
-                            up_20d_prob=float(up20),
-                            relative_strength=float(rel),
-                            rotation_speed=float(_clip(rotation, 0.0, 1.0)),
-                            crowding_score=float(_clip(crowding, 0.0, 1.0)),
-                        )
-                    )
+                sector_states = _build_sector_states_external(
+                    stock_states,
+                    stock_score_fn=_stock_policy_score,
+                )
                 composite_state = compose_state(
                     market=market_state,
                     sectors=sector_states,
@@ -4264,6 +4129,7 @@ def _load_or_build_v2_backtest_trajectory(
         ),
         universe_tier=str(settings.get("universe_tier", universe_tier)),
         cache_root=cache_root,
+        refresh_cache=refresh_cache,
         use_us_index_context=bool(settings.get("use_us_index_context", False)),
         us_index_source=str(settings.get("us_index_source", "akshare")),
     )

@@ -6,7 +6,9 @@ import pytest
 
 from src.application.v2_contracts import DailyRunResult, StrategySnapshot
 from src.application.v2_contracts import PolicyInput
+from src.application.v2_sector_support import build_sector_states
 from src.application.v2_services import (
+    _allocate_with_sector_budgets,
     _stock_policy_score,
     apply_policy,
     build_strategy_snapshot,
@@ -285,6 +287,41 @@ def test_v2_policy_caps_single_sector_concentration() -> None:
 
     assert decision.sector_budgets["单一"] < decision.target_exposure
     assert any("sector budget capped" in note for note in decision.risk_notes)
+
+
+def test_build_sector_states_rewards_broad_sector_leadership() -> None:
+    stocks = [
+        StockForecastState("S1", "强", 0.58, 0.61, 0.67, 0.58, 0.16, 0.90, alpha_score=0.66),
+        StockForecastState("S2", "强", 0.57, 0.60, 0.65, 0.57, 0.12, 0.88, alpha_score=0.64),
+        StockForecastState("S3", "强", 0.56, 0.59, 0.64, 0.55, 0.10, 0.87, alpha_score=0.62),
+        StockForecastState("W1", "弱", 0.59, 0.62, 0.68, 0.60, 0.14, 0.89, alpha_score=0.65),
+        StockForecastState("W2", "弱", 0.49, 0.50, 0.51, 0.47, 0.02, 0.78, alpha_score=0.52),
+    ]
+
+    sector_states = build_sector_states(stocks, stock_score_fn=lambda stock: float(stock.alpha_score))
+    sector_map = {item.sector: item for item in sector_states}
+
+    assert sector_map["强"].relative_strength > sector_map["弱"].relative_strength
+    assert sector_map["强"].rotation_speed >= sector_map["弱"].rotation_speed
+
+
+def test_allocate_with_sector_budgets_filters_marginal_weak_sector_names() -> None:
+    stocks = [
+        StockForecastState("S1", "强", 0.58, 0.61, 0.67, 0.58, 0.12, 0.92, alpha_score=0.66),
+        StockForecastState("S2", "强", 0.56, 0.59, 0.64, 0.55, 0.10, 0.89, alpha_score=0.62),
+        StockForecastState("W1", "弱", 0.55, 0.57, 0.60, 0.52, 0.08, 0.84, alpha_score=0.55),
+    ]
+
+    weights = _allocate_with_sector_budgets(
+        stocks=stocks,
+        sector_budgets={"强": 0.24, "弱": 0.11},
+        target_position_count=2,
+        sector_strengths={"强": 0.70, "弱": 0.30},
+        max_single_position=0.18,
+    )
+
+    assert "W1" not in weights
+    assert set(weights) == {"S1", "S2"}
 
 
 def test_v2_policy_does_not_cap_unknown_fallback_sector_bucket() -> None:

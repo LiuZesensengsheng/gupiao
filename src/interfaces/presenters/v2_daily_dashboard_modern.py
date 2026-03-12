@@ -179,6 +179,7 @@ def write_v2_daily_dashboard(out_path: str | Path, result: V2DailyRunResult) -> 
 
     risk_notes_html = "".join(f"<li>{escape(note)}</li>" for note in risk_notes[:6]) or "<li>No explicit risk note.</li>"
     memory_notes_html = "".join(f"<li>{escape(note)}</li>" for note in result.memory_recall.narrative[:5]) or "<li>No memory narrative yet.</li>"
+    recurring_symbols = ", ".join(str(symbol) for symbol in result.memory_recall.recurring_symbols[:6]) or "NA"
 
     negative_rows_html = "".join(
         "<tr>"
@@ -320,6 +321,7 @@ def write_v2_daily_dashboard(out_path: str | Path, result: V2DailyRunResult) -> 
           <div class="hero-sub">
             <div>Strategy {escape(result.snapshot.strategy_id)} | As of {escape(market.as_of_date)} | Universe {escape(result.snapshot.universe_id or "custom")}</div>
             <div>Focus: {escape(action_summary)} | {escape(header_note)}</div>
+            <div>US context {"on" if result.snapshot.use_us_index_context else "off"} | source {escape(result.snapshot.us_index_source or "NA")}</div>
           </div>
         </div>
         <div class="hero-flags">
@@ -392,6 +394,7 @@ def write_v2_daily_dashboard(out_path: str | Path, result: V2DailyRunResult) -> 
           <div class="mini-stat"><div class="eyebrow">Avg Exposure</div><strong>{_pct(result.memory_recall.average_target_exposure)}</strong><div class="metric-sub">rebalance ratio {_pct(result.memory_recall.rebalance_ratio)}</div></div>
           <div class="mini-stat"><div class="eyebrow">Research IR</div><strong>{_num(result.memory_recall.latest_research_information_ratio, 2)}</strong><div class="metric-sub">excess {_pct(result.memory_recall.latest_research_excess_annual_return)}</div></div>
         </div>
+        <div class="callout"><strong>Recurring symbols</strong>{escape(recurring_symbols)}</div>
         <ul class="list" style="margin-top:12px;">{memory_notes_html}</ul>
       </article>
     </section>

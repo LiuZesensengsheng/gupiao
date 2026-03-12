@@ -28,6 +28,7 @@ from src.application.v2_services import (
     _TrajectoryStep,
     _build_date_slice_index,
     _derive_learning_targets,
+    _prepare_v2_backtest_data,
     _load_v2_runtime_settings,
     _sha256_file,
     calibrate_v2_policy,
@@ -1289,6 +1290,166 @@ def test_load_or_build_v2_backtest_trajectory_uses_disk_cache(monkeypatch: pytes
     assert first == built_trajectory
     assert second == built_trajectory
     assert seen["build_calls"] == 1
+
+
+def test_prepare_v2_backtest_data_uses_prepared_cache(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    watchlist = tmp_path / "watchlist.json"
+    universe_file = tmp_path / "universe.json"
+    margin_market = tmp_path / "margin_market.csv"
+    margin_stock = tmp_path / "margin_stock.csv"
+    for path in (watchlist, universe_file, margin_market, margin_stock):
+        path.write_text("{}", encoding="utf-8")
+
+    settings = {
+        "config_path": "config/api.json",
+        "source": "local",
+        "data_dir": str(tmp_path / "data"),
+        "watchlist": str(watchlist),
+        "universe_file": str(universe_file),
+        "universe_limit": 5,
+        "universe_tier": "",
+        "source_universe_manifest_path": str(universe_file),
+        "start": "2024-01-01",
+        "end": "2024-01-31",
+        "min_train_days": 2,
+        "use_margin_features": False,
+        "margin_market_file": str(margin_market),
+        "margin_stock_file": str(margin_stock),
+        "use_us_index_context": False,
+        "us_index_source": "akshare",
+    }
+    dates = pd.date_range("2024-01-01", periods=5, freq="D")
+    calls = {"universe": 0, "market": 0, "panel": 0}
+
+    monkeypatch.setattr("src.application.v2_services._load_v2_runtime_settings", lambda **_: dict(settings))
+    monkeypatch.setattr("src.application.v2_services._resolve_v2_universe_settings", lambda settings, cache_root: dict(settings))
+    monkeypatch.setattr("src.application.v2_services.load_watchlist", lambda _: (SimpleNamespace(symbol="MKT"), None, None))
+
+    def fake_universe(**_: object) -> SimpleNamespace:
+        calls["universe"] += 1
+        return SimpleNamespace(rows=[SimpleNamespace(symbol="AAA"), SimpleNamespace(symbol="BBB")])
+
+    def fake_market_raw(**_: object) -> pd.DataFrame:
+        calls["market"] += 1
+        return pd.DataFrame({"date": dates})
+
+    def fake_market_frame(_: pd.DataFrame) -> pd.DataFrame:
+        return pd.DataFrame(
+            {
+                "date": dates,
+                "mkt_feature": [0.1, 0.2, 0.3, 0.4, 0.5],
+                "mkt_target_1d_up": [1, 0, 1, 1, 0],
+                "mkt_target_2d_up": [1, 1, 0, 1, 0],
+                "mkt_target_3d_up": [1, 1, 1, 0, 0],
+                "mkt_target_5d_up": [1, 0, 1, 0, 1],
+                "mkt_target_20d_up": [1, 1, 1, 1, 0],
+            }
+        )
+
+    def fake_panel(**_: object) -> SimpleNamespace:
+        calls["panel"] += 1
+        frame = pd.DataFrame(
+            {
+                "date": list(dates) * 2,
+                "symbol": ["AAA"] * len(dates) + ["BBB"] * len(dates),
+                "feature_a": [0.1, 0.2, 0.3, 0.4, 0.5, 0.2, 0.3, 0.4, 0.5, 0.6],
+            }
+        )
+        return SimpleNamespace(frame=frame, feature_columns=["feature_a"])
+
+    monkeypatch.setattr("src.application.v2_services.build_candidate_universe", fake_universe)
+    monkeypatch.setattr("src.application.v2_services.load_symbol_daily", fake_market_raw)
+    monkeypatch.setattr("src.application.v2_services.make_market_feature_frame", fake_market_frame)
+    monkeypatch.setattr(
+        "src.application.v2_services.build_market_context_features",
+        lambda **_: SimpleNamespace(frame=pd.DataFrame({"date": dates}), feature_columns=[]),
+    )
+    monkeypatch.setattr("src.application.v2_services.build_stock_panel_dataset", fake_panel)
+    monkeypatch.setattr("src.application.v2_services.MARKET_FEATURE_COLUMNS", ["mkt_feature"])
+
+    first = _prepare_v2_backtest_data(config_path="config/api.json", cache_root=str(tmp_path))
+    second = _prepare_v2_backtest_data(config_path="config/api.json", cache_root=str(tmp_path))
+
+    assert first is not None
+    assert second is not None
+    assert first.dates == second.dates
+    assert calls["universe"] == 1
+    assert calls["market"] == 1
+    assert calls["panel"] == 1
+
+
+def test_prepare_v2_backtest_data_refresh_cache_rebuilds(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    watchlist = tmp_path / "watchlist.json"
+    universe_file = tmp_path / "universe.json"
+    margin_market = tmp_path / "margin_market.csv"
+    margin_stock = tmp_path / "margin_stock.csv"
+    for path in (watchlist, universe_file, margin_market, margin_stock):
+        path.write_text("{}", encoding="utf-8")
+
+    settings = {
+        "config_path": "config/api.json",
+        "source": "local",
+        "data_dir": str(tmp_path / "data"),
+        "watchlist": str(watchlist),
+        "universe_file": str(universe_file),
+        "universe_limit": 5,
+        "universe_tier": "",
+        "source_universe_manifest_path": str(universe_file),
+        "start": "2024-01-01",
+        "end": "2024-01-31",
+        "min_train_days": 2,
+        "use_margin_features": False,
+        "margin_market_file": str(margin_market),
+        "margin_stock_file": str(margin_stock),
+        "use_us_index_context": False,
+        "us_index_source": "akshare",
+    }
+    dates = pd.date_range("2024-01-01", periods=5, freq="D")
+    calls = {"panel": 0}
+
+    monkeypatch.setattr("src.application.v2_services._load_v2_runtime_settings", lambda **_: dict(settings))
+    monkeypatch.setattr("src.application.v2_services._resolve_v2_universe_settings", lambda settings, cache_root: dict(settings))
+    monkeypatch.setattr("src.application.v2_services.load_watchlist", lambda _: (SimpleNamespace(symbol="MKT"), None, None))
+    monkeypatch.setattr(
+        "src.application.v2_services.build_candidate_universe",
+        lambda **_: SimpleNamespace(rows=[SimpleNamespace(symbol="AAA")]),
+    )
+    monkeypatch.setattr("src.application.v2_services.load_symbol_daily", lambda **_: pd.DataFrame({"date": dates}))
+    monkeypatch.setattr(
+        "src.application.v2_services.make_market_feature_frame",
+        lambda _: pd.DataFrame(
+            {
+                "date": dates,
+                "mkt_feature": [0.1, 0.2, 0.3, 0.4, 0.5],
+                "mkt_target_1d_up": [1, 0, 1, 1, 0],
+                "mkt_target_2d_up": [1, 1, 0, 1, 0],
+                "mkt_target_3d_up": [1, 1, 1, 0, 0],
+                "mkt_target_5d_up": [1, 0, 1, 0, 1],
+                "mkt_target_20d_up": [1, 1, 1, 1, 0],
+            }
+        ),
+    )
+    monkeypatch.setattr(
+        "src.application.v2_services.build_market_context_features",
+        lambda **_: SimpleNamespace(frame=pd.DataFrame({"date": dates}), feature_columns=[]),
+    )
+
+    def fake_panel(**_: object) -> SimpleNamespace:
+        calls["panel"] += 1
+        return SimpleNamespace(
+            frame=pd.DataFrame({"date": dates, "symbol": ["AAA"] * len(dates), "feature_a": [0.1, 0.2, 0.3, 0.4, 0.5]}),
+            feature_columns=["feature_a"],
+        )
+
+    monkeypatch.setattr("src.application.v2_services.build_stock_panel_dataset", fake_panel)
+    monkeypatch.setattr("src.application.v2_services.MARKET_FEATURE_COLUMNS", ["mkt_feature"])
+
+    first = _prepare_v2_backtest_data(config_path="config/api.json", cache_root=str(tmp_path))
+    second = _prepare_v2_backtest_data(config_path="config/api.json", cache_root=str(tmp_path), refresh_cache=True)
+
+    assert first is not None
+    assert second is not None
+    assert calls["panel"] == 2
 
 
 def test_split_research_trajectory_purged_mode_applies_embargo() -> None:
