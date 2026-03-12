@@ -28,6 +28,7 @@ from src.application.v2_services import (
     _TrajectoryStep,
     _build_date_slice_index,
     _derive_learning_targets,
+    _load_v2_runtime_settings,
     _sha256_file,
     calibrate_v2_policy,
     _load_or_build_v2_backtest_trajectory,
@@ -42,6 +43,8 @@ from src.application.v2_services import (
     run_daily_v2_live,
     run_v2_research_workflow,
 )
+from src.infrastructure import market_data
+from src.interfaces.cli.run_v2_cli import build_parser
 
 
 def _make_state() -> CompositeState:
@@ -173,6 +176,59 @@ def test_sha256_file_supports_directory_inputs(tmp_path: Path) -> None:
 
     assert first
     assert first == second
+
+
+def test_load_v2_runtime_settings_applies_tushare_token_from_config(tmp_path: Path) -> None:
+    config_path = tmp_path / "api.json"
+    config_path.write_text(
+        json.dumps(
+            {
+                "common": {
+                    "source": "tushare",
+                    "tushare_token": "token-from-config",
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    previous = market_data._resolve_tushare_token()
+    market_data.set_tushare_token(None)
+    try:
+        settings = _load_v2_runtime_settings(config_path=str(config_path))
+        assert settings["source"] == "tushare"
+        assert market_data._resolve_tushare_token() == "token-from-config"
+    finally:
+        market_data.set_tushare_token(previous)
+
+
+def test_run_v2_cli_accepts_tushare_token_override() -> None:
+    parser = build_parser()
+    args = parser.parse_args(["daily-run", "--tushare-token", "demo-token"])
+    assert args.tushare_token == "demo-token"
+
+
+def test_explicit_universe_file_disables_default_universe_tier(tmp_path: Path) -> None:
+    config_path = tmp_path / "api.json"
+    config_path.write_text(
+        json.dumps(
+            {
+                "daily": {
+                    "universe_tier": "favorites_16",
+                    "universe_file": "config/universe_auto_longtrain.json",
+                    "universe_limit": 16,
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    settings = _load_v2_runtime_settings(
+        config_path=str(config_path),
+        universe_file="config/universe_all_a_3y_local_ready_nost_no_kc_cy_stable3y.json",
+        universe_limit=300,
+    )
+    assert settings["universe_file"] == "config/universe_all_a_3y_local_ready_nost_no_kc_cy_stable3y.json"
+    assert settings["universe_limit"] == 300
+    assert settings["universe_tier"] == ""
 
 
 def test_generated_80_learning_targets_prefer_realizable_alpha_and_ranking() -> None:

@@ -84,7 +84,7 @@ from src.infrastructure.v2_info_fusion import (
     top_positive_stock_signals,
 )
 from src.infrastructure.market_context import build_market_context_features
-from src.infrastructure.market_data import load_symbol_daily
+from src.infrastructure.market_data import load_symbol_daily, set_tushare_token
 from src.infrastructure.modeling import (
     LogisticBinaryModel,
     MLPBinaryModel,
@@ -107,6 +107,26 @@ def _coalesce(primary: object, secondary: object, default: object) -> object:
     if secondary is not None:
         return secondary
     return default
+
+
+def _configure_v2_tushare_token(
+    *,
+    explicit_token: str | None = None,
+    daily: dict[str, object] | None = None,
+    common: dict[str, object] | None = None,
+) -> None:
+    candidates: list[object] = [explicit_token]
+    if isinstance(daily, dict):
+        candidates.append(daily.get("tushare_token"))
+    if isinstance(common, dict):
+        candidates.append(common.get("tushare_token"))
+    for candidate in candidates:
+        if candidate is None:
+            continue
+        token = str(candidate).strip()
+        if token:
+            set_tushare_token(token)
+            return
 
 
 def _parse_boolish(value: object, default: bool = False) -> bool:
@@ -1272,6 +1292,7 @@ def _load_v2_runtime_settings(
     *,
     config_path: str,
     source: str | None = None,
+    tushare_token: str | None = None,
     universe_file: str | None = None,
     universe_limit: int | None = None,
     universe_tier: str | None = None,
@@ -1300,9 +1321,26 @@ def _load_v2_runtime_settings(
 
     common = payload.get("common", {}) if isinstance(payload.get("common"), dict) else {}
     daily = payload.get("daily", {}) if isinstance(payload.get("daily"), dict) else {}
+    _configure_v2_tushare_token(explicit_token=tushare_token, daily=daily, common=common)
 
     def pick(key: str, default: object) -> object:
         return _coalesce(daily.get(key), common.get(key), default)
+
+    resolved_universe_file = (
+        str(universe_file).strip()
+        if universe_file is not None and str(universe_file).strip()
+        else str(pick("universe_file", "config/universe_smoke_5.json"))
+    )
+    resolved_universe_limit = int(
+        universe_limit
+        if universe_limit is not None
+        else int(pick("universe_limit", 5))
+    )
+    resolved_universe_tier = (
+        str(universe_tier).strip()
+        if universe_tier is not None and str(universe_tier).strip()
+        else ("" if resolved_universe_file else str(pick("universe_tier", "")))
+    )
 
     return {
         "config_path": str(config_path),
@@ -1328,11 +1366,7 @@ def _load_v2_runtime_settings(
             if us_index_source is not None and str(us_index_source).strip()
             else str(pick("us_index_source", "akshare")).strip()
         ),
-        "universe_tier": (
-            str(universe_tier).strip()
-            if universe_tier is not None and str(universe_tier).strip()
-            else str(pick("universe_tier", ""))
-        ),
+        "universe_tier": resolved_universe_tier,
         "active_default_universe_tier": str(pick("active_default_universe_tier", "favorites_16")),
         "candidate_default_universe_tier": str(pick("candidate_default_universe_tier", "generated_80")),
         "favorites_universe_file": str(pick("favorites_universe_file", "config/universe_favorites.json")),
@@ -1442,16 +1476,8 @@ def _load_v2_runtime_settings(
                 "delisting_risk",
             ),
         ),
-        "universe_file": (
-            str(universe_file).strip()
-            if universe_file is not None and str(universe_file).strip()
-            else str(pick("universe_file", "config/universe_smoke_5.json"))
-        ),
-        "universe_limit": int(
-            universe_limit
-            if universe_limit is not None
-            else int(pick("universe_limit", 5))
-        ),
+        "universe_file": resolved_universe_file,
+        "universe_limit": resolved_universe_limit,
     }
 
 

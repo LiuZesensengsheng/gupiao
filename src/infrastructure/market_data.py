@@ -226,12 +226,25 @@ def fetch_tushare_daily(
     start_date = start.replace("-", "")
     end_date = end.replace("-", "")
 
+    def _looks_like_tushare_index() -> bool:
+        if info.exchange == "SH" and info.code.startswith("000"):
+            return True
+        if info.exchange == "SZ" and info.code.startswith("399"):
+            return True
+        return False
+
     try:
-        if info.code.startswith(("0", "3", "6", "8", "9")):
+        if _looks_like_tushare_index():
+            raw = pro.index_daily(ts_code=ts_code, start_date=start_date, end_date=end_date)
+        elif info.code.startswith(("0", "3", "6", "8", "9")):
             raw = pro.daily(ts_code=ts_code, start_date=start_date, end_date=end_date)
         else:
             raw = pro.index_daily(ts_code=ts_code, start_date=start_date, end_date=end_date)
     except Exception as exc:
+        if _looks_like_tushare_index() and "没有接口访问权限" in str(exc):
+            raise DataError(
+                f"{symbol}: tushare index_daily permission missing; see https://tushare.pro/document/1?doc_id=108"
+            ) from exc
         raise DataError(f"{symbol}: tushare request failed: {exc}") from exc
 
     if raw is None or raw.empty:
@@ -241,6 +254,10 @@ def fetch_tushare_daily(
         except Exception:
             pass
 
+    if (raw is None or raw.empty) and _looks_like_tushare_index():
+        raise DataError(
+            f"{symbol}: tushare returned no index bars; confirm index_daily permission at https://tushare.pro/document/1?doc_id=108"
+        )
     if raw is None or raw.empty:
         raise DataError(f"{symbol}: tushare returned no daily bars")
 

@@ -20,6 +20,7 @@ from src.application.v2_workflow import (
     build_research_run_blueprint,
     describe_v2_stack,
 )
+from src.infrastructure.market_data import set_tushare_token
 from src.interfaces.presenters.html_dashboard import write_v2_daily_dashboard, write_v2_research_dashboard
 from src.interfaces.presenters.markdown_reports import write_v2_daily_report, write_v2_research_report
 
@@ -34,6 +35,7 @@ def build_parser() -> argparse.ArgumentParser:
     daily.add_argument("--strategy", default="swing_v2", help="Strategy snapshot id")
     daily.add_argument("--config", default="config/api.json", help="Runtime config path for live mode")
     daily.add_argument("--source", default=None, help="Optional source override")
+    daily.add_argument("--tushare-token", dest="tushare_token", default=None, help="Optional Tushare token override")
     daily.add_argument("--universe-tier", dest="universe_tier", default=None, help="Optional predefined universe tier override")
     daily.add_argument("--universe-file", dest="universe_file", default=None, help="Optional universe file override")
     daily.add_argument("--universe-limit", dest="universe_limit", type=int, default=None, help="Optional universe size override")
@@ -68,6 +70,7 @@ def build_parser() -> argparse.ArgumentParser:
     research.add_argument("--strategy", default="swing_v2", help="Target strategy id")
     research.add_argument("--config", default="config/api.json", help="Runtime config path")
     research.add_argument("--source", default=None, help="Optional source override")
+    research.add_argument("--tushare-token", dest="tushare_token", default=None, help="Optional Tushare token override")
     research.add_argument("--universe-tier", dest="universe_tier", default=None, help="Optional predefined universe tier override")
     research.add_argument("--universe-file", dest="universe_file", default=None, help="Optional universe file override")
     research.add_argument("--universe-limit", dest="universe_limit", type=int, default=None, help="Optional universe size override")
@@ -107,6 +110,7 @@ def build_parser() -> argparse.ArgumentParser:
     matrix.add_argument("--strategy", default="swing_v2", help="Target strategy id")
     matrix.add_argument("--config", default="config/api.json", help="Runtime config path")
     matrix.add_argument("--source", default=None, help="Optional source override")
+    matrix.add_argument("--tushare-token", dest="tushare_token", default=None, help="Optional Tushare token override")
     matrix.add_argument("--report", default="reports/v2_research_report.md", help="Markdown report output path for the last run")
     matrix.add_argument("--dashboard", default="reports/v2_research_dashboard.html", help="HTML dashboard output path for the last run")
     matrix.add_argument("--artifact-root", default="artifacts/v2", help="Artifact output root for research runs")
@@ -130,6 +134,9 @@ def _print_blueprint(title: str, strategy: str, stages: list[tuple[str, str, str
 
 def main() -> int:
     args = build_parser().parse_args()
+    token_override = getattr(args, "tushare_token", None)
+    if token_override is not None and str(token_override).strip():
+        set_tushare_token(str(token_override))
 
     if args.task == "describe":
         print(describe_v2_stack())
