@@ -6,9 +6,11 @@ from typing import Callable
 
 from src.application.v2_contracts import (
     CapitalFlowState,
+    CandidateSelectionState,
     CompositeState,
     CrossSectionForecastState,
     InfoAggregateState,
+    MainlineState,
     MarketForecastState,
     MacroContextState,
     SectorForecastState,
@@ -59,6 +61,8 @@ def decode_composite_state(payload: object) -> CompositeState | None:
         cross = CrossSectionForecastState(**cross_raw)
         sectors = [SectorForecastState(**item) for item in sectors_raw if isinstance(item, dict)]
         stocks = [StockForecastState(**item) for item in stocks_raw if isinstance(item, dict)]
+        candidate_selection_raw = payload.get("candidate_selection", payload.get("candidate_selection_state", {}))
+        mainlines_raw = payload.get("mainlines", [])
         market_info_raw = payload.get("market_info_state", {})
         sector_info_raw = payload.get("sector_info_states", {})
         stock_info_raw = payload.get("stock_info_states", {})
@@ -69,6 +73,10 @@ def decode_composite_state(payload: object) -> CompositeState | None:
             stocks=stocks,
             strategy_mode=str(payload.get("strategy_mode", "")),
             risk_regime=str(payload.get("risk_regime", "")),
+            candidate_selection=CandidateSelectionState(**candidate_selection_raw)
+            if isinstance(candidate_selection_raw, dict)
+            else CandidateSelectionState(),
+            mainlines=[MainlineState(**item) for item in mainlines_raw if isinstance(item, dict)],
             market_info_state=InfoAggregateState(**market_info_raw) if isinstance(market_info_raw, dict) else InfoAggregateState(),
             sector_info_states={
                 str(key): InfoAggregateState(**value)
@@ -99,6 +107,8 @@ def serialize_composite_state(state: CompositeState) -> dict[str, object]:
         "stocks": [asdict(item) for item in getattr(state, "stocks", [])],
         "strategy_mode": str(getattr(state, "strategy_mode", "")),
         "risk_regime": str(getattr(state, "risk_regime", "")),
+        "candidate_selection": asdict(getattr(state, "candidate_selection", CandidateSelectionState())),
+        "mainlines": [asdict(item) for item in getattr(state, "mainlines", [])],
         "market_info_state": asdict(getattr(state, "market_info_state", InfoAggregateState())),
         "sector_info_states": {
             str(key): asdict(value)

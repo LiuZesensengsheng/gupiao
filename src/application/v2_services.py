@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import pickle
 import time
 from dataclasses import asdict, dataclass, replace
@@ -49,6 +50,15 @@ from src.application.v2_backtest_cache_support import (
     load_pickle_cache as _load_pickle_cache_external,
     prepared_backtest_cache_path as _prepared_backtest_cache_path_external,
     store_pickle_cache as _store_pickle_cache_external,
+)
+from src.application.v2_candidate_selection import (
+    build_candidate_selection_state as _build_candidate_selection_state_external,
+    candidate_risk_snapshot as _candidate_risk_snapshot_external,
+    candidate_stocks_from_state as _candidate_stocks_from_state_external,
+)
+from src.application.v2_mainline_support import (
+    build_mainline_states as _build_mainline_states_external,
+    dominant_mainline_sectors as _dominant_mainline_sectors_external,
 )
 from src.application.v2_publish_support import (
     load_backtest_payload_for_run as _load_backtest_payload_for_run_external,
@@ -139,6 +149,7 @@ def _configure_v2_tushare_token(
         token = str(candidate).strip()
         if token:
             set_tushare_token(token)
+            os.environ["TUSHARE_TOKEN"] = token
             return
 
 
@@ -499,6 +510,17 @@ def _enrich_state_with_info(
                 "shadow_prob_20d": float(shadow_20d),
             }
         )
+    updated_mainlines = _build_mainline_states_external(
+        market=state.market,
+        cross_section=state.cross_section,
+        sectors=state.sectors,
+        stocks=state.stocks,
+        stock_score_fn=_stock_policy_score,
+        sector_info_states=updated_sector_states,
+        stock_info_states=updated_stock_states,
+        capital_flow_state=state.capital_flow_state,
+        macro_context_state=state.macro_context_state,
+    )
     return CompositeState(
         market=state.market,
         cross_section=state.cross_section,
@@ -506,6 +528,8 @@ def _enrich_state_with_info(
         stocks=state.stocks,
         strategy_mode=state.strategy_mode,
         risk_regime=state.risk_regime,
+        candidate_selection=getattr(state, "candidate_selection", None) or state.candidate_selection,
+        mainlines=updated_mainlines,
         market_info_state=market_info_state,
         sector_info_states=updated_sector_states,
         stock_info_states=updated_stock_states,
@@ -557,12 +581,24 @@ def _attach_external_signals_to_composite_state(
         as_of_date=as_of_date,
         info_items=info_items,
     )
+    enriched_state = attach_external_signals_to_state(
+        state=state,
+        capital_flow_state=package["capital_flow_state"],
+        macro_context_state=package["macro_context_state"],
+    )
+    refreshed_mainlines = _build_mainline_states_external(
+        market=enriched_state.market,
+        cross_section=enriched_state.cross_section,
+        sectors=enriched_state.sectors,
+        stocks=enriched_state.stocks,
+        stock_score_fn=_stock_policy_score,
+        sector_info_states=getattr(enriched_state, "sector_info_states", {}),
+        stock_info_states=getattr(enriched_state, "stock_info_states", {}),
+        capital_flow_state=enriched_state.capital_flow_state,
+        macro_context_state=enriched_state.macro_context_state,
+    )
     return (
-        attach_external_signals_to_state(
-            state=state,
-            capital_flow_state=package["capital_flow_state"],
-            macro_context_state=package["macro_context_state"],
-        ),
+        replace(enriched_state, mainlines=refreshed_mainlines),
         package,
     )
 
@@ -952,16 +988,19 @@ def _alpha_score_components(stock: StockForecastState) -> dict[str, float]:
     up_20d = float(getattr(stock, "up_20d_prob", 0.5))
     up_2d = float(getattr(stock, "up_2d_prob", 0.65 * up_1d + 0.35 * up_5d))
     up_3d = float(getattr(stock, "up_3d_prob", 0.35 * up_1d + 0.65 * up_5d))
+    excess_vs_sector = float(getattr(stock, "excess_vs_sector_prob", 0.5))
+    event_impact = float(getattr(stock, "event_impact_score", 0.5))
+    tradeability_score = float(getattr(stock, "tradeability_score", 0.5))
     if abs(base_alpha_score) <= 1e-12:
         base_components = {
-            "short": 0.12 * up_1d,
-            "two": 0.14 * up_2d,
-            "three": 0.17 * up_3d,
-            "five": 0.18 * up_5d,
-            "mid": 0.14 * up_20d,
-            "excess": 0.15 * float(stock.excess_vs_sector_prob),
-            "tradeability": 0.07 * float(stock.tradeability_score),
-            "event": 0.03 * float(stock.event_impact_score),
+            "short": 0.08 * up_1d,
+            "two": 0.10 * up_2d,
+            "three": 0.13 * up_3d,
+            "five": 0.20 * up_5d,
+            "mid": 0.20 * up_20d,
+            "excess": 0.18 * excess_vs_sector,
+            "tradeability": 0.07 * tradeability_score,
+            "event": 0.04 * event_impact,
         }
         base_alpha_score = float(sum(base_components.values()))
     else:
@@ -977,22 +1016,54 @@ def _alpha_score_components(stock: StockForecastState) -> dict[str, float]:
             1.0,
         )
     )
-    execution_risk = float(_clip(1.0 - float(stock.tradeability_score), 0.0, 1.0))
-    event_risk = float(_clip((0.55 - float(stock.event_impact_score)) / 0.55, 0.0, 1.0))
+    execution_risk = float(_clip(1.0 - tradeability_score, 0.0, 1.0))
+    event_risk = float(_clip((0.55 - event_impact) / 0.55, 0.0, 1.0))
+    medium_edge = float(_clip(0.58 * (up_20d - 0.50) + 0.42 * (up_5d - 0.50), 0.0, 0.35))
+    sector_edge = float(_clip(excess_vs_sector - 0.50, 0.0, 0.30))
+    trend_alignment = float(
+        _clip(
+            0.55 * max(0.0, up_3d - up_1d)
+            + 0.75 * max(0.0, up_5d - up_2d)
+            + 0.90 * max(0.0, up_20d - up_5d),
+            0.0,
+            1.0,
+        )
+    )
+    stability_bonus = float(_clip((0.16 - horizon_dispersion) / 0.16, 0.0, 1.0))
+    quality_bonus = float(_clip(0.65 * tradeability_score + 0.35 * event_impact - 0.55, 0.0, 0.35))
+    reversal_penalty = float(_clip(up_1d - max(up_5d, up_20d), 0.0, 0.35))
+    weak_mid_penalty = float(_clip(0.52 - up_20d, 0.0, 0.20))
     risk_penalty = float(
         0.16 * horizon_dispersion
         + 0.12 * execution_risk
         + 0.08 * event_risk
+        + 0.10 * reversal_penalty
+        + 0.08 * weak_mid_penalty
+    )
+    selection_bonus = float(
+        0.18 * medium_edge
+        + 0.14 * sector_edge
+        + 0.10 * trend_alignment
+        + 0.08 * stability_bonus
+        + 0.06 * quality_bonus
     )
     status_penalty = float(_status_score_penalty(getattr(stock, "tradability_status", "normal")))
     raw = dict(base_components)
     raw["base_alpha_score"] = float(base_alpha_score)
+    raw["medium_edge"] = medium_edge
+    raw["sector_edge"] = sector_edge
+    raw["trend_alignment"] = trend_alignment
+    raw["stability_bonus"] = stability_bonus
+    raw["quality_bonus"] = quality_bonus
+    raw["selection_bonus"] = selection_bonus
     raw["horizon_dispersion"] = horizon_dispersion
     raw["execution_risk"] = execution_risk
     raw["event_risk"] = event_risk
+    raw["reversal_penalty"] = reversal_penalty
+    raw["weak_mid_penalty"] = weak_mid_penalty
     raw["risk_penalty"] = risk_penalty
     raw["status_penalty"] = status_penalty
-    raw["alpha_score"] = float(base_alpha_score - risk_penalty - status_penalty)
+    raw["alpha_score"] = float(base_alpha_score + selection_bonus - risk_penalty - status_penalty)
     return raw
 
 
@@ -1824,6 +1895,23 @@ def compose_state(
         key=lambda item: (_stock_policy_score(item), item.up_20d_prob, item.excess_vs_sector_prob),
         reverse=True,
     )
+    mainlines = _build_mainline_states_external(
+        market=market,
+        cross_section=cross_section,
+        sectors=ordered_sectors,
+        stocks=ordered_stocks,
+        stock_score_fn=_stock_policy_score,
+    )
+    candidate_selection = _build_candidate_selection_state_external(
+        market=market,
+        cross_section=cross_section,
+        sectors=ordered_sectors,
+        stocks=ordered_stocks,
+        mainlines=mainlines,
+        strategy_mode=strategy_mode,
+        risk_regime=risk_regime,
+        stock_score_fn=_stock_policy_score,
+    )
     return CompositeState(
         market=market,
         cross_section=cross_section,
@@ -1831,6 +1919,8 @@ def compose_state(
         stocks=ordered_stocks,
         strategy_mode=strategy_mode,
         risk_regime=risk_regime,
+        candidate_selection=candidate_selection,
+        mainlines=mainlines,
     )
 
 
@@ -1879,17 +1969,58 @@ def _alpha_opportunity_metrics(stocks: Iterable[StockForecastState]) -> dict[str
     }
 
 
+def _mainline_preference_maps(
+    mainlines: Iterable[MainlineState],
+    *,
+    risk_cutoff: float,
+) -> tuple[dict[str, float], dict[str, float], list[MainlineState]]:
+    confirmed: list[MainlineState] = []
+    sector_boosts: dict[str, float] = {}
+    symbol_boosts: dict[str, float] = {}
+    rows = list(mainlines or [])[:3]
+    top_conviction = max((float(getattr(item, "conviction", 0.0)) for item in rows), default=0.0)
+    cutoff = max(0.30, top_conviction - 0.08)
+    for rank, mainline in enumerate(rows):
+        conviction = float(getattr(mainline, "conviction", 0.0))
+        event_risk = float(getattr(mainline, "event_risk_level", 0.0))
+        if conviction < cutoff or event_risk >= float(risk_cutoff):
+            continue
+        leadership = float(getattr(mainline, "leadership", 0.0))
+        catalyst = float(getattr(mainline, "catalyst_strength", 0.0))
+        boost = float(
+            _clip(
+                0.05
+                + 0.28 * max(0.0, conviction - cutoff)
+                + 0.06 * leadership
+                + 0.05 * catalyst
+                - 0.02 * rank,
+                0.03,
+                0.16,
+            )
+        )
+        confirmed.append(mainline)
+        for sector in getattr(mainline, "sectors", []):
+            sector_key = str(sector)
+            sector_boosts[sector_key] = max(sector_boosts.get(sector_key, 0.0), boost)
+        for symbol in getattr(mainline, "representative_symbols", []):
+            symbol_key = str(symbol)
+            symbol_boosts[symbol_key] = max(symbol_boosts.get(symbol_key, 0.0), boost + 0.03)
+    return sector_boosts, symbol_boosts, confirmed
+
+
 def _ranked_sector_budgets_with_alpha(
     *,
     sectors: Iterable[SectorForecastState],
     stocks: Iterable[StockForecastState],
     target_exposure: float,
+    sector_score_adjustments: dict[str, float] | None = None,
 ) -> dict[str, float]:
     return _ranked_sector_budgets_with_alpha_external(
         sectors=sectors,
         stocks=stocks,
         target_exposure=target_exposure,
         stock_score_fn=_stock_policy_score,
+        sector_score_adjustments=sector_score_adjustments,
     )
 
 
@@ -1944,6 +2075,7 @@ def _allocate_with_sector_budgets(
     target_position_count: int,
     sector_strengths: dict[str, float] | None = None,
     max_single_position: float = 0.35,
+    symbol_score_adjustments: dict[str, float] | None = None,
 ) -> dict[str, float]:
     return _allocate_with_sector_budgets_external(
         stocks=stocks,
@@ -1952,6 +2084,7 @@ def _allocate_with_sector_budgets(
         stock_score_fn=_stock_policy_score,
         sector_strengths=sector_strengths,
         max_single_position=max_single_position,
+        symbol_score_adjustments=symbol_score_adjustments,
     )
 
 
@@ -2162,7 +2295,16 @@ def apply_policy(
     turnover_cap = float(policy_spec.risk_off_turnover_cap)
     intraday_t_allowed = False
     risk_notes: list[str] = []
-    alpha_metrics = _alpha_opportunity_metrics(state.stocks)
+    candidate_stocks = _candidate_stocks_from_state_external(state)
+    candidate_selection = getattr(state, "candidate_selection", None)
+    alpha_metrics = _alpha_opportunity_metrics(candidate_stocks)
+    candidate_risk = _candidate_risk_snapshot_external(candidate_stocks)
+    mainlines = list(getattr(state, "mainlines", []))
+    dominant_mainline_sectors = _dominant_mainline_sectors_external(mainlines)
+    mainline_sector_boosts, mainline_symbol_boosts, confirmed_mainlines = _mainline_preference_maps(
+        mainlines,
+        risk_cutoff=float(policy_spec.event_risk_cutoff),
+    )
     alpha_headroom = float(alpha_metrics["alpha_headroom"])
     alpha_breadth = float(alpha_metrics["breadth_ratio"])
     top_alpha = float(alpha_metrics["top_score"])
@@ -2232,6 +2374,10 @@ def apply_policy(
         target_exposure *= 0.90
         turnover_cap = min(turnover_cap, 0.22)
         risk_notes.append("Drawdown risk elevated: mild exposure trim.")
+    elif market.drawdown_risk >= 0.35:
+        target_exposure *= 0.94
+        turnover_cap = min(turnover_cap, 0.20)
+        risk_notes.append("Intermediate drawdown risk: extra exposure trim.")
     if cross.fund_flow_strength < 0.0:
         target_exposure *= 0.94
         risk_notes.append("Fund flow weak: mild exposure trim.")
@@ -2270,6 +2416,52 @@ def apply_policy(
         turnover_cap = min(0.45, turnover_cap + 0.03)
         risk_notes.append("Top alpha concentration supports measured rotation.")
 
+    if mainlines:
+        top_mainline = mainlines[0]
+        if float(top_mainline.event_risk_level) >= float(policy_spec.event_risk_cutoff):
+            target_exposure *= 0.94
+            turnover_cap = min(turnover_cap, 0.20)
+            risk_notes.append(f"Mainline {top_mainline.name} is risk-watched: exposure trimmed.")
+        elif (
+            float(top_mainline.conviction) >= 0.62
+            and float(top_mainline.catalyst_strength) >= 0.24
+            and state.risk_regime != "risk_off"
+        ):
+            target_exposure = min(1.0, target_exposure + 0.03)
+            target_position_count = min(5, target_position_count + 1)
+            risk_notes.append(f"Mainline {top_mainline.name} confirmed: measured exposure support.")
+    if confirmed_mainlines:
+        target_position_count = max(target_position_count, min(4, len(confirmed_mainlines) + 1))
+        if state.risk_regime != "risk_off":
+            turnover_cap = min(0.40, turnover_cap + 0.02)
+        risk_notes.append(
+            "Mainline budgets prioritized: " + ", ".join(str(item.name) for item in confirmed_mainlines[:3])
+        )
+
+    if float(candidate_risk["fragile_ratio"]) >= 0.35:
+        target_exposure *= 0.92
+        turnover_cap = min(turnover_cap, 0.20)
+        risk_notes.append("Candidate set fragile: exposure and turnover trimmed.")
+    elif float(candidate_risk["fragile_ratio"]) >= 0.20 and state.risk_regime != "risk_on":
+        target_exposure *= 0.95
+        risk_notes.append("Candidate set mildly fragile under cautious regime: exposure trimmed.")
+    if float(candidate_risk["reversal_ratio"]) >= 0.25:
+        turnover_cap = min(turnover_cap, 0.18)
+        risk_notes.append("Short-term reversal risk elevated across candidates: turnover capped.")
+    if (
+        float(candidate_risk["durability_score"]) <= 0.54
+        and (float(market.drawdown_risk) >= 0.30 or float(cross.weak_stock_ratio) >= 0.48)
+    ):
+        target_exposure *= 0.94
+        risk_notes.append("Candidate durability soft in a fragile tape: extra exposure trim.")
+
+    if candidate_selection is not None and len(candidate_stocks) < len(state.stocks):
+        risk_notes.append(
+            f"Candidate shortlist active: {len(candidate_stocks)}/{len(state.stocks)} names after macro-sector screening."
+        )
+    if candidate_stocks:
+        target_position_count = min(target_position_count, len(candidate_stocks))
+
     target_exposure = _clip(target_exposure, regime_floor, 1.0)
     max_single_position = 0.35
     if market.volatility_regime == "high":
@@ -2278,15 +2470,53 @@ def apply_policy(
         max_single_position = min(max_single_position, 0.22)
     if cross.growth_vs_value_bias < -0.08:
         max_single_position = min(max_single_position, 0.20)
+    if float(candidate_risk["fragile_ratio"]) >= 0.20:
+        max_single_position = min(max_single_position, 0.20 if state.risk_regime == "risk_on" else 0.18)
+        risk_notes.append("Candidate fragility keeps single-name sizing conservative.")
+    if (
+        candidate_selection is not None
+        and int(getattr(candidate_selection, "total_scored", 0)) >= 120
+        and int(getattr(candidate_selection, "shortlist_size", 0)) >= 10
+    ):
+        target_position_count = max(target_position_count, 3 if state.risk_regime != "risk_off" else 2)
+        max_single_position = min(max_single_position, 0.18 if state.risk_regime == "risk_on" else 0.16)
+        risk_notes.append("Large-universe shortlist: concentration spread across more names.")
+    if float(market.drawdown_risk) >= 0.35 or float(cross.weak_stock_ratio) >= 0.50:
+        max_single_position = min(max_single_position, 0.18 if state.risk_regime == "risk_on" else 0.16)
+        risk_notes.append("Fragile tape: single-name cap tightened.")
     if alpha_breadth >= 0.12 and alpha_headroom >= 0.02:
         target_position_count = max(target_position_count, 2)
         max_single_position = min(max_single_position, 0.18 if state.risk_regime == "risk_off" else 0.22)
         risk_notes.append("Alpha breadth strong: concentration reduced across more names.")
     target_position_count = int(np.clip(target_position_count, 1, 5))
+    candidate_sector_names = set(
+        getattr(candidate_selection, "shortlisted_sectors", []) if candidate_selection is not None else []
+    )
+    if dominant_mainline_sectors:
+        candidate_sector_names.update(dominant_mainline_sectors)
+    policy_sectors = [
+        sector for sector in state.sectors
+        if not candidate_sector_names or str(sector.sector) in candidate_sector_names
+    ]
+    if not policy_sectors:
+        policy_sectors = list(state.sectors)
+    if mainline_sector_boosts:
+        policy_sectors = sorted(
+            policy_sectors,
+            key=lambda sector: (
+                float(mainline_sector_boosts.get(str(sector.sector), 0.0)),
+                float(sector.up_20d_prob),
+                float(sector.relative_strength),
+            ),
+            reverse=True,
+        )
+    if not candidate_stocks:
+        candidate_stocks = list(state.stocks)
     desired_sector_budgets = _ranked_sector_budgets_with_alpha(
-        sectors=state.sectors[: max(1, target_position_count)],
-        stocks=state.stocks,
+        sectors=policy_sectors[: max(1, target_position_count)],
+        stocks=candidate_stocks,
         target_exposure=target_exposure,
+        sector_score_adjustments=mainline_sector_boosts,
     )
     desired_sector_budgets, sector_cap_notes = _cap_sector_budgets(
         sector_budgets=desired_sector_budgets,
@@ -2296,7 +2526,7 @@ def apply_policy(
     )
     risk_notes.extend(sector_cap_notes)
     desired_symbol_target_weights = _allocate_with_sector_budgets(
-        stocks=state.stocks,
+        stocks=candidate_stocks,
         sector_budgets=desired_sector_budgets,
         target_position_count=int(target_position_count),
         sector_strengths={
@@ -2304,6 +2534,7 @@ def apply_policy(
             for sector, weight in desired_sector_budgets.items()
         },
         max_single_position=float(max_single_position),
+        symbol_score_adjustments=mainline_symbol_boosts,
     )
     desired_symbol_target_weights, external_signal_notes = _apply_external_signal_weight_tilts(
         weights=desired_symbol_target_weights,
@@ -5920,6 +6151,11 @@ def _hydrate_daily_settings_from_dataset_manifest(
     return hydrated
 
 
+def _is_daily_universe_override_mismatch(exc: Exception) -> bool:
+    text = str(exc)
+    return "universe tier mismatch:" in text or "universe file mismatch:" in text
+
+
 def _build_daily_snapshot_context(
     *,
     strategy_id: str,
@@ -5991,19 +6227,62 @@ def _build_daily_snapshot_context(
         resolved_run_id = str(run_id).strip()
 
     if manifest and manifest_path is not None:
-        settings = _hydrate_daily_settings_from_dataset_manifest(
-            settings=settings,
-            manifest=manifest,
-            manifest_path=manifest_path,
-            universe_tier=universe_tier,
-            universe_file=universe_file,
-        )
-        snapshot = _build_snapshot_from_manifest(
-            strategy_id=strategy_id,
-            settings=settings,
-            manifest=manifest,
-            manifest_path=manifest_path,
-        )
+        try:
+            settings = _hydrate_daily_settings_from_dataset_manifest(
+                settings=settings,
+                manifest=manifest,
+                manifest_path=manifest_path,
+                universe_tier=universe_tier,
+                universe_file=universe_file,
+            )
+            snapshot = _build_snapshot_from_manifest(
+                strategy_id=strategy_id,
+                settings=settings,
+                manifest=manifest,
+                manifest_path=manifest_path,
+            )
+        except ValueError as exc:
+            explicit_universe_override = universe_tier is not None or universe_file is not None
+            if not (allow_retrain and explicit_universe_override and _is_daily_universe_override_mismatch(exc)):
+                raise
+            _emit_progress(
+                "load-strategy-snapshot",
+                "detected explicit universe override; bypassing published snapshot and rebuilding daily state.",
+            )
+            manifest = {}
+            manifest_path = None
+            resolved_run_id = ""
+            data_window = f"{settings.get('start', '')}~{settings.get('end', '')}"
+            snapshot = build_strategy_snapshot(
+                strategy_id=strategy_id,
+                universe_id=str(settings.get("universe_id", "")).strip()
+                or Path(str(settings["universe_file"])).stem
+                or "v2_universe",
+                universe_size=int(settings.get("universe_size", settings.get("symbol_count", 0)) or 0),
+                universe_generation_rule=str(settings.get("universe_generation_rule", "")),
+                source_universe_manifest_path=str(
+                    settings.get("source_universe_manifest_path", settings.get("universe_file", ""))
+                ),
+                info_manifest_path=str(settings.get("info_manifest_path", "")),
+                info_hash=str(settings.get("info_hash", "")),
+                info_shadow_enabled=_parse_boolish(settings.get("info_shadow_enabled", False), False),
+                external_signal_manifest_path=str(settings.get("external_signal_manifest", "")),
+                external_signal_version=str(settings.get("external_signal_version", "v1")),
+                external_signal_enabled=_parse_boolish(settings.get("external_signals", False), False),
+                capital_flow_snapshot=dict(settings.get("capital_flow_snapshot", {})),
+                macro_context_snapshot=dict(settings.get("macro_context_snapshot", {})),
+                run_id="",
+                data_window=data_window,
+                model_hashes={},
+                policy_hash="",
+                universe_hash=str(settings.get("universe_hash", "")),
+                created_at=str(pd.Timestamp.now().isoformat()),
+                snapshot_hash="",
+                config_hash=_stable_json_hash(settings),
+                manifest_path="",
+                use_us_index_context=_parse_boolish(settings.get("use_us_index_context", False), False),
+                us_index_source=str(settings.get("us_index_source", "")),
+            )
     else:
         data_window = f"{settings.get('start', '')}~{settings.get('end', '')}"
         snapshot = build_strategy_snapshot(
@@ -6564,6 +6843,7 @@ def summarize_daily_run(result: DailyRunResult) -> dict[str, object]:
         "market_info_state": asdict(result.composite_state.market_info_state),
         "capital_flow_state": asdict(result.composite_state.capital_flow_state),
         "macro_context_state": asdict(result.composite_state.macro_context_state),
+        "mainlines": [asdict(item) for item in getattr(result.composite_state, "mainlines", [])],
         "policy": policy_payload,
         "top_negative_info_events": [asdict(item) for item in result.top_negative_info_events],
         "top_positive_info_signals": [asdict(item) for item in result.top_positive_info_signals],

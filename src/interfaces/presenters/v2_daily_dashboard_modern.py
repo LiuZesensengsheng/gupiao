@@ -5,6 +5,7 @@ from pathlib import Path
 
 import pandas as pd
 
+from src.application.v2_contracts import CandidateSelectionState
 from src.application.v2_contracts import DailyRunResult as V2DailyRunResult
 
 
@@ -50,6 +51,8 @@ def write_v2_daily_dashboard(out_path: str | Path, result: V2DailyRunResult) -> 
     market_info = state.market_info_state
     capital = state.capital_flow_state
     macro = state.macro_context_state
+    candidate_selection = getattr(state, "candidate_selection", CandidateSelectionState())
+    mainlines = list(getattr(state, "mainlines", []))
 
     def _stock_name(symbol: str) -> str:
         return str(name_map.get(symbol, symbol))
@@ -91,7 +94,14 @@ def write_v2_daily_dashboard(out_path: str | Path, result: V2DailyRunResult) -> 
         if float(weight) > 0.0
     }
     selected_stocks = [stock for stock in state.stocks if stock.symbol in selected_symbols]
-    watchlist_stocks = list(state.stocks[:12])
+    candidate_symbol_order = {
+        str(symbol): idx
+        for idx, symbol in enumerate(candidate_selection.shortlisted_symbols)
+    }
+    candidate_stocks = [stock for stock in state.stocks if stock.symbol in candidate_symbol_order]
+    candidate_stocks.sort(key=lambda stock: candidate_symbol_order.get(stock.symbol, len(candidate_symbol_order)))
+    watchlist_source = candidate_stocks or list(state.stocks)
+    watchlist_stocks = list(watchlist_source[:12])
     risk_notes = list(policy.risk_notes) + list(policy.execution_notes)
     top_actions = list(result.trade_actions[:6])
 
@@ -108,6 +118,16 @@ def write_v2_daily_dashboard(out_path: str | Path, result: V2DailyRunResult) -> 
     header_note = (
         f"{policy.target_position_count} slots, turnover cap {_pct(policy.turnover_cap)}, "
         f"{'rebalance' if policy.rebalance_now else 'hold'}"
+    )
+    shortlist_badge = (
+        f"{candidate_selection.shortlist_size}/{candidate_selection.total_scored} shortlisted"
+        if candidate_selection.shortlist_size and candidate_selection.total_scored
+        else f"{len(state.stocks)} names scored"
+    )
+    shortlist_note = (
+        " | ".join(candidate_selection.selection_notes[:2])
+        if candidate_selection.selection_notes
+        else "Full universe ranking in use."
     )
 
     action_rows_html = "".join(
@@ -206,6 +226,18 @@ def write_v2_daily_dashboard(out_path: str | Path, result: V2DailyRunResult) -> 
         f"<td>{_bp(item.gap)}</td>"
         "</tr>"
         for item in result.quant_info_divergence[:8]
+    )
+    mainline_rows_html = "".join(
+        "<tr>"
+        f"<td>{escape(str(item.name))}</td>"
+        f"<td>{escape(str(item.driver))}</td>"
+        f"<td>{_pct(float(item.conviction))}</td>"
+        f"<td>{_pct(float(item.breadth))}</td>"
+        f"<td>{_pct(float(item.catalyst_strength))}</td>"
+        f"<td>{_pct(float(item.event_risk_level))}</td>"
+        f"<td>{escape(', '.join(list(item.sectors)[:2]))}</td>"
+        "</tr>"
+        for item in mainlines[:5]
     )
 
     html = f"""<!doctype html>
@@ -321,6 +353,7 @@ def write_v2_daily_dashboard(out_path: str | Path, result: V2DailyRunResult) -> 
           <div class="hero-sub">
             <div>Strategy {escape(result.snapshot.strategy_id)} | As of {escape(market.as_of_date)} | Universe {escape(result.snapshot.universe_id or "custom")}</div>
             <div>Focus: {escape(action_summary)} | {escape(header_note)}</div>
+            <div>{escape(shortlist_note)}</div>
             <div>US context {"on" if result.snapshot.use_us_index_context else "off"} | source {escape(result.snapshot.us_index_source or "NA")}</div>
           </div>
         </div>
@@ -328,7 +361,7 @@ def write_v2_daily_dashboard(out_path: str | Path, result: V2DailyRunResult) -> 
           {_badge(state.strategy_mode, "neutral")}
           {_badge(state.risk_regime, "neutral")}
           {_badge("rebalance" if policy.rebalance_now else "hold", "buy" if policy.rebalance_now else "hold")}
-          {_badge(f"{len(state.stocks)} names scored", "neutral")}
+          {_badge(shortlist_badge, "neutral")}
         </div>
       </div>
       <div class="hero-strip">
@@ -364,7 +397,7 @@ def write_v2_daily_dashboard(out_path: str | Path, result: V2DailyRunResult) -> 
         <div class="callout"><strong>Sector Budget</strong><div class="budget-stack">{sector_budget_rows or "<div class='empty'>No sector budget assigned.</div>"}</div></div>
       </article>
       <article class="panel">
-        <div class="panel-title"><div><h2>Watchlist Edge</h2><p>Top-ranked candidates only. The full 300-name table is collapsed below.</p></div>{_badge(f"top {len(watchlist_stocks)}", "neutral")}</div>
+        <div class="panel-title"><div><h2>Watchlist Edge</h2><p>Shortlist-first ranking: macro and sector screening cut the universe before fine timing. The full universe stays below for audit.</p></div>{_badge(f"top {len(watchlist_stocks)}", "neutral")}</div>
         <div class="table-wrap"><table><thead><tr><th>Rank</th><th>Name</th><th>1d</th><th>5d</th><th>20d</th><th>Alpha</th><th>Tradeability</th><th>Target</th></tr></thead><tbody>{watch_rows_html or "<tr><td colspan='8'>No candidates.</td></tr>"}</tbody></table></div>
       </article>
     </section>
@@ -378,6 +411,10 @@ def write_v2_daily_dashboard(out_path: str | Path, result: V2DailyRunResult) -> 
           <div class="mini-stat"><div class="eyebrow">Northbound</div><strong>{_num(capital.northbound_net_flow, 3)}</strong><div class="metric-sub">large order {_num(capital.large_order_bias, 3)}</div></div>
           <div class="mini-stat"><div class="eyebrow">FX / Commodity</div><strong>{_pct(macro.fx_pressure)}</strong><div class="metric-sub">commodity {_pct(macro.commodity_pressure)}</div></div>
         </div>
+      </article>
+      <article class="panel">
+        <div class="panel-title"><div><h2>Mainline Radar</h2><p>Explicit market themes the strategy is willing to consume, not just sector rankings.</p></div>{_badge(f"{len(mainlines)} tracked", "neutral")}</div>
+        {"<div class='table-wrap'><table><thead><tr><th>Mainline</th><th>Driver</th><th>Conviction</th><th>Breadth</th><th>Catalyst</th><th>Risk</th><th>Sectors</th></tr></thead><tbody>" + mainline_rows_html + "</tbody></table></div>" if mainline_rows_html else "<div class='empty'>No dominant mainline detected.</div>"}
       </article>
       <article class="panel">
         <div class="panel-title"><div><h2>Info Overlay</h2><p>This section should only matter when the overlay is non-empty.</p></div>{_badge("on" if result.info_shadow_enabled else "off", "neutral")}</div>

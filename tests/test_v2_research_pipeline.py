@@ -26,6 +26,7 @@ from src.application.v2_contracts import (
 from src.application.v2_services import (
     _BacktestTrajectory,
     _TrajectoryStep,
+    _build_daily_snapshot_context,
     _build_date_slice_index,
     _derive_learning_targets,
     _prepare_v2_backtest_data,
@@ -760,6 +761,196 @@ def test_daily_run_reports_clear_error_when_frozen_state_missing(monkeypatch: py
             artifact_root=str(tmp_path / "artifacts" / "v2"),
             cache_root=str(tmp_path / "artifacts" / "v2" / "cache"),
             snapshot_path=str(manifest_path),
+        )
+
+
+def test_daily_snapshot_context_bypasses_manifest_on_explicit_universe_override_with_retrain(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    requested_universe = tmp_path / "universe_300.json"
+    requested_universe.write_text(json.dumps({"stocks": []}, ensure_ascii=False), encoding="utf-8")
+    manifest_universe = tmp_path / "favorites_16.json"
+    manifest_universe.write_text(json.dumps({"stocks": []}, ensure_ascii=False), encoding="utf-8")
+    dataset_path = tmp_path / "dataset_manifest.json"
+    dataset_path.write_text(
+        json.dumps(
+            {
+                "universe_file": str(manifest_universe),
+                "universe_limit": 16,
+                "universe_tier": "favorites_16",
+                "universe_id": "favorites_16",
+                "universe_size": 16,
+                "symbol_count": 16,
+            },
+            ensure_ascii=False,
+            indent=2,
+        ),
+        encoding="utf-8",
+    )
+    manifest_path = tmp_path / "research_manifest.json"
+    manifest = {
+        "run_id": "20260312_100000",
+        "strategy_id": "swing_v2",
+        "dataset_manifest": str(dataset_path),
+        "config_hash": "cfg",
+        "snapshot_hash": "snap",
+        "policy_hash": "policy",
+        "universe_hash": "uni",
+        "model_hashes": {},
+    }
+    manifest_path.write_text(json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8")
+
+    monkeypatch.setattr(
+        "src.application.v2_services._load_v2_runtime_settings",
+        lambda **_: {
+            "config_path": "config/api.json",
+            "watchlist": "config/watchlist.json",
+            "source": "local",
+            "data_dir": "data",
+            "start": "2024-01-01",
+            "end": "2026-03-01",
+            "universe_file": str(requested_universe),
+            "universe_limit": 300,
+            "universe_tier": "",
+            "universe_id": "universe_300",
+            "universe_size": 300,
+            "symbol_count": 300,
+            "use_info_fusion": False,
+            "use_us_index_context": False,
+            "external_signals": True,
+        },
+    )
+    monkeypatch.setattr("src.application.v2_services._resolve_v2_universe_settings", lambda settings, cache_root: settings)
+    monkeypatch.setattr(
+        "src.application.v2_services._load_research_manifest_for_daily",
+        lambda **_: (manifest, manifest_path),
+    )
+
+    ctx = _build_daily_snapshot_context(
+        strategy_id="swing_v2",
+        config_path="config/api.json",
+        source="local",
+        universe_file=str(requested_universe),
+        universe_limit=300,
+        universe_tier=None,
+        info_file=None,
+        info_lookback_days=None,
+        info_half_life_days=None,
+        use_info_fusion=None,
+        info_shadow_only=None,
+        info_types=None,
+        info_source_mode=None,
+        info_subsets=None,
+        external_signals=True,
+        event_file=None,
+        capital_flow_file=None,
+        macro_file=None,
+        use_us_index_context=False,
+        us_index_source=None,
+        artifact_root=str(tmp_path),
+        cache_root=str(tmp_path / "cache"),
+        run_id=None,
+        snapshot_path=str(manifest_path),
+        allow_retrain=True,
+    )
+
+    assert ctx.manifest == {}
+    assert ctx.manifest_path is None
+    assert ctx.snapshot.universe_id == "universe_300"
+    assert ctx.snapshot.run_id == ""
+
+
+def test_daily_snapshot_context_still_raises_on_explicit_universe_override_without_retrain(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    requested_universe = tmp_path / "universe_300.json"
+    requested_universe.write_text(json.dumps({"stocks": []}, ensure_ascii=False), encoding="utf-8")
+    manifest_universe = tmp_path / "favorites_16.json"
+    manifest_universe.write_text(json.dumps({"stocks": []}, ensure_ascii=False), encoding="utf-8")
+    dataset_path = tmp_path / "dataset_manifest.json"
+    dataset_path.write_text(
+        json.dumps(
+            {
+                "universe_file": str(manifest_universe),
+                "universe_limit": 16,
+                "universe_tier": "favorites_16",
+                "universe_id": "favorites_16",
+                "universe_size": 16,
+                "symbol_count": 16,
+            },
+            ensure_ascii=False,
+            indent=2,
+        ),
+        encoding="utf-8",
+    )
+    manifest_path = tmp_path / "research_manifest.json"
+    manifest = {
+        "run_id": "20260312_100000",
+        "strategy_id": "swing_v2",
+        "dataset_manifest": str(dataset_path),
+        "config_hash": "cfg",
+        "snapshot_hash": "snap",
+        "policy_hash": "policy",
+        "universe_hash": "uni",
+        "model_hashes": {},
+    }
+    manifest_path.write_text(json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8")
+
+    monkeypatch.setattr(
+        "src.application.v2_services._load_v2_runtime_settings",
+        lambda **_: {
+            "config_path": "config/api.json",
+            "watchlist": "config/watchlist.json",
+            "source": "local",
+            "data_dir": "data",
+            "start": "2024-01-01",
+            "end": "2026-03-01",
+            "universe_file": str(requested_universe),
+            "universe_limit": 300,
+            "universe_tier": "",
+            "universe_id": "universe_300",
+            "universe_size": 300,
+            "symbol_count": 300,
+            "use_info_fusion": False,
+            "use_us_index_context": False,
+            "external_signals": True,
+        },
+    )
+    monkeypatch.setattr("src.application.v2_services._resolve_v2_universe_settings", lambda settings, cache_root: settings)
+    monkeypatch.setattr(
+        "src.application.v2_services._load_research_manifest_for_daily",
+        lambda **_: (manifest, manifest_path),
+    )
+
+    with pytest.raises(ValueError, match="universe file mismatch"):
+        _build_daily_snapshot_context(
+            strategy_id="swing_v2",
+            config_path="config/api.json",
+            source="local",
+            universe_file=str(requested_universe),
+            universe_limit=300,
+            universe_tier=None,
+            info_file=None,
+            info_lookback_days=None,
+            info_half_life_days=None,
+            use_info_fusion=None,
+            info_shadow_only=None,
+            info_types=None,
+            info_source_mode=None,
+            info_subsets=None,
+            external_signals=True,
+            event_file=None,
+            capital_flow_file=None,
+            macro_file=None,
+            use_us_index_context=False,
+            us_index_source=None,
+            artifact_root=str(tmp_path),
+            cache_root=str(tmp_path / "cache"),
+            run_id=None,
+            snapshot_path=str(manifest_path),
+            allow_retrain=False,
         )
 
 

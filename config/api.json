@@ -1,7 +1,7 @@
 {
   "common": {
     "source": "auto",
-    "tushare_token": "",
+    "tushare_token": "ce0d71cf4f8716ca95d18a4ea489d784eb2d67eaec9f9b125336dc4d",
     "watchlist": "config/watchlist.json",
     "data_dir": "data",
     "start": "2018-01-01",

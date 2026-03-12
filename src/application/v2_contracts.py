@@ -86,6 +86,33 @@ class MacroContextState:
 
 
 @dataclass(frozen=True)
+class CandidateSelectionState:
+    shortlisted_symbols: List[str] = field(default_factory=list)
+    shortlisted_sectors: List[str] = field(default_factory=list)
+    sector_slots: Dict[str, int] = field(default_factory=dict)
+    total_scored: int = 0
+    shortlist_size: int = 0
+    shortlist_ratio: float = 0.0
+    selection_mode: str = "full_universe"
+    selection_notes: List[str] = field(default_factory=list)
+
+
+@dataclass(frozen=True)
+class MainlineState:
+    name: str
+    driver: str = "sector_leadership"
+    conviction: float = 0.0
+    breadth: float = 0.0
+    leadership: float = 0.0
+    catalyst_strength: float = 0.0
+    event_risk_level: float = 0.0
+    capital_support: float = 0.0
+    macro_alignment: float = 0.0
+    sectors: List[str] = field(default_factory=list)
+    representative_symbols: List[str] = field(default_factory=list)
+
+
+@dataclass(frozen=True)
 class InfoItem:
     date: str
     target_type: str
@@ -148,6 +175,8 @@ class CompositeState:
     stocks: List[StockForecastState]
     strategy_mode: str
     risk_regime: str
+    candidate_selection: CandidateSelectionState = field(default_factory=CandidateSelectionState)
+    mainlines: List[MainlineState] = field(default_factory=list)
     market_info_state: InfoAggregateState = field(default_factory=InfoAggregateState)
     sector_info_states: Dict[str, InfoAggregateState] = field(default_factory=dict)
     stock_info_states: Dict[str, InfoAggregateState] = field(default_factory=dict)

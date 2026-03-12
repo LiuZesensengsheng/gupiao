@@ -8,10 +8,12 @@ import pytest
 
 from src.application.v2_contracts import (
     CapitalFlowState,
+    CandidateSelectionState,
     CompositeState,
     CrossSectionForecastState,
     DailyRunResult,
     LearnedPolicyModel,
+    MainlineState,
     MarketForecastState,
     MacroContextState,
     PolicyDecision,
@@ -60,6 +62,29 @@ def _make_daily_result() -> DailyRunResult:
         ],
         strategy_mode="trend_follow",
         risk_regime="risk_on",
+        candidate_selection=CandidateSelectionState(
+            shortlisted_symbols=["AAA"],
+            shortlisted_sectors=["鏈夎壊"],
+            sector_slots={"鏈夎壊": 1},
+            total_scored=12,
+            shortlist_size=1,
+            shortlist_ratio=1.0 / 12.0,
+            selection_mode="macro_sector_shortlist",
+            selection_notes=["Macro shortlist active: 1 sector prioritized before fine timing."],
+        ),
+        mainlines=[
+            MainlineState(
+                name="资源",
+                driver="flow_supported",
+                conviction=0.64,
+                breadth=0.38,
+                leadership=0.26,
+                catalyst_strength=0.22,
+                event_risk_level=0.12,
+                sectors=["鏈夎壊"],
+                representative_symbols=["AAA"],
+            )
+        ],
         capital_flow_state=CapitalFlowState(
             northbound_net_flow=0.24,
             margin_balance_change=0.10,
@@ -803,6 +828,10 @@ def test_v2_html_dashboards_keep_key_chinese_sections(tmp_path: Path) -> None:
     assert "AAA, BBB" in daily_html
     assert "quality" in daily_html
     assert "inflow" in daily_html
+    assert "1/12 shortlisted" in daily_html
+    assert "Macro shortlist active" in daily_html
+    assert "Mainline Radar" in daily_html
+    assert "资源" in daily_html
 
     baseline = _make_backtest(0.24)
     calibrated = _make_backtest(0.26)

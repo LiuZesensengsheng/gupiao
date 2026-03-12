@@ -11,6 +11,7 @@ import pandas as pd
 
 from src.domain.entities import Security
 from src.domain.symbols import SymbolError, normalize_symbol
+from src.infrastructure.security_metadata import enrich_securities_with_metadata
 
 
 SYMBOL_FILE_PATTERN = re.compile(r"^(\d{6}\.(SH|SZ))\.csv$", re.IGNORECASE)
@@ -63,7 +64,12 @@ def _safe_symbol(value: str) -> str | None:
         return None
 
 
-def _dedupe_rows(rows: Sequence[Security], exclude_symbols: Iterable[str]) -> List[Security]:
+def _dedupe_rows(
+    rows: Sequence[Security],
+    exclude_symbols: Iterable[str],
+    *,
+    enrich_metadata: bool = True,
+) -> List[Security]:
     excluded = {normalize_symbol(x).symbol for x in exclude_symbols if _safe_symbol(x) is not None}
     out: List[Security] = []
     seen: set[str] = set()
@@ -73,7 +79,7 @@ def _dedupe_rows(rows: Sequence[Security], exclude_symbols: Iterable[str]) -> Li
             continue
         seen.add(symbol)
         out.append(Security(symbol=symbol, name=row.name or symbol, sector=row.sector or "其他"))
-    return out
+    return enrich_securities_with_metadata(out) if enrich_metadata else out
 
 
 def normalize_universe_tier(tier_id: str | None) -> str:
@@ -89,7 +95,7 @@ def normalize_universe_tier(tier_id: str | None) -> str:
     raise ValueError(f"Unsupported universe tier: {tier_id}")
 
 
-def _load_universe_file(path: str | Path) -> List[Security]:
+def _load_universe_file(path: str | Path, *, enrich_metadata: bool = True) -> List[Security]:
     file_path = Path(path)
     if not str(path).strip() or not file_path.exists():
         return []
@@ -112,7 +118,7 @@ def _load_universe_file(path: str | Path) -> List[Security]:
                     sector=str(item.get("sector", "其他")),
                 )
             )
-        return out
+        return enrich_securities_with_metadata(out) if enrich_metadata else out
 
     raw = pd.read_csv(file_path)
     if raw.empty:
@@ -132,7 +138,7 @@ def _load_universe_file(path: str | Path) -> List[Security]:
         name = symbol if name_col is None else str(row[name_col])
         sector = "其他" if sector_col is None else str(row[sector_col])
         out.append(Security(symbol=symbol, name=name, sector=sector))
-    return out
+    return enrich_securities_with_metadata(out) if enrich_metadata else out
 
 
 def _resolve_local_symbol_path(data_dir: str | Path, symbol: str) -> Path:
@@ -238,23 +244,25 @@ def build_predefined_universe(
     mode = str(spec["mode"])
     warnings: List[str] = []
     if mode == "favorites":
-        raw_rows = _load_universe_file(favorites_file)
-        rows = _dedupe_rows(raw_rows, exclude_symbols=exclude_symbols)[:limit]
+        raw_rows = _load_universe_file(favorites_file, enrich_metadata=False)
+        rows = _dedupe_rows(raw_rows, exclude_symbols=exclude_symbols, enrich_metadata=False)[:limit]
+        rows = enrich_securities_with_metadata(rows)
         source = f"favorites_file:{favorites_file}"
         generation_rule = "manual_favorites_locked"
     else:
-        base_rows = _load_universe_file(generated_base_file)
+        base_rows = _load_universe_file(generated_base_file, enrich_metadata=False)
         if not base_rows:
             base_rows = _from_data_dir(data_dir=data_dir, limit=10000)
             source = f"data_dir:{data_dir}"
         else:
             source = f"generated_base:{generated_base_file}"
-        deduped_rows = _dedupe_rows(base_rows, exclude_symbols=exclude_symbols)
+        deduped_rows = _dedupe_rows(base_rows, exclude_symbols=exclude_symbols, enrich_metadata=False)
         rows, rank_warnings = _rank_generated_universe_rows(
             rows=deduped_rows,
             data_dir=data_dir,
             limit=limit,
         )
+        rows = enrich_securities_with_metadata(rows)
         warnings.extend(rank_warnings)
         generation_rule = DEFAULT_GENERATED_UNIVERSE_RULE
     manifest_path = ""
@@ -295,7 +303,7 @@ def _from_data_dir(data_dir: str | Path, limit: int) -> List[Security]:
         out.append(Security(symbol=symbol, name=symbol, sector="其他"))
         if len(out) >= limit:
             break
-    return out
+    return enrich_securities_with_metadata(out)
 
 
 def _pick_col(raw: pd.DataFrame, candidates: list[str]) -> str | None:
@@ -341,7 +349,7 @@ def _from_akshare_spot(limit: int, min_amount: float = 1e8, exclude_st: bool = T
         out.append(Security(symbol=symbol, name=name, sector="其他"))
         if len(out) >= int(limit):
             break
-    return out
+    return enrich_securities_with_metadata(out)
 
 
 def build_candidate_universe(
@@ -355,10 +363,10 @@ def build_candidate_universe(
     warnings: List[str] = []
     limit = max(5, int(candidate_limit))
 
-    file_rows = _load_universe_file(universe_file)
+    file_rows = _load_universe_file(universe_file, enrich_metadata=False)
     if file_rows:
-        rows = _dedupe_rows(file_rows, exclude_symbols=exclude_symbols)
-        selected = rows[:limit]
+        rows = _dedupe_rows(file_rows, exclude_symbols=exclude_symbols, enrich_metadata=False)
+        selected = enrich_securities_with_metadata(rows[:limit])
         path = Path(str(universe_file))
         return DiscoveryUniverse(
             rows=selected,

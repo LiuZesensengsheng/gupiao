@@ -72,6 +72,7 @@ def ranked_sector_budgets_with_alpha(
     stocks: Iterable[StockForecastState],
     target_exposure: float,
     stock_score_fn: Callable[[StockForecastState], float],
+    sector_score_adjustments: dict[str, float] | None = None,
 ) -> dict[str, float]:
     sector_rows = list(sectors)
     if not sector_rows:
@@ -82,6 +83,7 @@ def ranked_sector_budgets_with_alpha(
     for stock in stock_rows:
         sector_alpha.setdefault(str(stock.sector), []).append(float(stock_score_fn(stock)))
 
+    score_adjustments = dict(sector_score_adjustments or {})
     raw_scores: list[float] = []
     for item in sector_rows:
         base_trend = max(0.0, float(item.up_20d_prob) - 0.50)
@@ -101,7 +103,13 @@ def ranked_sector_budgets_with_alpha(
         if float(item.up_20d_prob) < 0.50 and float(item.relative_strength) < 0.0 and alpha_top < 0.60:
             alpha_score *= 0.55
         crowding_penalty = 0.12 * max(0.0, float(item.crowding_score) - 0.55)
-        raw = max(0.0, base_score + 0.55 * alpha_score - crowding_penalty)
+        raw = max(
+            0.0,
+            base_score
+            + 0.55 * alpha_score
+            + float(score_adjustments.get(str(item.sector), 0.0))
+            - crowding_penalty,
+        )
         raw_scores.append(raw)
 
     total = float(sum(raw_scores))
@@ -232,15 +240,17 @@ def allocate_with_sector_budgets(
     stock_score_fn: Callable[[StockForecastState], float],
     sector_strengths: dict[str, float] | None = None,
     max_single_position: float = 0.35,
+    symbol_score_adjustments: dict[str, float] | None = None,
 ) -> dict[str, float]:
     sector_candidates: dict[str, list[tuple[StockForecastState, float]]] = {}
     active_budget_count = max(1, sum(1 for weight in sector_budgets.values() if float(weight) > 1e-9))
     avg_sector_budget = float(sum(max(0.0, float(weight)) for weight in sector_budgets.values()) / active_budget_count)
     strengths = dict(sector_strengths or {})
+    symbol_adjustments = dict(symbol_score_adjustments or {})
     for stock in stocks:
         if not _is_actionable_status(getattr(stock, "tradability_status", "normal")):
             continue
-        score = float(stock_score_fn(stock))
+        score = float(stock_score_fn(stock)) + float(symbol_adjustments.get(str(stock.symbol), 0.0))
         sector = str(stock.sector)
         sector_candidates.setdefault(sector, []).append((stock, score))
     available_by_sector: dict[str, list[tuple[StockForecastState, float]]] = {}
@@ -249,8 +259,10 @@ def allocate_with_sector_budgets(
         gate = 0.50
         sector_strength = float(strengths.get(sector, 0.0))
         sector_budget = float(sector_budgets.get(sector, 0.0))
-        if sector_strength < 0.10 and sector_budget <= avg_sector_budget:
+        if sector_strength < 0.35 and sector_budget <= avg_sector_budget:
             gate = 0.57
+        if sector_strength < 0.20 and sector_budget <= avg_sector_budget:
+            gate = max(gate, 0.59)
         filtered = [pair for pair in ordered if pair[1] + 1e-9 >= gate]
         if not filtered and ordered and (sector_strength >= 0.45 or sector_budget > avg_sector_budget):
             filtered = [ordered[0]]
