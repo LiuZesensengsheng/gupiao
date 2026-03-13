@@ -200,6 +200,17 @@ def write_v2_daily_dashboard(out_path: str | Path, result: V2DailyRunResult) -> 
     risk_notes_html = "".join(f"<li>{escape(note)}</li>" for note in risk_notes[:6]) or "<li>No explicit risk note.</li>"
     memory_notes_html = "".join(f"<li>{escape(note)}</li>" for note in result.memory_recall.narrative[:5]) or "<li>No memory narrative yet.</li>"
     recurring_symbols = ", ".join(str(symbol) for symbol in result.memory_recall.recurring_symbols[:6]) or "NA"
+    generator_allocations = list(result.theme_allocations or result.snapshot.theme_allocations)
+    generator_rows_html = "".join(
+        "<tr>"
+        f"<td>{escape(str(item.get('theme', 'NA')))}</td>"
+        f"<td>{int(item.get('selected_count', 0))}</td>"
+        f"<td>{int(item.get('refined_count', 0))}</td>"
+        f"<td>{int(item.get('coarse_count', 0))}</td>"
+        f"<td>{_num(float(item.get('theme_strength', 0.0)), 3)}</td>"
+        "</tr>"
+        for item in generator_allocations[:8]
+    )
 
     negative_rows_html = "".join(
         "<tr>"
@@ -369,6 +380,7 @@ def write_v2_daily_dashboard(out_path: str | Path, result: V2DailyRunResult) -> 
         <article class="hero-card"><div class="eyebrow">Market Stack</div><div class="metric">{_pct(market.up_20d_prob)}</div><div class="metric-sub">1d {_pct(market.up_1d_prob)} | 5d {_pct(market.up_5d_prob)} | 20d {_pct(market.up_20d_prob)}</div></article>
         <article class="hero-card"><div class="eyebrow">Execution State</div><div class="metric">{buy_count + sell_count}</div><div class="metric-sub">Buy {buy_count} | Sell {sell_count} | intraday T {"on" if policy.intraday_t_allowed else "off"}</div></article>
         <article class="hero-card"><div class="eyebrow">External Layer</div><div class="metric">{escape(capital.flow_regime)}</div><div class="metric-sub">Macro {escape(macro.macro_risk_level)} | info items {result.info_item_count}</div></article>
+        <article class="hero-card"><div class="eyebrow">Dynamic Universe</div><div class="metric">{int(result.selected_pool_size or result.snapshot.selected_pool_size or len(state.stocks))}</div><div class="metric-sub">coarse {int(result.coarse_pool_size or result.snapshot.coarse_pool_size)} | refined {int(result.refined_pool_size or result.snapshot.refined_pool_size)}</div></article>
       </div>
     </section>
 
@@ -399,6 +411,19 @@ def write_v2_daily_dashboard(out_path: str | Path, result: V2DailyRunResult) -> 
       <article class="panel">
         <div class="panel-title"><div><h2>Watchlist Edge</h2><p>Shortlist-first ranking: macro and sector screening cut the universe before fine timing. The full universe stays below for audit.</p></div>{_badge(f"top {len(watchlist_stocks)}", "neutral")}</div>
         <div class="table-wrap"><table><thead><tr><th>Rank</th><th>Name</th><th>1d</th><th>5d</th><th>20d</th><th>Alpha</th><th>Tradeability</th><th>Target</th></tr></thead><tbody>{watch_rows_html or "<tr><td colspan='8'>No candidates.</td></tr>"}</tbody></table></div>
+      </article>
+    </section>
+
+    <section class="section section-grid">
+      <article class="panel">
+        <div class="panel-title"><div><h2>Dynamic Universe Funnel</h2><p>Upstream funnel before shortlist and timing. This is where dynamic 300 quality gets set.</p></div>{_badge(result.generator_version or result.snapshot.generator_version or "legacy", "neutral")}</div>
+        <div class="mini-grid">
+          <div class="mini-stat"><div class="eyebrow">Coarse Pool</div><strong>{int(result.coarse_pool_size or result.snapshot.coarse_pool_size)}</strong><div class="metric-sub">fast filter stage</div></div>
+          <div class="mini-stat"><div class="eyebrow">Refined Pool</div><strong>{int(result.refined_pool_size or result.snapshot.refined_pool_size)}</strong><div class="metric-sub">theme-aware rerank</div></div>
+          <div class="mini-stat"><div class="eyebrow">Selected Pool</div><strong>{int(result.selected_pool_size or result.snapshot.selected_pool_size or len(state.stocks))}</strong><div class="metric-sub">fed into shortlist/policy</div></div>
+          <div class="mini-stat"><div class="eyebrow">Generator Hash</div><strong>{escape((result.generator_hash or result.snapshot.generator_hash or "NA")[:10])}</strong><div class="metric-sub">manifest frozen for replay</div></div>
+        </div>
+        {"<div class='table-wrap' style='margin-top:16px;'><table><thead><tr><th>Theme</th><th>Selected</th><th>Refined</th><th>Coarse</th><th>Strength</th></tr></thead><tbody>" + generator_rows_html + "</tbody></table></div>" if generator_rows_html else "<div class='empty' style='margin-top:16px;'>No dynamic universe allocation summary.</div>"}
       </article>
     </section>
 

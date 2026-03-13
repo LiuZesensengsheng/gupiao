@@ -127,6 +127,16 @@ def _make_daily_result() -> DailyRunResult:
             external_signal_manifest_path="artifacts/v2/swing_v2/20260310_210000/external_signal_manifest.json",
             external_signal_version="v1",
             external_signal_enabled=True,
+            generator_manifest_path="artifacts/v2/cache/universe_catalog/dynamic_300.generator.json",
+            generator_version="dynamic_universe_v1",
+            generator_hash="generatorhash123",
+            coarse_pool_size=1000,
+            refined_pool_size=300,
+            selected_pool_size=300,
+            theme_allocations=[
+                {"theme": "资源", "selected_count": 6, "refined_count": 12, "coarse_count": 22, "theme_strength": 0.71},
+                {"theme": "能源石油", "selected_count": 4, "refined_count": 8, "coarse_count": 16, "theme_strength": 0.65},
+            ],
             capital_flow_snapshot={
                 "flow_regime": "inflow",
                 "northbound_net_flow": 0.24,
@@ -182,6 +192,16 @@ def _make_daily_result() -> DailyRunResult:
         external_signal_manifest_path="artifacts/v2/swing_v2/20260310_210000/external_signal_manifest.json",
         external_signal_version="v1",
         external_signal_enabled=True,
+        generator_manifest_path="artifacts/v2/cache/universe_catalog/dynamic_300.generator.json",
+        generator_version="dynamic_universe_v1",
+        generator_hash="generatorhash123",
+        coarse_pool_size=1000,
+        refined_pool_size=300,
+        selected_pool_size=300,
+        theme_allocations=[
+            {"theme": "资源", "selected_count": 6, "refined_count": 12, "coarse_count": 22, "theme_strength": 0.71},
+            {"theme": "能源石油", "selected_count": 4, "refined_count": 8, "coarse_count": 16, "theme_strength": 0.65},
+        ],
         capital_flow_snapshot={
             "flow_regime": "inflow",
             "northbound_net_flow": 0.24,
@@ -717,6 +737,8 @@ def test_v2_markdown_reports_keep_key_chinese_sections(tmp_path: Path) -> None:
     assert "AAA, BBB" in daily_text
     assert "inflow" in daily_text
     assert "quality" in daily_text
+    assert "generator manifest path" in daily_text
+    assert "动态股票池" in daily_text
 
     baseline = _make_backtest(0.24)
     calibrated = _make_backtest(0.26)
@@ -827,6 +849,8 @@ def test_v2_html_dashboards_keep_key_chinese_sections(tmp_path: Path) -> None:
     assert "akshare" in daily_html
     assert "AAA, BBB" in daily_html
     assert "quality" in daily_html
+    assert "Dynamic Universe Funnel" in daily_html
+    assert "dynamic_universe_v1" in daily_html
     assert "inflow" in daily_html
     assert "1/12 shortlisted" in daily_html
     assert "Macro shortlist active" in daily_html

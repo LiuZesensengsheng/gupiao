@@ -247,6 +247,13 @@ class StrategySnapshot:
     external_signal_enabled: bool = False
     capital_flow_snapshot: Dict[str, object] = field(default_factory=dict)
     macro_context_snapshot: Dict[str, object] = field(default_factory=dict)
+    generator_manifest_path: str = ""
+    generator_version: str = ""
+    generator_hash: str = ""
+    coarse_pool_size: int = 0
+    refined_pool_size: int = 0
+    selected_pool_size: int = 0
+    theme_allocations: List[Dict[str, object]] = field(default_factory=list)
     run_id: str = ""
     data_window: str = ""
     model_hashes: Dict[str, str] = field(default_factory=dict)
@@ -276,6 +283,13 @@ class DailyRunResult:
     external_signal_enabled: bool = False
     capital_flow_snapshot: Dict[str, object] = field(default_factory=dict)
     macro_context_snapshot: Dict[str, object] = field(default_factory=dict)
+    generator_manifest_path: str = ""
+    generator_version: str = ""
+    generator_hash: str = ""
+    coarse_pool_size: int = 0
+    refined_pool_size: int = 0
+    selected_pool_size: int = 0
+    theme_allocations: List[Dict[str, object]] = field(default_factory=list)
     top_negative_info_events: List[InfoSignalRecord] = field(default_factory=list)
     top_positive_info_signals: List[InfoSignalRecord] = field(default_factory=list)
     quant_info_divergence: List[InfoDivergenceRecord] = field(default_factory=list)
@@ -309,6 +323,54 @@ class StrategyMemoryRecall:
     recent_flow_regimes: List[str] = field(default_factory=list)
     recurring_macro_risk_levels: List[str] = field(default_factory=list)
     narrative: List[str] = field(default_factory=list)
+
+
+@dataclass(frozen=True)
+class ThemeAllocationRecord:
+    theme: str
+    selected_count: int = 0
+    refined_count: int = 0
+    coarse_count: int = 0
+    eligible_count: int = 0
+    theme_strength: float = 0.0
+    cap: int = 0
+    floor: int = 0
+
+
+@dataclass(frozen=True)
+class UniverseGeneratorManifest:
+    generator_version: str
+    source_universe_path: str
+    source_universe_size: int
+    eligible_size: int
+    coarse_pool_size: int
+    refined_pool_size: int
+    selected_pool_size: int
+    generator_hash: str = ""
+    manifest_path: str = ""
+    theme_allocations: List[ThemeAllocationRecord] = field(default_factory=list)
+    warnings: List[str] = field(default_factory=list)
+    config: Dict[str, object] = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
+class DynamicUniverseResult:
+    eligible_symbols: List[str] = field(default_factory=list)
+    coarse_pool: List[Dict[str, object]] = field(default_factory=list)
+    refined_pool: List[Dict[str, object]] = field(default_factory=list)
+    selected_300: List[Dict[str, object]] = field(default_factory=list)
+    theme_allocations: List[ThemeAllocationRecord] = field(default_factory=list)
+    generator_manifest: UniverseGeneratorManifest = field(
+        default_factory=lambda: UniverseGeneratorManifest(
+            generator_version="",
+            source_universe_path="",
+            source_universe_size=0,
+            eligible_size=0,
+            coarse_pool_size=0,
+            refined_pool_size=0,
+            selected_pool_size=0,
+        )
+    )
 
 
 @dataclass(frozen=True)

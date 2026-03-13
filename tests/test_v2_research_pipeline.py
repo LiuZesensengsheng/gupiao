@@ -209,6 +209,27 @@ def test_run_v2_cli_accepts_tushare_token_override() -> None:
     assert args.tushare_token == "demo-token"
 
 
+def test_run_v2_cli_accepts_dynamic_universe_overrides() -> None:
+    parser = build_parser()
+    args = parser.parse_args(
+        [
+            "research-run",
+            "--dynamic-universe",
+            "--generator-target-size",
+            "300",
+            "--generator-coarse-size",
+            "1000",
+            "--generator-theme-aware",
+            "--generator-use-concepts",
+        ]
+    )
+    assert args.dynamic_universe is True
+    assert args.generator_target_size == 300
+    assert args.generator_coarse_size == 1000
+    assert args.generator_theme_aware is True
+    assert args.generator_use_concepts is True
+
+
 def test_explicit_universe_file_disables_default_universe_tier(tmp_path: Path) -> None:
     config_path = tmp_path / "api.json"
     config_path.write_text(
@@ -524,6 +545,17 @@ def test_publish_artifacts_records_universe_metadata_and_keeps_non_default_lates
             "favorites_universe_file": str(favorites),
             "generated_universe_base_file": str(generated_base),
             "baseline_reference_run_id": "20260308_211808",
+            "dynamic_universe_enabled": True,
+            "generator_manifest_path": str(tmp_path / "cache" / "dynamic.generator.json"),
+            "generator_version": "dynamic_universe_v1",
+            "generator_hash": "genhash",
+            "coarse_pool_size": 12,
+            "refined_pool_size": 6,
+            "selected_pool_size": 3,
+            "theme_allocations": [
+                {"theme": "资源", "selected_count": 2, "refined_count": 3, "coarse_count": 4, "theme_strength": 0.72},
+                {"theme": "能源石油", "selected_count": 1, "refined_count": 2, "coarse_count": 3, "theme_strength": 0.65},
+            ],
             "info_file": str(info_dir),
             "use_info_fusion": True,
             "info_shadow_only": True,
@@ -540,10 +572,17 @@ def test_publish_artifacts_records_universe_metadata_and_keeps_non_default_lates
 
     dataset_manifest = json.loads(Path(paths["dataset_manifest"]).read_text(encoding="utf-8"))
     assert dataset_manifest["universe_tier"] == "generated_80"
-    assert dataset_manifest["universe_id"] == "generated_80"
+    assert dataset_manifest["universe_id"] == "dynamic_80"
     assert dataset_manifest["symbol_count"] == 3
     assert len(dataset_manifest["symbols"]) == 3
     assert dataset_manifest["source_universe_manifest_path"]
+    assert dataset_manifest["dynamic_universe_enabled"] is True
+    assert dataset_manifest["generator_version"] == "dynamic_universe_v1"
+    assert dataset_manifest["generator_hash"]
+    assert dataset_manifest["coarse_pool_size"] >= 3
+    assert dataset_manifest["refined_pool_size"] >= 3
+    assert dataset_manifest["selected_pool_size"] == 3
+    assert len(dataset_manifest["theme_allocations"]) >= 1
     assert dataset_manifest["info_file"] == str(info_dir)
     assert dataset_manifest["info_hash"]
     assert dataset_manifest["use_us_index_context"] is True
@@ -560,6 +599,10 @@ def test_publish_artifacts_records_universe_metadata_and_keeps_non_default_lates
     assert manifest["info_hash"]
     assert manifest["use_us_index_context"] is True
     assert manifest["us_index_source"] == "akshare"
+    assert manifest["generator_version"] == "dynamic_universe_v1"
+    assert manifest["generator_hash"]
+    assert manifest["selected_pool_size"] == 3
+    assert len(manifest["theme_allocations"]) >= 1
     assert not (tmp_path / "swing_v2" / "latest_research_manifest.json").exists()
     assert (tmp_path / "swing_v2" / "latest_research_manifest.generated_80.json").exists()
     info_manifest = json.loads(Path(paths["info_manifest"]).read_text(encoding="utf-8"))

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from concurrent.futures import FIRST_COMPLETED, Future, ThreadPoolExecutor, wait
 import hashlib
 import json
 import re
@@ -336,6 +337,24 @@ def _should_print_progress(*, idx: int, total: int, progress_every: int, force: 
     return idx % progress_every == 0
 
 
+def _load_symbol_daily_task(
+    *,
+    symbol: str,
+    source: str,
+    data_dir: str,
+    start: str,
+    end: str,
+) -> tuple[str, pd.DataFrame]:
+    frame = load_symbol_daily(
+        symbol=symbol,
+        source=source,
+        data_dir=data_dir,
+        start=start,
+        end=end,
+    )
+    return symbol, frame
+
+
 def sync_market_data(
     *,
     source: str,
@@ -348,6 +367,7 @@ def sync_market_data(
     force_refresh: bool = False,
     sleep_ms: int = 80,
     max_failures: int = 100,
+    parallel_workers: int = 1,
     write_universe_file: str = "",
     universe_min_amount: float = 5e7,
     universe_exclude_st: bool = True,
@@ -475,6 +495,233 @@ def sync_market_data(
     universe_path = ""
     if str(write_universe_file).strip():
         universe_rows = [x for x in rows if x.sector != "指数"]
+        universe_path = _write_universe_file(write_universe_file, universe_rows, source=universe_source)
+
+    return DataSyncResult(
+        requested_universe_size=int(universe_size),
+        universe_size=len(rows),
+        attempted=attempts,
+        downloaded=downloaded,
+        skipped=skipped,
+        failed=failed,
+        failed_symbols=failed_symbols[:20],
+        universe_source=universe_source,
+        universe_file=universe_path,
+        resumed=resumed,
+        resume_completed=resume_completed,
+        checkpoint_file=checkpoint_file,
+    )
+
+
+def sync_market_data(
+    *,
+    source: str,
+    data_dir: str,
+    start: str,
+    end: str,
+    universe_size: int,
+    universe_file: str = "",
+    include_indices: bool = True,
+    force_refresh: bool = False,
+    sleep_ms: int = 80,
+    max_failures: int = 100,
+    parallel_workers: int = 1,
+    write_universe_file: str = "",
+    universe_min_amount: float = 5e7,
+    universe_exclude_st: bool = True,
+) -> DataSyncResult:
+    Path(data_dir).mkdir(parents=True, exist_ok=True)
+    rows, universe_source = _prepare_universe(
+        universe_size=universe_size,
+        universe_file=universe_file,
+        data_dir=data_dir,
+        universe_min_amount=float(universe_min_amount),
+        universe_exclude_st=bool(universe_exclude_st),
+    )
+    rows = rows[: max(1, int(universe_size))]
+    if include_indices:
+        rows = _dedupe_rows(list(rows) + list(INDEX_SECURITIES))
+    if not rows:
+        raise ValueError("No symbols found for sync.")
+
+    today = pd.Timestamp.today().normalize()
+    end_ts = pd.Timestamp(end).normalize()
+    target_end = min(today, end_ts)
+    total = len(rows)
+    progress_every = 1 if total <= 20 else 10
+    checkpoint_path = _sync_checkpoint_path(
+        data_dir=data_dir,
+        source=source,
+        start=start,
+        end=end,
+        target_end=target_end,
+        force_refresh=force_refresh,
+        rows=rows,
+    )
+    completed_symbols = _load_sync_checkpoint(checkpoint_path)
+    resume_completed = len(completed_symbols)
+    resumed = resume_completed > 0
+
+    print(
+        f"[SYNC] Start sync total={total}, source={str(source).strip() or 'auto'}, "
+        f"target_end={target_end.strftime('%Y-%m-%d')}"
+    )
+    if resumed:
+        print(
+            f"[SYNC] Resume checkpoint detected: completed={resume_completed}/{total}, "
+            f"checkpoint={checkpoint_path.resolve()}"
+        )
+
+    downloaded = 0
+    skipped = 0
+    failed = 0
+    attempts = 0
+    failed_symbols: list[str] = []
+    pending_rows: list[tuple[int, str, Path]] = []
+    for idx, sec in enumerate(rows, start=1):
+        symbol = normalize_symbol(sec.symbol).symbol
+        if symbol in completed_symbols:
+            continue
+        path = Path(data_dir) / f"{symbol}.csv"
+        if not force_refresh and _is_fresh_enough(path, target_end=target_end):
+            skipped += 1
+            completed_symbols.add(symbol)
+            _write_sync_checkpoint(
+                checkpoint_path,
+                completed_symbols=completed_symbols,
+                total=total,
+                source=source,
+                target_end=target_end,
+            )
+            if _should_print_progress(idx=idx, total=total, progress_every=progress_every):
+                print(
+                    f"[SYNC] {idx}/{total} {symbol} | downloaded={downloaded} skipped={skipped} "
+                    f"failed={failed} done={len(completed_symbols)}/{total}"
+                )
+            continue
+        pending_rows.append((idx, symbol, path))
+
+    def _handle_success(*, idx: int, symbol: str, path: Path, df: pd.DataFrame) -> None:
+        nonlocal downloaded
+        if df.empty:
+            raise DataError(f"{symbol}: empty dataframe after load")
+        df.to_csv(path, index=False)
+        downloaded += 1
+        completed_symbols.add(symbol)
+        _write_sync_checkpoint(
+            checkpoint_path,
+            completed_symbols=completed_symbols,
+            total=total,
+            source=source,
+            target_end=target_end,
+        )
+        if _should_print_progress(idx=idx, total=total, progress_every=progress_every):
+            print(
+                f"[SYNC] {idx}/{total} {symbol} | downloaded={downloaded} skipped={skipped} "
+                f"failed={failed} done={len(completed_symbols)}/{total}"
+            )
+
+    max_workers = max(1, int(parallel_workers))
+    if max_workers > 1 and pending_rows:
+        print(f"[SYNC] Parallel download enabled workers={min(max_workers, len(pending_rows))}")
+        executor = ThreadPoolExecutor(max_workers=min(max_workers, len(pending_rows)))
+        stop_early = False
+        try:
+            in_flight: dict[Future[tuple[str, pd.DataFrame]], tuple[int, str, Path]] = {}
+            pending_iter = iter(pending_rows)
+
+            def _submit_next() -> bool:
+                try:
+                    next_idx, next_symbol, next_path = next(pending_iter)
+                except StopIteration:
+                    return False
+                future = executor.submit(
+                    _load_symbol_daily_task,
+                    symbol=next_symbol,
+                    source=source,
+                    data_dir=data_dir,
+                    start=start,
+                    end=end,
+                )
+                in_flight[future] = (next_idx, next_symbol, next_path)
+                return True
+
+            for _ in range(min(max_workers, len(pending_rows))):
+                _submit_next()
+
+            while in_flight and not stop_early:
+                done, _ = wait(tuple(in_flight.keys()), return_when=FIRST_COMPLETED)
+                for future in done:
+                    idx, symbol, path = in_flight.pop(future)
+                    attempts += 1
+                    try:
+                        _, df = future.result()
+                        _handle_success(idx=idx, symbol=symbol, path=path, df=df)
+                    except KeyboardInterrupt:
+                        for other in in_flight:
+                            other.cancel()
+                        raise
+                    except Exception as exc:
+                        failed += 1
+                        failed_symbols.append(symbol)
+                        print(
+                            f"[WARN] [SYNC] {idx}/{total} {symbol} sync failed: {exc} | "
+                            f"downloaded={downloaded} skipped={skipped} failed={failed} done={len(completed_symbols)}/{total}"
+                        )
+                        if failed >= max(1, int(max_failures)):
+                            print(
+                                f"[WARN] [SYNC] Reached failure limit {max(1, int(max_failures))}, "
+                                f"resume checkpoint retained -> {checkpoint_path.resolve()}"
+                            )
+                            for other in in_flight:
+                                other.cancel()
+                            stop_early = True
+                            break
+                    if not stop_early:
+                        _submit_next()
+        finally:
+            executor.shutdown(wait=True, cancel_futures=True)
+    else:
+        for idx, symbol, path in pending_rows:
+            attempts += 1
+            try:
+                df = load_symbol_daily(
+                    symbol=symbol,
+                    source=source,
+                    data_dir=data_dir,
+                    start=start,
+                    end=end,
+                )
+                _handle_success(idx=idx, symbol=symbol, path=path, df=df)
+            except Exception as exc:
+                failed += 1
+                failed_symbols.append(symbol)
+                print(
+                    f"[WARN] [SYNC] {idx}/{total} {symbol} sync failed: {exc} | "
+                    f"downloaded={downloaded} skipped={skipped} failed={failed} done={len(completed_symbols)}/{total}"
+                )
+                if failed >= max(1, int(max_failures)):
+                    print(
+                        f"[WARN] [SYNC] Reached failure limit {max(1, int(max_failures))}, "
+                        f"resume checkpoint retained -> {checkpoint_path.resolve()}"
+                    )
+                    break
+            if int(sleep_ms) > 0:
+                time.sleep(float(sleep_ms) / 1000.0)
+
+    checkpoint_file = ""
+    if len(completed_symbols) >= total:
+        if checkpoint_path.exists():
+            checkpoint_path.unlink()
+    else:
+        checkpoint_file = str(checkpoint_path)
+        print(
+            f"[SYNC] Progress saved {len(completed_symbols)}/{total}, resume checkpoint -> {checkpoint_path.resolve()}"
+        )
+
+    universe_path = ""
+    if str(write_universe_file).strip():
+        universe_rows = [x for x in rows if x.sector != "鎸囨暟"]
         universe_path = _write_universe_file(write_universe_file, universe_rows, source=universe_source)
 
     return DataSyncResult(

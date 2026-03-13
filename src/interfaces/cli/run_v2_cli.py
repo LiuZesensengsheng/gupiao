@@ -39,6 +39,14 @@ def build_parser() -> argparse.ArgumentParser:
     daily.add_argument("--universe-tier", dest="universe_tier", default=None, help="Optional predefined universe tier override")
     daily.add_argument("--universe-file", dest="universe_file", default=None, help="Optional universe file override")
     daily.add_argument("--universe-limit", dest="universe_limit", type=int, default=None, help="Optional universe size override")
+    daily.add_argument("--dynamic-universe", dest="dynamic_universe", action="store_true", default=None, help="Enable dynamic universe generation")
+    daily.add_argument("--no-dynamic-universe", dest="dynamic_universe", action="store_false", help="Disable dynamic universe generation")
+    daily.add_argument("--generator-target-size", dest="generator_target_size", type=int, default=None, help="Dynamic universe target size")
+    daily.add_argument("--generator-coarse-size", dest="generator_coarse_size", type=int, default=None, help="Dynamic universe coarse pool size")
+    daily.add_argument("--generator-theme-aware", dest="generator_theme_aware", action="store_true", default=None, help="Enable theme-aware generator quotas")
+    daily.add_argument("--no-generator-theme-aware", dest="generator_theme_aware", action="store_false", help="Disable theme-aware generator quotas")
+    daily.add_argument("--generator-use-concepts", dest="generator_use_concepts", action="store_true", default=None, help="Use concept metadata in dynamic generator")
+    daily.add_argument("--no-generator-use-concepts", dest="generator_use_concepts", action="store_false", help="Disable concept metadata in dynamic generator")
     daily.add_argument("--info-file", dest="info_file", default=None, help="Optional structured info file or directory override")
     daily.add_argument("--info-lookback-days", dest="info_lookback_days", type=int, default=None, help="Info lookback window")
     daily.add_argument("--info-half-life-days", dest="info_half_life_days", type=float, default=None, help="Info half life")
@@ -74,6 +82,14 @@ def build_parser() -> argparse.ArgumentParser:
     research.add_argument("--universe-tier", dest="universe_tier", default=None, help="Optional predefined universe tier override")
     research.add_argument("--universe-file", dest="universe_file", default=None, help="Optional universe file override")
     research.add_argument("--universe-limit", dest="universe_limit", type=int, default=None, help="Optional universe size override")
+    research.add_argument("--dynamic-universe", dest="dynamic_universe", action="store_true", default=None, help="Enable dynamic universe generation")
+    research.add_argument("--no-dynamic-universe", dest="dynamic_universe", action="store_false", help="Disable dynamic universe generation")
+    research.add_argument("--generator-target-size", dest="generator_target_size", type=int, default=None, help="Dynamic universe target size")
+    research.add_argument("--generator-coarse-size", dest="generator_coarse_size", type=int, default=None, help="Dynamic universe coarse pool size")
+    research.add_argument("--generator-theme-aware", dest="generator_theme_aware", action="store_true", default=None, help="Enable theme-aware generator quotas")
+    research.add_argument("--no-generator-theme-aware", dest="generator_theme_aware", action="store_false", help="Disable theme-aware generator quotas")
+    research.add_argument("--generator-use-concepts", dest="generator_use_concepts", action="store_true", default=None, help="Use concept metadata in dynamic generator")
+    research.add_argument("--no-generator-use-concepts", dest="generator_use_concepts", action="store_false", help="Disable concept metadata in dynamic generator")
     research.add_argument("--info-file", dest="info_file", default=None, help="Optional structured info file or directory override")
     research.add_argument("--info-lookback-days", dest="info_lookback_days", type=int, default=None, help="Info lookback window")
     research.add_argument("--info-half-life-days", dest="info_half_life_days", type=float, default=None, help="Info half life")
@@ -157,6 +173,11 @@ def main() -> int:
             universe_tier=args.universe_tier,
             universe_file=args.universe_file,
             universe_limit=args.universe_limit,
+            dynamic_universe=args.dynamic_universe,
+            generator_target_size=args.generator_target_size,
+            generator_coarse_size=args.generator_coarse_size,
+            generator_theme_aware=args.generator_theme_aware,
+            generator_use_concepts=args.generator_use_concepts,
             info_file=args.info_file,
             info_lookback_days=args.info_lookback_days,
             info_half_life_days=args.info_half_life_days,
@@ -208,6 +229,11 @@ def main() -> int:
             universe_tier=args.universe_tier,
             universe_file=args.universe_file,
             universe_limit=args.universe_limit,
+            dynamic_universe=args.dynamic_universe,
+            generator_target_size=args.generator_target_size,
+            generator_coarse_size=args.generator_coarse_size,
+            generator_theme_aware=args.generator_theme_aware,
+            generator_use_concepts=args.generator_use_concepts,
             info_file=args.info_file,
             info_lookback_days=args.info_lookback_days,
             info_half_life_days=args.info_half_life_days,
@@ -240,6 +266,11 @@ def main() -> int:
                 universe_tier=args.universe_tier,
                 universe_file=args.universe_file,
                 universe_limit=args.universe_limit,
+                dynamic_universe=args.dynamic_universe,
+                generator_target_size=args.generator_target_size,
+                generator_coarse_size=args.generator_coarse_size,
+                generator_theme_aware=args.generator_theme_aware,
+                generator_use_concepts=args.generator_use_concepts,
                 info_file=args.info_file,
                 info_lookback_days=args.info_lookback_days,
                 info_half_life_days=args.info_half_life_days,

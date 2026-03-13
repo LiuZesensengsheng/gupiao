@@ -482,6 +482,10 @@ def write_v2_daily_report(out_path: str | Path, result: V2DailyRunResult) -> Pat
         lines.append(f"- 数据窗口: {result.snapshot.data_window}")
     if result.snapshot.source_universe_manifest_path:
         lines.append(f"- source universe manifest path: {result.snapshot.source_universe_manifest_path}")
+    if result.generator_manifest_path or result.snapshot.generator_manifest_path:
+        lines.append(f"- generator manifest path: {result.generator_manifest_path or result.snapshot.generator_manifest_path}")
+    if result.generator_version or result.snapshot.generator_version:
+        lines.append(f"- generator version: {result.generator_version or result.snapshot.generator_version}")
     if result.info_manifest_path or result.snapshot.info_manifest_path:
         lines.append(f"- info manifest path: {result.info_manifest_path or result.snapshot.info_manifest_path}")
     if result.info_hash or result.snapshot.info_hash:
@@ -509,6 +513,31 @@ def write_v2_daily_report(out_path: str | Path, result: V2DailyRunResult) -> Pat
     lines.append(f"- 策略模式: {result.composite_state.strategy_mode}")
     lines.append(f"- 风险状态: {result.composite_state.risk_regime}")
     lines.append("")
+    if (
+        (result.selected_pool_size or result.snapshot.selected_pool_size)
+        or (result.coarse_pool_size or result.snapshot.coarse_pool_size)
+        or (result.refined_pool_size or result.snapshot.refined_pool_size)
+    ):
+        lines.append("## 动态股票池")
+        lines.append("")
+        lines.append("| 指标 | 数值 |")
+        lines.append("|---|---:|")
+        lines.append(f"| 粗排池 | {int(result.coarse_pool_size or result.snapshot.coarse_pool_size)} |")
+        lines.append(f"| 精排池 | {int(result.refined_pool_size or result.snapshot.refined_pool_size)} |")
+        lines.append(f"| 最终动态池 | {int(result.selected_pool_size or result.snapshot.selected_pool_size)} |")
+        lines.append("")
+        allocations = list(result.theme_allocations or result.snapshot.theme_allocations)
+        if allocations:
+            lines.append("### 主题配额")
+            lines.append("")
+            lines.append("| 主题 | 入选数 | 精排数 | 粗排数 | 强度 |")
+            lines.append("|---|---:|---:|---:|---:|")
+            for item in allocations[:10]:
+                lines.append(
+                    f"| {item.get('theme', 'NA')} | {int(item.get('selected_count', 0))} | {int(item.get('refined_count', 0))} | "
+                    f"{int(item.get('coarse_count', 0))} | {_to_float(float(item.get('theme_strength', 0.0)), 3)} |"
+                )
+            lines.append("")
     if result.memory_path:
         recall = result.memory_recall
         lines.append("## 策略记忆")

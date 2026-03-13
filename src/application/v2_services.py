@@ -76,6 +76,7 @@ from src.application.v2_snapshot_support import (
     resolve_manifest_entry_path as _path_from_manifest_entry_external,
     serialize_composite_state as _serialize_composite_state_external,
 )
+from src.application.v2_universe_generator import generate_dynamic_universe
 from src.application.v2_sector_support import (
     allocate_sector_slots as _allocate_sector_slots_external,
     allocate_with_sector_budgets as _allocate_with_sector_budgets_external,
@@ -1325,6 +1326,13 @@ def build_strategy_snapshot(
     external_signal_enabled: bool = False,
     capital_flow_snapshot: dict[str, object] | None = None,
     macro_context_snapshot: dict[str, object] | None = None,
+    generator_manifest_path: str = "",
+    generator_version: str = "",
+    generator_hash: str = "",
+    coarse_pool_size: int = 0,
+    refined_pool_size: int = 0,
+    selected_pool_size: int = 0,
+    theme_allocations: list[dict[str, object]] | None = None,
     run_id: str = "",
     data_window: str = "",
     model_hashes: dict[str, str] | None = None,
@@ -1358,6 +1366,13 @@ def build_strategy_snapshot(
         external_signal_enabled=bool(external_signal_enabled),
         capital_flow_snapshot=dict(capital_flow_snapshot or {}),
         macro_context_snapshot=dict(macro_context_snapshot or {}),
+        generator_manifest_path=str(generator_manifest_path),
+        generator_version=str(generator_version),
+        generator_hash=str(generator_hash),
+        coarse_pool_size=int(coarse_pool_size),
+        refined_pool_size=int(refined_pool_size),
+        selected_pool_size=int(selected_pool_size),
+        theme_allocations=list(theme_allocations or []),
         run_id=str(run_id),
         data_window=str(data_window),
         model_hashes=dict(model_hashes or {}),
@@ -1392,6 +1407,11 @@ def _load_v2_runtime_settings(
     event_file: str | None = None,
     capital_flow_file: str | None = None,
     macro_file: str | None = None,
+    dynamic_universe: bool | None = None,
+    generator_target_size: int | None = None,
+    generator_coarse_size: int | None = None,
+    generator_theme_aware: bool | None = None,
+    generator_use_concepts: bool | None = None,
     use_us_index_context: bool | None = None,
     us_index_source: str | None = None,
 ) -> dict[str, object]:
@@ -1424,6 +1444,17 @@ def _load_v2_runtime_settings(
         str(universe_tier).strip()
         if universe_tier is not None and str(universe_tier).strip()
         else ("" if resolved_universe_file else str(pick("universe_tier", "")))
+    )
+    default_dynamic_universe = resolved_universe_limit >= 150
+    resolved_generator_target_size = int(
+        generator_target_size
+        if generator_target_size is not None
+        else int(pick("dynamic_universe_target_size", resolved_universe_limit or 300))
+    )
+    resolved_generator_coarse_size = int(
+        generator_coarse_size
+        if generator_coarse_size is not None
+        else int(pick("dynamic_universe_coarse_size", max(1000, resolved_generator_target_size * 3)))
     )
 
     return {
@@ -1502,6 +1533,29 @@ def _load_v2_runtime_settings(
         ),
         "capital_flow_lookback_days": int(pick("capital_flow_lookback_days", 20)),
         "macro_lookback_days": int(pick("macro_lookback_days", 60)),
+        "dynamic_universe_enabled": (
+            bool(dynamic_universe)
+            if dynamic_universe is not None
+            else _parse_boolish(pick("dynamic_universe_enabled", default_dynamic_universe), default_dynamic_universe)
+        ),
+        "generator_target_size": resolved_generator_target_size,
+        "generator_coarse_size": resolved_generator_coarse_size,
+        "generator_theme_aware": (
+            bool(generator_theme_aware)
+            if generator_theme_aware is not None
+            else _parse_boolish(pick("generator_theme_aware", True), True)
+        ),
+        "generator_use_concepts": (
+            bool(generator_use_concepts)
+            if generator_use_concepts is not None
+            else _parse_boolish(pick("generator_use_concepts", True), True)
+        ),
+        "dynamic_universe_min_history_days": int(pick("dynamic_universe_min_history_days", 480)),
+        "dynamic_universe_min_recent_amount": float(pick("dynamic_universe_min_recent_amount", 2.0e7)),
+        "dynamic_universe_theme_cap_ratio": float(pick("dynamic_universe_theme_cap_ratio", 0.16)),
+        "dynamic_universe_theme_floor_count": int(pick("dynamic_universe_theme_floor_count", 2)),
+        "dynamic_universe_turnover_quality_weight": float(pick("dynamic_universe_turnover_quality_weight", 0.25)),
+        "dynamic_universe_theme_weight": float(pick("dynamic_universe_theme_weight", 0.18)),
         "external_signals": (
             bool(external_signals)
             if external_signals is not None
@@ -1640,6 +1694,67 @@ def _resolve_v2_universe_settings(
 ) -> dict[str, object]:
     resolved = dict(settings)
     requested_tier = str(resolved.get("universe_tier", "")).strip()
+    dynamic_universe_enabled = _parse_boolish(resolved.get("dynamic_universe_enabled", False), False)
+    generator_target_size = int(
+        resolved.get("generator_target_size", resolved.get("universe_limit", 300)) or resolved.get("universe_limit", 300)
+    )
+    generator_source_file = str(resolved.get("universe_file", "")).strip()
+    if requested_tier and dynamic_universe_enabled:
+        normalized_tier = normalize_universe_tier(requested_tier)
+        if normalized_tier.startswith("generated_"):
+            generator_source_file = str(resolved.get("generated_universe_base_file", generator_source_file)).strip()
+            tier_digits = "".join(ch for ch in normalized_tier if ch.isdigit())
+            if tier_digits:
+                generator_target_size = int(tier_digits)
+    if dynamic_universe_enabled and (generator_source_file or requested_tier):
+        dynamic_result = generate_dynamic_universe(
+            universe_file=generator_source_file,
+            data_dir=str(resolved.get("data_dir", "")),
+            cache_root=str(cache_root),
+            target_size=max(1, int(generator_target_size)),
+            coarse_size=max(generator_target_size, int(resolved.get("generator_coarse_size", 1000))),
+            theme_aware=_parse_boolish(resolved.get("generator_theme_aware", True), True),
+            use_concepts=_parse_boolish(resolved.get("generator_use_concepts", True), True),
+            end_date=str(resolved.get("end", "")),
+            min_history_days=int(resolved.get("dynamic_universe_min_history_days", 480)),
+            min_recent_amount=float(resolved.get("dynamic_universe_min_recent_amount", 2.0e7)),
+            theme_cap_ratio=float(resolved.get("dynamic_universe_theme_cap_ratio", 0.16)),
+            theme_floor_count=int(resolved.get("dynamic_universe_theme_floor_count", 2)),
+            turnover_quality_weight=float(resolved.get("dynamic_universe_turnover_quality_weight", 0.25)),
+            theme_weight=float(resolved.get("dynamic_universe_theme_weight", 0.18)),
+            refresh_cache=_parse_boolish(resolved.get("refresh_cache", False), False),
+        )
+        manifest = dynamic_result.generator_manifest
+        selected_symbols = [
+            str(item.get("symbol", ""))
+            for item in dynamic_result.selected_300
+            if str(item.get("symbol", "")).strip()
+        ]
+        manifest_path_text = str(manifest.manifest_path)
+        universe_manifest_path = (
+            manifest_path_text.replace(".generator.json", ".json")
+            if manifest_path_text.endswith(".generator.json")
+            else str(generator_source_file)
+        )
+        resolved["universe_tier"] = str(requested_tier)
+        resolved["universe_file"] = universe_manifest_path
+        resolved["universe_limit"] = int(len(selected_symbols))
+        resolved["universe_id"] = f"dynamic_{int(generator_target_size)}"
+        resolved["universe_size"] = int(len(selected_symbols))
+        resolved["universe_generation_rule"] = f"{manifest.generator_version}: coarse->{manifest.coarse_pool_size} select->{manifest.selected_pool_size}"
+        resolved["source_universe_manifest_path"] = str(manifest.source_universe_path or generator_source_file)
+        resolved["symbols"] = selected_symbols
+        resolved["symbol_count"] = int(len(selected_symbols))
+        resolved["universe_hash"] = str(manifest.generator_hash)
+        resolved["generator_manifest_path"] = str(manifest.manifest_path)
+        resolved["generator_version"] = str(manifest.generator_version)
+        resolved["generator_hash"] = str(manifest.generator_hash)
+        resolved["coarse_pool_size"] = int(manifest.coarse_pool_size)
+        resolved["refined_pool_size"] = int(manifest.refined_pool_size)
+        resolved["selected_pool_size"] = int(manifest.selected_pool_size)
+        resolved["theme_allocations"] = [asdict(item) for item in manifest.theme_allocations]
+        return resolved
+
     if requested_tier:
         normalized_tier = normalize_universe_tier(requested_tier)
         catalog_dir = Path(str(cache_root)) / "universe_catalog"
@@ -3653,6 +3768,11 @@ def _prepare_v2_backtest_data(
     universe_file: str | None = None,
     universe_limit: int | None = None,
     universe_tier: str | None = None,
+    dynamic_universe: bool | None = None,
+    generator_target_size: int | None = None,
+    generator_coarse_size: int | None = None,
+    generator_theme_aware: bool | None = None,
+    generator_use_concepts: bool | None = None,
     cache_root: str = "artifacts/v2/cache",
     refresh_cache: bool = False,
     use_us_index_context: bool | None = None,
@@ -3664,9 +3784,15 @@ def _prepare_v2_backtest_data(
         universe_file=universe_file,
         universe_limit=universe_limit,
         universe_tier=universe_tier,
+        dynamic_universe=dynamic_universe,
+        generator_target_size=generator_target_size,
+        generator_coarse_size=generator_coarse_size,
+        generator_theme_aware=generator_theme_aware,
+        generator_use_concepts=generator_use_concepts,
         use_us_index_context=use_us_index_context,
         us_index_source=us_index_source,
     )
+    settings["refresh_cache"] = bool(refresh_cache)
     settings = _resolve_v2_universe_settings(settings=settings, cache_root=cache_root)
     prepared_cache_key = _build_prepared_backtest_cache_key_external(settings)
     prepared_cache_path = _prepared_backtest_cache_path_external(
@@ -4298,6 +4424,11 @@ def _load_or_build_v2_backtest_trajectory(
     universe_file: str | None = None,
     universe_limit: int | None = None,
     universe_tier: str | None = None,
+    dynamic_universe: bool | None = None,
+    generator_target_size: int | None = None,
+    generator_coarse_size: int | None = None,
+    generator_theme_aware: bool | None = None,
+    generator_use_concepts: bool | None = None,
     retrain_days: int = 20,
     cache_root: str = "artifacts/v2/cache",
     refresh_cache: bool = False,
@@ -4312,9 +4443,15 @@ def _load_or_build_v2_backtest_trajectory(
         universe_file=universe_file,
         universe_limit=universe_limit,
         universe_tier=universe_tier,
+        dynamic_universe=dynamic_universe,
+        generator_target_size=generator_target_size,
+        generator_coarse_size=generator_coarse_size,
+        generator_theme_aware=generator_theme_aware,
+        generator_use_concepts=generator_use_concepts,
         use_us_index_context=use_us_index_context,
         us_index_source=us_index_source,
     )
+    settings["refresh_cache"] = bool(refresh_cache)
     settings = _resolve_v2_universe_settings(settings=settings, cache_root=cache_root)
     cache_key = _trajectory_cache_key(
         config_path=str(settings.get("config_path", config_path)),
@@ -4359,6 +4496,11 @@ def _load_or_build_v2_backtest_trajectory(
             else universe_limit
         ),
         universe_tier=str(settings.get("universe_tier", universe_tier)),
+        dynamic_universe=_parse_boolish(settings.get("dynamic_universe_enabled", False), False),
+        generator_target_size=int(settings.get("generator_target_size", settings.get("universe_limit", 0)) or 0),
+        generator_coarse_size=int(settings.get("generator_coarse_size", 0) or 0),
+        generator_theme_aware=_parse_boolish(settings.get("generator_theme_aware", True), True),
+        generator_use_concepts=_parse_boolish(settings.get("generator_use_concepts", True), True),
         cache_root=cache_root,
         refresh_cache=refresh_cache,
         use_us_index_context=bool(settings.get("use_us_index_context", False)),
@@ -4544,6 +4686,11 @@ def _run_v2_backtest_core(
     universe_file: str | None = None,
     universe_limit: int | None = None,
     universe_tier: str | None = None,
+    dynamic_universe: bool | None = None,
+    generator_target_size: int | None = None,
+    generator_coarse_size: int | None = None,
+    generator_theme_aware: bool | None = None,
+    generator_use_concepts: bool | None = None,
     policy_spec: PolicySpec | None = None,
     learned_policy: LearnedPolicyModel | None = None,
     retrain_days: int = 20,
@@ -4565,6 +4712,11 @@ def _run_v2_backtest_core(
             universe_file=universe_file,
             universe_limit=universe_limit,
             universe_tier=universe_tier,
+            dynamic_universe=dynamic_universe,
+            generator_target_size=generator_target_size,
+            generator_coarse_size=generator_coarse_size,
+            generator_theme_aware=generator_theme_aware,
+            generator_use_concepts=generator_use_concepts,
             retrain_days=retrain_days,
             cache_root=cache_root,
             refresh_cache=refresh_cache,
@@ -4593,6 +4745,11 @@ def run_v2_backtest_live(
     universe_file: str | None = None,
     universe_limit: int | None = None,
     universe_tier: str | None = None,
+    dynamic_universe: bool | None = None,
+    generator_target_size: int | None = None,
+    generator_coarse_size: int | None = None,
+    generator_theme_aware: bool | None = None,
+    generator_use_concepts: bool | None = None,
     policy_spec: PolicySpec | None = None,
     learned_policy: LearnedPolicyModel | None = None,
     retrain_days: int = 20,
@@ -4612,6 +4769,11 @@ def run_v2_backtest_live(
         universe_file=universe_file,
         universe_limit=universe_limit,
         universe_tier=universe_tier,
+        dynamic_universe=dynamic_universe,
+        generator_target_size=generator_target_size,
+        generator_coarse_size=generator_coarse_size,
+        generator_theme_aware=generator_theme_aware,
+        generator_use_concepts=generator_use_concepts,
         policy_spec=policy_spec,
         learned_policy=learned_policy,
         retrain_days=retrain_days,
@@ -4636,6 +4798,11 @@ def calibrate_v2_policy(
     universe_file: str | None = None,
     universe_limit: int | None = None,
     universe_tier: str | None = None,
+    dynamic_universe: bool | None = None,
+    generator_target_size: int | None = None,
+    generator_coarse_size: int | None = None,
+    generator_theme_aware: bool | None = None,
+    generator_use_concepts: bool | None = None,
     baseline: V2BacktestSummary | None = None,
     trajectory: _BacktestTrajectory | None = None,
     cache_root: str = "artifacts/v2/cache",
@@ -4665,6 +4832,11 @@ def calibrate_v2_policy(
         universe_file=universe_file,
         universe_limit=universe_limit,
         universe_tier=universe_tier,
+        dynamic_universe=dynamic_universe,
+        generator_target_size=generator_target_size,
+        generator_coarse_size=generator_coarse_size,
+        generator_theme_aware=generator_theme_aware,
+        generator_use_concepts=generator_use_concepts,
         policy_spec=baseline_spec,
         trajectory=trajectory,
         cache_root=cache_root,
@@ -4735,6 +4907,11 @@ def calibrate_v2_policy(
             universe_file=universe_file,
             universe_limit=universe_limit,
             universe_tier=universe_tier,
+            dynamic_universe=dynamic_universe,
+            generator_target_size=generator_target_size,
+            generator_coarse_size=generator_coarse_size,
+            generator_theme_aware=generator_theme_aware,
+            generator_use_concepts=generator_use_concepts,
             policy_spec=spec,
             trajectory=trajectory,
             cache_root=cache_root,
@@ -4773,6 +4950,11 @@ def learn_v2_policy_model(
     universe_file: str | None = None,
     universe_limit: int | None = None,
     universe_tier: str | None = None,
+    dynamic_universe: bool | None = None,
+    generator_target_size: int | None = None,
+    generator_coarse_size: int | None = None,
+    generator_theme_aware: bool | None = None,
+    generator_use_concepts: bool | None = None,
     l2: float = 1.0,
     baseline: V2BacktestSummary | None = None,
     trajectory: _BacktestTrajectory | None = None,
@@ -4793,6 +4975,11 @@ def learn_v2_policy_model(
         universe_file=universe_file,
         universe_limit=universe_limit,
         universe_tier=universe_tier,
+        dynamic_universe=dynamic_universe,
+        generator_target_size=generator_target_size,
+        generator_coarse_size=generator_coarse_size,
+        generator_theme_aware=generator_theme_aware,
+        generator_use_concepts=generator_use_concepts,
         trajectory=evaluation_trajectory,
         cache_root=cache_root,
         refresh_cache=refresh_cache,
@@ -4807,6 +4994,11 @@ def learn_v2_policy_model(
         universe_file=universe_file,
         universe_limit=universe_limit,
         universe_tier=universe_tier,
+        dynamic_universe=dynamic_universe,
+        generator_target_size=generator_target_size,
+        generator_coarse_size=generator_coarse_size,
+        generator_theme_aware=generator_theme_aware,
+        generator_use_concepts=generator_use_concepts,
         capture_learning_rows=True,
         trajectory=fit_trajectory,
         cache_root=cache_root,
@@ -4837,6 +5029,11 @@ def learn_v2_policy_model(
             universe_file=universe_file,
             universe_limit=universe_limit,
             universe_tier=universe_tier,
+            dynamic_universe=dynamic_universe,
+            generator_target_size=generator_target_size,
+            generator_coarse_size=generator_coarse_size,
+            generator_theme_aware=generator_theme_aware,
+            generator_use_concepts=generator_use_concepts,
             learned_policy=model,
             trajectory=evaluation_trajectory,
             cache_root=cache_root,
@@ -4881,6 +5078,11 @@ def learn_v2_policy_model(
         universe_file=universe_file,
         universe_limit=universe_limit,
         universe_tier=universe_tier,
+        dynamic_universe=dynamic_universe,
+        generator_target_size=generator_target_size,
+        generator_coarse_size=generator_coarse_size,
+        generator_theme_aware=generator_theme_aware,
+        generator_use_concepts=generator_use_concepts,
         learned_policy=model,
         trajectory=evaluation_trajectory,
         cache_root=cache_root,
@@ -4943,6 +5145,11 @@ def run_v2_research_workflow(
     universe_file: str | None = None,
     universe_limit: int | None = None,
     universe_tier: str | None = None,
+    dynamic_universe: bool | None = None,
+    generator_target_size: int | None = None,
+    generator_coarse_size: int | None = None,
+    generator_theme_aware: bool | None = None,
+    generator_use_concepts: bool | None = None,
     info_file: str | None = None,
     info_lookback_days: int | None = None,
     info_half_life_days: float | None = None,
@@ -4973,6 +5180,11 @@ def run_v2_research_workflow(
         universe_file=universe_file,
         universe_limit=universe_limit,
         universe_tier=universe_tier,
+        dynamic_universe=dynamic_universe,
+        generator_target_size=generator_target_size,
+        generator_coarse_size=generator_coarse_size,
+        generator_theme_aware=generator_theme_aware,
+        generator_use_concepts=generator_use_concepts,
         cache_root=cache_root,
         refresh_cache=refresh_cache,
         forecast_backend=forecast_backend,
@@ -4987,6 +5199,11 @@ def run_v2_research_workflow(
             universe_file=universe_file,
             universe_limit=universe_limit,
             universe_tier=universe_tier,
+            dynamic_universe=dynamic_universe,
+            generator_target_size=generator_target_size,
+            generator_coarse_size=generator_coarse_size,
+            generator_theme_aware=generator_theme_aware,
+            generator_use_concepts=generator_use_concepts,
             trajectory=None,
             cache_root=cache_root,
             refresh_cache=refresh_cache,
@@ -5012,6 +5229,11 @@ def run_v2_research_workflow(
         universe_file=universe_file,
         universe_limit=universe_limit,
         universe_tier=universe_tier,
+        dynamic_universe=dynamic_universe,
+        generator_target_size=generator_target_size,
+        generator_coarse_size=generator_coarse_size,
+        generator_theme_aware=generator_theme_aware,
+        generator_use_concepts=generator_use_concepts,
         trajectory=holdout_trajectory,
         cache_root=cache_root,
         refresh_cache=refresh_cache,
@@ -5029,6 +5251,11 @@ def run_v2_research_workflow(
             universe_file=universe_file,
             universe_limit=universe_limit,
             universe_tier=universe_tier,
+            dynamic_universe=dynamic_universe,
+            generator_target_size=generator_target_size,
+            generator_coarse_size=generator_coarse_size,
+            generator_theme_aware=generator_theme_aware,
+            generator_use_concepts=generator_use_concepts,
             trajectory=validation_trajectory,
             cache_root=cache_root,
             refresh_cache=refresh_cache,
@@ -5046,6 +5273,11 @@ def run_v2_research_workflow(
             universe_file=universe_file,
             universe_limit=universe_limit,
             universe_tier=universe_tier,
+            dynamic_universe=dynamic_universe,
+            generator_target_size=generator_target_size,
+            generator_coarse_size=generator_coarse_size,
+            generator_theme_aware=generator_theme_aware,
+            generator_use_concepts=generator_use_concepts,
             baseline=validation_baseline if validation_baseline is not None else baseline,
             trajectory=validation_trajectory,
             cache_root=cache_root,
@@ -5091,6 +5323,11 @@ def run_v2_research_workflow(
             universe_file=universe_file,
             universe_limit=universe_limit,
             universe_tier=universe_tier,
+            dynamic_universe=dynamic_universe,
+            generator_target_size=generator_target_size,
+            generator_coarse_size=generator_coarse_size,
+            generator_theme_aware=generator_theme_aware,
+            generator_use_concepts=generator_use_concepts,
             baseline=baseline,
             trajectory=holdout_trajectory,
             fit_trajectory=validation_trajectory,
@@ -5387,6 +5624,17 @@ def _build_snapshot_from_manifest(
         ),
         capital_flow_snapshot=dict(manifest.get("capital_flow_snapshot", dataset_manifest.get("capital_flow_snapshot", {}))),
         macro_context_snapshot=dict(manifest.get("macro_context_snapshot", dataset_manifest.get("macro_context_snapshot", {}))),
+        generator_manifest_path=str(manifest.get("generator_manifest", dataset_manifest.get("generator_manifest", ""))),
+        generator_version=str(manifest.get("generator_version", dataset_manifest.get("generator_version", ""))),
+        generator_hash=str(manifest.get("generator_hash", dataset_manifest.get("generator_hash", ""))),
+        coarse_pool_size=int(manifest.get("coarse_pool_size", dataset_manifest.get("coarse_pool_size", 0)) or 0),
+        refined_pool_size=int(manifest.get("refined_pool_size", dataset_manifest.get("refined_pool_size", 0)) or 0),
+        selected_pool_size=int(manifest.get("selected_pool_size", dataset_manifest.get("selected_pool_size", 0)) or 0),
+        theme_allocations=[
+            dict(item)
+            for item in manifest.get("theme_allocations", dataset_manifest.get("theme_allocations", []))
+            if isinstance(item, dict)
+        ],
         run_id=run_id,
         data_window=data_window,
         model_hashes=model_hashes,
@@ -5413,6 +5661,11 @@ def publish_v2_research_artifacts(
     universe_file: str | None = None,
     universe_limit: int | None = None,
     universe_tier: str | None = None,
+    dynamic_universe: bool | None = None,
+    generator_target_size: int | None = None,
+    generator_coarse_size: int | None = None,
+    generator_theme_aware: bool | None = None,
+    generator_use_concepts: bool | None = None,
     info_file: str | None = None,
     info_lookback_days: int | None = None,
     info_half_life_days: float | None = None,
@@ -5646,6 +5899,11 @@ def publish_v2_research_artifacts(
                     else (int(universe_limit) if universe_limit is not None else None)
                 ),
                 universe_tier=str(settings.get("universe_tier", universe_tier)),
+                dynamic_universe=_parse_boolish(settings.get("dynamic_universe_enabled", False), False),
+                generator_target_size=int(settings.get("generator_target_size", settings.get("universe_limit", 0)) or 0),
+                generator_coarse_size=int(settings.get("generator_coarse_size", 0) or 0),
+                generator_theme_aware=_parse_boolish(settings.get("generator_theme_aware", True), True),
+                generator_use_concepts=_parse_boolish(settings.get("generator_use_concepts", True), True),
                 cache_root=cache_root,
                 refresh_cache=False,
                 forecast_backend=forecast_backend,
@@ -5721,6 +5979,14 @@ def publish_v2_research_artifacts(
         "source_universe_manifest_path": source_universe_manifest_path,
         "universe_file": str(settings.get("universe_file", "")),
         "universe_limit": int(settings.get("universe_limit", 0)),
+        "dynamic_universe_enabled": bool(settings.get("dynamic_universe_enabled", False)),
+        "generator_manifest": str(settings.get("generator_manifest_path", "")),
+        "generator_version": str(settings.get("generator_version", "")),
+        "generator_hash": str(settings.get("generator_hash", "")),
+        "coarse_pool_size": int(settings.get("coarse_pool_size", 0)),
+        "refined_pool_size": int(settings.get("refined_pool_size", 0)),
+        "selected_pool_size": int(settings.get("selected_pool_size", 0)),
+        "theme_allocations": [dict(item) for item in settings.get("theme_allocations", []) if isinstance(item, dict)],
         "start": str(settings.get("start", "")),
         "end": str(settings.get("end", "")),
         "symbols": symbols,
@@ -5919,6 +6185,14 @@ def publish_v2_research_artifacts(
         "announcement_event_tags": [str(item) for item in settings.get("announcement_event_tags", [])],
         "external_signal_version": str(settings.get("external_signal_version", "v1")),
         "external_signal_enabled": bool(settings.get("external_signals", True)),
+        "dynamic_universe_enabled": bool(settings.get("dynamic_universe_enabled", False)),
+        "generator_manifest": str(settings.get("generator_manifest_path", "")),
+        "generator_version": str(settings.get("generator_version", "")),
+        "generator_hash": str(settings.get("generator_hash", "")),
+        "coarse_pool_size": int(settings.get("coarse_pool_size", 0)),
+        "refined_pool_size": int(settings.get("refined_pool_size", 0)),
+        "selected_pool_size": int(settings.get("selected_pool_size", 0)),
+        "theme_allocations": [dict(item) for item in settings.get("theme_allocations", []) if isinstance(item, dict)],
         "capital_flow_snapshot": dict(external_signal_package.get("capital_flow_snapshot", {})),
         "macro_context_snapshot": dict(external_signal_package.get("macro_context_snapshot", {})),
         "use_us_index_context": bool(settings.get("use_us_index_context", False)),
@@ -6001,6 +6275,12 @@ def publish_v2_research_artifacts(
         "external_signal_manifest": str(external_signal_manifest_path),
         "external_signal_version": str(settings.get("external_signal_version", "v1")),
         "external_signal_enabled": "true" if bool(settings.get("external_signals", True)) else "false",
+        "generator_manifest": str(settings.get("generator_manifest_path", "")),
+        "generator_version": str(settings.get("generator_version", "")),
+        "generator_hash": str(settings.get("generator_hash", "")),
+        "coarse_pool_size": str(settings.get("coarse_pool_size", 0)),
+        "refined_pool_size": str(settings.get("refined_pool_size", 0)),
+        "selected_pool_size": str(settings.get("selected_pool_size", 0)),
         "use_us_index_context": "true" if bool(settings.get("use_us_index_context", False)) else "false",
         "us_index_source": str(settings.get("us_index_source", "akshare")),
         "dataset_manifest": str(dataset_path),
@@ -6104,6 +6384,23 @@ def _hydrate_daily_settings_from_dataset_manifest(
     ]
     hydrated["symbol_count"] = int(dataset_manifest.get("symbol_count", len(hydrated["symbols"])))
     hydrated["universe_hash"] = str(dataset_manifest.get("universe_hash", hydrated.get("universe_hash", "")))
+    hydrated["dynamic_universe_enabled"] = _parse_boolish(
+        dataset_manifest.get("dynamic_universe_enabled", hydrated.get("dynamic_universe_enabled", False)),
+        False,
+    )
+    hydrated["generator_manifest_path"] = str(
+        dataset_manifest.get("generator_manifest", hydrated.get("generator_manifest_path", ""))
+    )
+    hydrated["generator_version"] = str(dataset_manifest.get("generator_version", hydrated.get("generator_version", "")))
+    hydrated["generator_hash"] = str(dataset_manifest.get("generator_hash", hydrated.get("generator_hash", "")))
+    hydrated["coarse_pool_size"] = int(dataset_manifest.get("coarse_pool_size", hydrated.get("coarse_pool_size", 0)))
+    hydrated["refined_pool_size"] = int(dataset_manifest.get("refined_pool_size", hydrated.get("refined_pool_size", 0)))
+    hydrated["selected_pool_size"] = int(dataset_manifest.get("selected_pool_size", hydrated.get("selected_pool_size", 0)))
+    hydrated["theme_allocations"] = [
+        dict(item)
+        for item in dataset_manifest.get("theme_allocations", hydrated.get("theme_allocations", []))
+        if isinstance(item, dict)
+    ]
     hydrated["info_file"] = str(dataset_manifest.get("info_file", hydrated.get("info_file", "")))
     hydrated["event_file"] = str(dataset_manifest.get("event_file", hydrated.get("event_file", hydrated.get("info_file", ""))))
     hydrated["info_hash"] = str(dataset_manifest.get("info_hash", hydrated.get("info_hash", "")))
@@ -6164,6 +6461,11 @@ def _build_daily_snapshot_context(
     universe_file: str | None,
     universe_limit: int | None,
     universe_tier: str | None,
+    dynamic_universe: bool | None = None,
+    generator_target_size: int | None = None,
+    generator_coarse_size: int | None = None,
+    generator_theme_aware: bool | None = None,
+    generator_use_concepts: bool | None = None,
     info_file: str | None,
     info_lookback_days: int | None,
     info_half_life_days: float | None,
@@ -6180,6 +6482,7 @@ def _build_daily_snapshot_context(
     us_index_source: str | None,
     artifact_root: str,
     cache_root: str,
+    refresh_cache: bool = False,
     run_id: str | None,
     snapshot_path: str | None,
     allow_retrain: bool,
@@ -6190,6 +6493,11 @@ def _build_daily_snapshot_context(
         universe_file=universe_file,
         universe_limit=universe_limit,
         universe_tier=universe_tier,
+        dynamic_universe=dynamic_universe,
+        generator_target_size=generator_target_size,
+        generator_coarse_size=generator_coarse_size,
+        generator_theme_aware=generator_theme_aware,
+        generator_use_concepts=generator_use_concepts,
         info_file=info_file,
         info_lookback_days=info_lookback_days,
         info_half_life_days=info_half_life_days,
@@ -6205,6 +6513,7 @@ def _build_daily_snapshot_context(
         use_us_index_context=use_us_index_context,
         us_index_source=us_index_source,
     )
+    settings["refresh_cache"] = bool(refresh_cache)
     settings = _resolve_v2_universe_settings(settings=settings, cache_root=cache_root)
 
     manifest: dict[str, object] = {}
@@ -6271,6 +6580,13 @@ def _build_daily_snapshot_context(
                 external_signal_enabled=_parse_boolish(settings.get("external_signals", False), False),
                 capital_flow_snapshot=dict(settings.get("capital_flow_snapshot", {})),
                 macro_context_snapshot=dict(settings.get("macro_context_snapshot", {})),
+                generator_manifest_path=str(settings.get("generator_manifest_path", "")),
+                generator_version=str(settings.get("generator_version", "")),
+                generator_hash=str(settings.get("generator_hash", "")),
+                coarse_pool_size=int(settings.get("coarse_pool_size", 0)),
+                refined_pool_size=int(settings.get("refined_pool_size", 0)),
+                selected_pool_size=int(settings.get("selected_pool_size", 0)),
+                theme_allocations=[dict(item) for item in settings.get("theme_allocations", []) if isinstance(item, dict)],
                 run_id="",
                 data_window=data_window,
                 model_hashes={},
@@ -6301,6 +6617,13 @@ def _build_daily_snapshot_context(
             external_signal_enabled=_parse_boolish(settings.get("external_signals", True), True),
             capital_flow_snapshot=dict(settings.get("capital_flow_snapshot", {})),
             macro_context_snapshot=dict(settings.get("macro_context_snapshot", {})),
+            generator_manifest_path=str(settings.get("generator_manifest_path", "")),
+            generator_version=str(settings.get("generator_version", "")),
+            generator_hash=str(settings.get("generator_hash", "")),
+            coarse_pool_size=int(settings.get("coarse_pool_size", 0)),
+            refined_pool_size=int(settings.get("refined_pool_size", 0)),
+            selected_pool_size=int(settings.get("selected_pool_size", 0)),
+            theme_allocations=[dict(item) for item in settings.get("theme_allocations", []) if isinstance(item, dict)],
             run_id=resolved_run_id,
             data_window=data_window,
             config_hash=_stable_json_hash(settings),
@@ -6607,6 +6930,11 @@ def run_daily_v2_live(
     universe_file: str | None = None,
     universe_limit: int | None = None,
     universe_tier: str | None = None,
+    dynamic_universe: bool | None = None,
+    generator_target_size: int | None = None,
+    generator_coarse_size: int | None = None,
+    generator_theme_aware: bool | None = None,
+    generator_use_concepts: bool | None = None,
     info_file: str | None = None,
     info_lookback_days: int | None = None,
     info_half_life_days: float | None = None,
@@ -6636,6 +6964,11 @@ def run_daily_v2_live(
         universe_file=universe_file,
         universe_limit=universe_limit,
         universe_tier=universe_tier,
+        dynamic_universe=dynamic_universe,
+        generator_target_size=generator_target_size,
+        generator_coarse_size=generator_coarse_size,
+        generator_theme_aware=generator_theme_aware,
+        generator_use_concepts=generator_use_concepts,
         info_file=info_file,
         info_lookback_days=info_lookback_days,
         info_half_life_days=info_half_life_days,
@@ -6652,6 +6985,7 @@ def run_daily_v2_live(
         us_index_source=us_index_source,
         artifact_root=artifact_root,
         cache_root=cache_root,
+        refresh_cache=refresh_cache,
         run_id=run_id,
         snapshot_path=snapshot_path,
         allow_retrain=allow_retrain,
@@ -6780,6 +7114,13 @@ def run_daily_v2_live(
         external_signal_enabled=external_signal_enabled,
         capital_flow_snapshot=capital_flow_snapshot,
         macro_context_snapshot=macro_context_snapshot,
+        generator_manifest_path=snapshot.generator_manifest_path,
+        generator_version=snapshot.generator_version,
+        generator_hash=snapshot.generator_hash,
+        coarse_pool_size=snapshot.coarse_pool_size,
+        refined_pool_size=snapshot.refined_pool_size,
+        selected_pool_size=snapshot.selected_pool_size,
+        theme_allocations=list(snapshot.theme_allocations),
         top_negative_info_events=top_negative_info_events,
         top_positive_info_signals=top_positive_info_signals,
         quant_info_divergence=quant_info_divergence,
@@ -6829,6 +7170,13 @@ def summarize_daily_run(result: DailyRunResult) -> dict[str, object]:
         "external_signal_enabled": bool(result.external_signal_enabled or result.snapshot.external_signal_enabled),
         "capital_flow_snapshot": dict(result.capital_flow_snapshot or result.snapshot.capital_flow_snapshot),
         "macro_context_snapshot": dict(result.macro_context_snapshot or result.snapshot.macro_context_snapshot),
+        "generator_manifest_path": result.generator_manifest_path or result.snapshot.generator_manifest_path,
+        "generator_version": result.generator_version or result.snapshot.generator_version,
+        "generator_hash": result.generator_hash or result.snapshot.generator_hash,
+        "coarse_pool_size": int(result.coarse_pool_size or result.snapshot.coarse_pool_size),
+        "refined_pool_size": int(result.refined_pool_size or result.snapshot.refined_pool_size),
+        "selected_pool_size": int(result.selected_pool_size or result.snapshot.selected_pool_size),
+        "theme_allocations": [dict(item) for item in (result.theme_allocations or result.snapshot.theme_allocations)],
         "use_us_index_context": bool(result.snapshot.use_us_index_context),
         "us_index_source": str(result.snapshot.us_index_source),
         "run_id": result.run_id or result.snapshot.run_id,

@@ -708,6 +708,13 @@ def build_parser() -> argparse.ArgumentParser:
         help="Refresh files even if local data is recent",
     )
     sync.add_argument("--sleep-ms", dest="sleep_ms", type=int, default=None, help="Sleep between requests in ms")
+    sync.add_argument(
+        "--parallel-workers",
+        dest="parallel_workers",
+        type=int,
+        default=None,
+        help="Parallel download workers for remote sync; useful for large tushare runs",
+    )
     sync.add_argument("--max-failures", dest="max_failures", type=int, default=None, help="Stop after N failures")
     sync.add_argument(
         "--write-universe-file",
@@ -906,6 +913,7 @@ def run_sync_data(settings: dict[str, Any]) -> int:
         include_indices=_parse_bool(settings["include_indices"]),
         force_refresh=_parse_bool(settings["force_refresh"]),
         sleep_ms=int(settings["sleep_ms"]),
+        parallel_workers=max(1, int(settings.get("parallel_workers", 1) or 1)),
         max_failures=int(settings["max_failures"]),
         write_universe_file=settings["write_universe_file"],
         universe_min_amount=max(0.0, float(settings["universe_min_amount"])),
