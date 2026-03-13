@@ -7,9 +7,11 @@ import pytest
 from src.application.v2_contracts import DailyRunResult, StrategySnapshot
 from src.application.v2_contracts import PolicyInput
 from src.application.v2_sector_support import build_sector_states
+from src.application.v2_candidate_selection import build_candidate_selection_state
 from src.application.v2_services import (
     _decode_composite_state,
     _allocate_with_sector_budgets,
+    _policy_feature_vector,
     _serialize_composite_state,
     _stock_policy_score,
     apply_policy,
@@ -386,13 +388,118 @@ def test_compose_state_builds_macro_sector_shortlist_for_large_universe() -> Non
         cross_section=cross_section,
     )
 
-    assert composite_state.candidate_selection.selection_mode == "macro_sector_shortlist"
+    assert composite_state.candidate_selection.selection_mode == "macro_sector_ranking"
     assert composite_state.candidate_selection.shortlist_size < len(composite_state.stocks)
+    assert len(composite_state.candidate_selection.shortlisted_symbols) == len(composite_state.stocks)
     assert set(composite_state.candidate_selection.shortlisted_sectors).issubset({"Alpha", "Beta"})
     assert all(
         symbol.startswith(("A", "B"))
-        for symbol in composite_state.candidate_selection.shortlisted_symbols
+        for symbol in composite_state.candidate_selection.shortlisted_symbols[
+            : composite_state.candidate_selection.shortlist_size
+        ]
     )
+
+
+def test_candidate_shortlist_blends_sector_signal_with_stock_support() -> None:
+    market = MarketForecastState(
+        as_of_date="2026-03-01",
+        up_1d_prob=0.50,
+        up_5d_prob=0.52,
+        up_20d_prob=0.54,
+        trend_state="down",
+        drawdown_risk=0.42,
+        volatility_regime="normal",
+        liquidity_stress=0.26,
+    )
+    cross_section = CrossSectionForecastState(
+        as_of_date="2026-03-01",
+        large_vs_small_bias=0.01,
+        growth_vs_value_bias=-0.01,
+        fund_flow_strength=0.03,
+        margin_risk_on_score=0.04,
+        breadth_strength=0.08,
+        leader_participation=0.55,
+        weak_stock_ratio=0.46,
+    )
+    sectors = [
+        SectorForecastState("Main1", 0.58, 0.64, 0.16, 0.14, 0.18),
+        SectorForecastState("Main2", 0.57, 0.63, 0.14, 0.12, 0.18),
+        SectorForecastState("Challenger", 0.50, 0.54, 0.02, 0.08, 0.12),
+    ]
+    stocks: list[StockForecastState] = []
+    for idx in range(1, 7):
+        stocks.append(StockForecastState(f"M1_{idx}", "Main1", 0.53, 0.56, 0.59, 0.54, 0.05, 0.88, alpha_score=0.57))
+        stocks.append(StockForecastState(f"M2_{idx}", "Main2", 0.52, 0.55, 0.58, 0.53, 0.05, 0.87, alpha_score=0.56))
+        stocks.append(
+            StockForecastState(
+                f"C_{idx}",
+                "Challenger",
+                0.56,
+                0.61,
+                0.66,
+                0.60,
+                0.10,
+                0.91,
+                alpha_score=0.66 - 0.01 * idx,
+            )
+        )
+
+    selection = build_candidate_selection_state(
+        market=market,
+        cross_section=cross_section,
+        sectors=sectors,
+        stocks=stocks,
+        mainlines=[
+            MainlineState(name="Main1", conviction=0.45, sectors=["Main1"], representative_symbols=["M1_1"]),
+            MainlineState(name="Main2", conviction=0.42, sectors=["Main2"], representative_symbols=["M2_1"]),
+        ],
+        strategy_mode="defensive",
+        risk_regime="risk_off",
+        stock_score_fn=lambda stock: float(stock.alpha_score),
+    )
+
+    assert "Challenger" in selection.shortlisted_sectors
+    assert any(symbol.startswith("C_") for symbol in selection.shortlisted_symbols[: selection.shortlist_size])
+
+
+def test_policy_feature_vector_captures_shortlist_shape() -> None:
+    market, sectors, stocks, cross_section = _make_demo_state()
+    state = compose_state(
+        market=market,
+        sectors=sectors,
+        stocks=stocks * 2,
+        cross_section=cross_section,
+    )
+    narrowed_state = state.__class__(
+        market=state.market,
+        cross_section=state.cross_section,
+        sectors=state.sectors,
+        stocks=state.stocks,
+        strategy_mode=state.strategy_mode,
+        risk_regime=state.risk_regime,
+        candidate_selection=CandidateSelectionState(
+            shortlisted_symbols=["000630.SZ", "600160.SH"],
+            shortlisted_sectors=["MainA", "MainB"],
+            sector_slots={"MainA": 1, "MainB": 1},
+            total_scored=len(state.stocks),
+            shortlist_size=2,
+            shortlist_ratio=0.25,
+            selection_mode="macro_sector_shortlist",
+            selection_notes=["test shortlist"],
+        ),
+        mainlines=state.mainlines,
+        market_info_state=state.market_info_state,
+        sector_info_states=state.sector_info_states,
+        stock_info_states=state.stock_info_states,
+        capital_flow_state=state.capital_flow_state,
+        macro_context_state=state.macro_context_state,
+    )
+
+    features = _policy_feature_vector(narrowed_state)
+
+    assert len(features) == 23
+    assert features[19] == pytest.approx(0.25)
+    assert 0.0 < features[20] <= 1.0
 
 
 def test_apply_policy_prefers_candidate_shortlist_pool() -> None:
@@ -721,7 +828,13 @@ def test_high_volatility_shortlist_is_tighter_and_filters_fragile_names() -> Non
     )
 
     assert high_vol_state.candidate_selection.shortlist_size < normal_state.candidate_selection.shortlist_size
-    assert sum(1 for symbol in high_vol_state.candidate_selection.shortlisted_symbols if symbol.startswith("M")) <= 1
+    assert sum(
+        1
+        for symbol in high_vol_state.candidate_selection.shortlisted_symbols[
+            : high_vol_state.candidate_selection.shortlist_size
+        ]
+        if symbol.startswith("M")
+    ) <= 1
 
 
 def test_apply_policy_trims_exposure_when_candidate_set_is_fragile() -> None:

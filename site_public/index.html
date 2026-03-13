@@ -1,0 +1,213 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>量化 Top20 推荐</title>
+  <style>
+    :root {
+      --bg: #f4f1e8;
+      --panel: rgba(255,255,255,0.82);
+      --ink: #182126;
+      --muted: #64707a;
+      --accent: #0e7490;
+      --accent-2: #b45309;
+      --line: rgba(24,33,38,0.10);
+      --shadow: 0 18px 48px rgba(24,33,38,0.10);
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+      color: var(--ink);
+      background:
+        radial-gradient(circle at top left, rgba(14,116,144,0.16), transparent 32%),
+        radial-gradient(circle at top right, rgba(180,83,9,0.14), transparent 28%),
+        linear-gradient(180deg, #fbfaf6 0%, var(--bg) 100%);
+    }
+    .wrap {
+      max-width: 1180px;
+      margin: 0 auto;
+      padding: 40px 20px 72px;
+    }
+    .hero {
+      padding: 28px;
+      border: 1px solid var(--line);
+      border-radius: 28px;
+      background: linear-gradient(140deg, rgba(255,255,255,0.92), rgba(255,248,235,0.88));
+      box-shadow: var(--shadow);
+    }
+    .eyebrow {
+      font-size: 13px;
+      letter-spacing: 0.12em;
+      text-transform: uppercase;
+      color: var(--accent);
+      margin-bottom: 10px;
+      font-weight: 700;
+    }
+    h1 {
+      margin: 0 0 10px;
+      font-size: clamp(30px, 4vw, 52px);
+      line-height: 1.02;
+    }
+    .sub {
+      margin: 0;
+      color: var(--muted);
+      font-size: 16px;
+      line-height: 1.6;
+    }
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+      gap: 14px;
+      margin-top: 22px;
+    }
+    .card {
+      padding: 18px;
+      border-radius: 20px;
+      border: 1px solid var(--line);
+      background: var(--panel);
+      backdrop-filter: blur(6px);
+    }
+    .label {
+      font-size: 12px;
+      color: var(--muted);
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+    }
+    .value {
+      margin-top: 8px;
+      font-size: 28px;
+      font-weight: 700;
+    }
+    .section {
+      margin-top: 26px;
+      padding: 24px;
+      border-radius: 24px;
+      border: 1px solid var(--line);
+      background: var(--panel);
+      box-shadow: var(--shadow);
+    }
+    .section h2 {
+      margin: 0 0 14px;
+      font-size: 24px;
+    }
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 14px;
+    }
+    th, td {
+      text-align: left;
+      padding: 12px 10px;
+      border-bottom: 1px solid var(--line);
+    }
+    th {
+      color: var(--muted);
+      font-weight: 600;
+      font-size: 12px;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+    }
+    .pill {
+      display: inline-block;
+      padding: 6px 10px;
+      border-radius: 999px;
+      background: rgba(14,116,144,0.10);
+      color: var(--accent);
+      font-weight: 700;
+      font-size: 12px;
+      margin-right: 8px;
+    }
+    .two-col {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+      gap: 18px;
+    }
+    .foot {
+      margin-top: 18px;
+      color: var(--muted);
+      font-size: 13px;
+    }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <section class="hero">
+      <div class="eyebrow">Quant Output</div>
+      <h1>量化 Top20 推荐</h1>
+      <p class="sub">最新可交易数据日期为 2026-03-12。页面展示学习策略在 300 股票池上的排序前 20 名，以及当前风险约束下的实际交易计划。</p>
+      <div class="grid">
+        <div class="card"><div class="label">策略模式</div><div class="value">defensive</div></div>
+        <div class="card"><div class="label">风险状态</div><div class="value">risk_off</div></div>
+        <div class="card"><div class="label">目标仓位</div><div class="value">45.86%</div></div>
+        <div class="card"><div class="label">目标持仓数</div><div class="value">3</div></div>
+      </div>
+    </section>
+
+    <section class="section">
+      <h2>今日实际操作</h2>
+      <table>
+        <thead>
+          <tr><th>动作</th><th>代码</th><th>名称</th><th>行业</th><th>目标权重</th></tr>
+        </thead>
+        <tbody>
+          <tr><td>BUY</td><td>600281.SH</td><td>华阳新材</td><td>煤化工</td><td>16.00%</td></tr>
+<tr><td>BUY</td><td>600033.SH</td><td>福建高速</td><td>路桥</td><td>15.77%</td></tr>
+<tr><td>BUY</td><td>000838.SZ</td><td>财信发展</td><td>区域地产</td><td>11.24%</td></tr>
+        </tbody>
+      </table>
+    </section>
+
+    <section class="section">
+      <h2>Top 20 推荐</h2>
+      <div class="foot">
+        <span class="pill">排序输出</span>
+        这里显示的是学习策略在 `generated_300` 股票池上的前 20 名，不等于全部都会买入。
+      </div>
+      <table>
+        <thead>
+          <tr><th>排名</th><th>代码</th><th>名称</th><th>行业</th><th>Alpha 分数</th><th>当前目标权重</th></tr>
+        </thead>
+        <tbody>
+          <tr><td>1</td><td>603360.SH</td><td>百傲化学</td><td>煤化工</td><td>0.4824</td><td>0.00%</td></tr>
+<tr><td>2</td><td>600033.SH</td><td>福建高速</td><td>路桥</td><td>0.4823</td><td>15.77%</td></tr>
+<tr><td>3</td><td>600281.SH</td><td>华阳新材</td><td>煤化工</td><td>0.5157</td><td>16.00%</td></tr>
+<tr><td>4</td><td>600408.SH</td><td>安泰集团</td><td>煤化工</td><td>0.4793</td><td>0.00%</td></tr>
+<tr><td>5</td><td>000838.SZ</td><td>财信发展</td><td>区域地产</td><td>0.5441</td><td>11.24%</td></tr>
+<tr><td>6</td><td>002269.SZ</td><td>美邦服饰</td><td>服饰</td><td>0.5353</td><td>0.00%</td></tr>
+<tr><td>7</td><td>002612.SZ</td><td>朗姿股份</td><td>服饰</td><td>0.5230</td><td>0.00%</td></tr>
+<tr><td>8</td><td>600630.SH</td><td>龙头股份</td><td>服饰</td><td>0.5324</td><td>0.00%</td></tr>
+<tr><td>9</td><td>601566.SH</td><td>九牧王</td><td>服饰</td><td>0.5198</td><td>0.00%</td></tr>
+<tr><td>10</td><td>002098.SZ</td><td>浔兴股份</td><td>服饰</td><td>0.5163</td><td>0.00%</td></tr>
+<tr><td>11</td><td>603665.SH</td><td>康隆达</td><td>服饰</td><td>0.4952</td><td>0.00%</td></tr>
+<tr><td>12</td><td>002780.SZ</td><td>三夫户外</td><td>服饰</td><td>0.4451</td><td>0.00%</td></tr>
+<tr><td>13</td><td>605599.SH</td><td>菜百股份</td><td>服饰</td><td>0.3835</td><td>0.00%</td></tr>
+<tr><td>14</td><td>605228.SH</td><td>神通科技</td><td>汽车</td><td>0.5441</td><td>0.00%</td></tr>
+<tr><td>15</td><td>603767.SH</td><td>中马传动</td><td>汽车</td><td>0.5250</td><td>0.00%</td></tr>
+<tr><td>16</td><td>605133.SH</td><td>嵘泰股份</td><td>汽车</td><td>0.5040</td><td>0.00%</td></tr>
+<tr><td>17</td><td>603786.SH</td><td>科博达</td><td>汽车</td><td>0.5150</td><td>0.00%</td></tr>
+<tr><td>18</td><td>003033.SZ</td><td>征和工业</td><td>汽车</td><td>0.5202</td><td>0.00%</td></tr>
+<tr><td>19</td><td>603917.SH</td><td>合力科技</td><td>汽车</td><td>0.4966</td><td>0.00%</td></tr>
+<tr><td>20</td><td>603166.SH</td><td>福达股份</td><td>汽车</td><td>0.4731</td><td>0.00%</td></tr>
+        </tbody>
+      </table>
+    </section>
+
+    <section class="section">
+      <h2>回测摘要</h2>
+      <div class="two-col">
+        <div class="card">
+          <div class="label">基线策略</div>
+          <div class="foot">总收益 0.00% / 年化 0.00% / 超额年化 0.00% / IR 0.000 / 回撤 0.00%</div>
+        </div>
+        <div class="card">
+          <div class="label">学习型策略</div>
+          <div class="foot">总收益 0.00% / 年化 0.00% / 超额年化 0.00% / IR 0.000 / 回撤 0.00%</div>
+        </div>
+      </div>
+      <div class="foot">本页只包含静态结果，不包含任何交易接口、账号、密钥或写入能力。</div>
+    </section>
+  </div>
+</body>
+</html>

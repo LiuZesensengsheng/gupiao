@@ -25,12 +25,17 @@ from src.application.v2_contracts import (
     InfoDivergenceRecord,
     InfoItem,
     InfoSignalRecord,
+    HorizonForecast,
     LearnedPolicyModel,
+    MarketFactsState,
     MarketForecastState,
+    MarketSentimentState,
     MacroContextState,
     PolicyDecision,
     PolicyInput,
     PolicySpec,
+    PredictionReviewState,
+    PredictionReviewWindow,
     SectorForecastState,
     StockForecastState,
     StrategySnapshot,
@@ -697,6 +702,10 @@ def _policy_feature_names() -> list[str]:
         "alpha_top_score",
         "alpha_avg_top3",
         "alpha_median_score",
+        "candidate_shortlist_ratio",
+        "candidate_shortlist_size_norm",
+        "candidate_alpha_breadth",
+        "candidate_durability",
     ]
 
 
@@ -704,6 +713,17 @@ def _policy_feature_vector(state: CompositeState) -> np.ndarray:
     top_sector = state.sectors[0] if state.sectors else None
     top_stock = state.stocks[0] if state.stocks else None
     alpha_metrics = _alpha_opportunity_metrics(state.stocks)
+    candidate_selection = getattr(state, "candidate_selection", None)
+    candidate_stocks = _candidate_stocks_from_state_external(state)
+    candidate_alpha_metrics = _alpha_opportunity_metrics(candidate_stocks)
+    candidate_risk = _candidate_risk_snapshot_external(candidate_stocks)
+    shortlist_ratio = float(
+        getattr(candidate_selection, "shortlist_ratio", 0.0)
+        or (len(candidate_stocks) / max(1, len(state.stocks)))
+    )
+    shortlist_size_norm = float(
+        _clip(len(candidate_stocks) / max(4.0, min(16.0, len(state.stocks) / 8.0)), 0.0, 1.0)
+    )
     return np.asarray(
         [
             float(state.market.up_1d_prob),
@@ -725,6 +745,10 @@ def _policy_feature_vector(state: CompositeState) -> np.ndarray:
             float(alpha_metrics["top_score"]),
             float(alpha_metrics["avg_top3"]),
             float(alpha_metrics["median_score"]),
+            shortlist_ratio,
+            shortlist_size_norm,
+            float(candidate_alpha_metrics["breadth_ratio"]),
+            float(candidate_risk["durability_score"]),
         ],
         dtype=float,
     )
@@ -896,6 +920,253 @@ def _predict_quantile_profiles(
         },
         index=frame.index,
     )
+
+
+_HORIZON_SCALE = {
+    "1d": 0.035,
+    "2d": 0.050,
+    "3d": 0.065,
+    "5d": 0.095,
+    "10d": 0.145,
+    "20d": 0.220,
+}
+
+
+def _next_session_label(as_of_date: object) -> str:
+    ts = pd.Timestamp(as_of_date)
+    if pd.isna(ts):
+        return ""
+    return str((ts + pd.offsets.BDay(1)).date())
+
+
+def _blend_quantile_profiles(
+    left: _ReturnQuantileProfile,
+    right: _ReturnQuantileProfile,
+    *,
+    left_weight: float,
+) -> _ReturnQuantileProfile:
+    w = float(np.clip(left_weight, 0.0, 1.0))
+    r = 1.0 - w
+    return _ReturnQuantileProfile(
+        expected_return=float(w * left.expected_return + r * right.expected_return),
+        q10=float(w * left.q10 + r * right.q10),
+        q30=float(w * left.q30 + r * right.q30),
+        q20=float(w * left.q20 + r * right.q20),
+        q50=float(w * left.q50 + r * right.q50),
+        q70=float(w * left.q70 + r * right.q70),
+        q80=float(w * left.q80 + r * right.q80),
+        q90=float(w * left.q90 + r * right.q90),
+    )
+
+
+def _synthetic_quantile_profile(*, prob: float, horizon_key: str) -> _ReturnQuantileProfile:
+    scale = float(_HORIZON_SCALE.get(str(horizon_key), 0.08))
+    expected = float(np.clip((float(prob) - 0.5) * 1.2 * scale, -scale, scale))
+    spread = max(scale * 0.55, 0.01)
+    q50 = expected
+    q10 = expected - 0.85 * spread
+    q30 = expected - 0.40 * spread
+    q70 = expected + 0.40 * spread
+    q90 = expected + 0.85 * spread
+    return _ReturnQuantileProfile(
+        expected_return=float(expected),
+        q10=float(q10),
+        q30=float(q30),
+        q20=float(0.5 * (q10 + q30)),
+        q50=float(q50),
+        q70=float(q70),
+        q80=float(0.5 * (q70 + q90)),
+        q90=float(q90),
+    )
+
+
+def _intrinsic_confidence(
+    *,
+    up_prob: float,
+    horizon_probs: dict[str, float],
+    info_state: InfoAggregateState | None = None,
+    calibration_prior: dict[str, float] | None = None,
+    tradability_status: str = "normal",
+) -> tuple[float, str]:
+    p = float(up_prob)
+    probability_edge = float(np.clip(abs(p - 0.5) / 0.22, 0.0, 1.0))
+    local_probs = [float(v) for v in horizon_probs.values() if v == v]
+    if local_probs:
+        dispersion = float(np.std(local_probs))
+        consistency = float(np.clip(1.0 - dispersion / 0.12, 0.0, 1.0))
+    else:
+        consistency = 0.5
+    coverage = float(getattr(info_state, "coverage_confidence", 0.55) if info_state is not None else 0.55)
+    calibration = 0.58
+    if calibration_prior:
+        hit_rate = float(calibration_prior.get("top_k_hit_rate", calibration_prior.get("hit_rate", 0.55)))
+        rank_ic = float(calibration_prior.get("rank_ic", 0.05))
+        calibration = float(np.clip(0.55 * hit_rate + 0.45 * (0.5 + rank_ic), 0.0, 1.0))
+    status_penalty = 0.0
+    if tradability_status == "data_insufficient":
+        status_penalty = 0.18
+    elif tradability_status in {"halted", "delisted"}:
+        status_penalty = 0.40
+    confidence = float(
+        np.clip(
+            0.34 * calibration
+            + 0.28 * consistency
+            + 0.20 * coverage
+            + 0.18 * probability_edge
+            - status_penalty,
+            0.05,
+            0.98,
+        )
+    )
+    if confidence >= 0.78:
+        tone = "高"
+    elif confidence >= 0.62:
+        tone = "中高"
+    elif confidence >= 0.46:
+        tone = "中"
+    else:
+        tone = "偏低"
+    return confidence, f"{tone}置信度: 校准稳定性、信号一致性和样本覆盖共同支持。"
+
+
+def _build_horizon_forecasts(
+    *,
+    latest_close: float,
+    horizon_probs: dict[str, float],
+    short_profile: _ReturnQuantileProfile | None,
+    mid_profile: _ReturnQuantileProfile | None,
+    info_state: InfoAggregateState | None = None,
+    calibration_priors: dict[str, dict[str, float]] | None = None,
+    tradability_status: str = "normal",
+) -> dict[str, HorizonForecast]:
+    base_short = short_profile or _synthetic_quantile_profile(prob=float(horizon_probs.get("1d", 0.5)), horizon_key="1d")
+    base_mid = mid_profile or _synthetic_quantile_profile(prob=float(horizon_probs.get("20d", 0.5)), horizon_key="20d")
+    five_profile = _blend_quantile_profiles(base_short, base_mid, left_weight=0.35)
+    profile_map = {
+        "1d": base_short,
+        "2d": _blend_quantile_profiles(base_short, five_profile, left_weight=0.75),
+        "3d": _blend_quantile_profiles(base_short, five_profile, left_weight=0.60),
+        "5d": five_profile,
+        "10d": _blend_quantile_profiles(five_profile, base_mid, left_weight=0.45),
+        "20d": base_mid,
+    }
+    out: dict[str, HorizonForecast] = {}
+    for key, label in [("1d", "未来1日"), ("2d", "未来2日"), ("3d", "未来3日"), ("5d", "未来5日"), ("10d", "未来10日"), ("20d", "未来20日")]:
+        profile = profile_map[key]
+        up_prob = float(horizon_probs.get(key, 0.5))
+        confidence, reason = _intrinsic_confidence(
+            up_prob=up_prob,
+            horizon_probs=horizon_probs,
+            info_state=info_state,
+            calibration_prior=None if calibration_priors is None else calibration_priors.get(key),
+            tradability_status=tradability_status,
+        )
+        base_price = float(latest_close)
+        price_low = np.nan if base_price != base_price else float(base_price * (1.0 + float(profile.q10)))
+        price_mid = np.nan if base_price != base_price else float(base_price * (1.0 + float(profile.q50)))
+        price_high = np.nan if base_price != base_price else float(base_price * (1.0 + float(profile.q90)))
+        out[key] = HorizonForecast(
+            horizon_days=int(key.rstrip("d")),
+            label=label,
+            up_prob=up_prob,
+            expected_return=float(profile.expected_return),
+            q10=float(profile.q10),
+            q50=float(profile.q50),
+            q90=float(profile.q90),
+            price_low=price_low,
+            price_mid=price_mid,
+            price_high=price_high,
+            confidence=float(confidence),
+            confidence_reason=str(reason),
+        )
+    return out
+
+
+def _market_facts_from_row(row: pd.Series) -> MarketFactsState:
+    coverage = int(round(float(_safe_float(row.get("breadth_coverage", 0.0), 0.0))))
+    return MarketFactsState(
+        sample_coverage=max(0, coverage),
+        advancers=int(round(float(_safe_float(row.get("breadth_advancers", 0.0), 0.0)))),
+        decliners=int(round(float(_safe_float(row.get("breadth_decliners", 0.0), 0.0)))),
+        flats=int(round(float(_safe_float(row.get("breadth_flats", 0.0), 0.0)))),
+        limit_up_count=int(round(float(_safe_float(row.get("breadth_limit_up_count", 0.0), 0.0)))),
+        limit_down_count=int(round(float(_safe_float(row.get("breadth_limit_down_count", 0.0), 0.0)))),
+        new_high_count=int(round(float(_safe_float(row.get("breadth_new_high_count", 0.0), 0.0)))),
+        new_low_count=int(round(float(_safe_float(row.get("breadth_new_low_count", 0.0), 0.0)))),
+        median_return=float(_safe_float(row.get("breadth_median_return", 0.0), 0.0)),
+        sample_amount=float(_safe_float(row.get("breadth_sample_amount", 0.0), 0.0)),
+        amount_z20=float(_safe_float(row.get("breadth_amount_z20", 0.0), 0.0)),
+    )
+
+
+def _sentiment_stage(score: float) -> str:
+    if score >= 78.0:
+        return "过热"
+    if score >= 64.0:
+        return "亢奋"
+    if score >= 54.0:
+        return "回暖"
+    if score >= 42.0:
+        return "修复"
+    return "冰点"
+
+
+def _pct_text(value: float, *, signed: bool = False) -> str:
+    fmt = f"{float(value) * 100:+.1f}%" if signed else f"{float(value) * 100:.1f}%"
+    return fmt
+
+
+def _num_text(value: float, digits: int = 2, *, signed: bool = False) -> str:
+    fmt = f"{float(value):+.{digits}f}" if signed else f"{float(value):.{digits}f}"
+    return fmt
+
+
+def _build_market_sentiment_state(
+    *,
+    market: MarketForecastState,
+    cross_section: CrossSectionForecastState,
+    capital_flow: CapitalFlowState,
+    macro: MacroContextState,
+) -> MarketSentimentState:
+    facts = market.market_facts
+    advance_balance = float(np.clip((facts.advancers - facts.decliners) / max(1, facts.sample_coverage), -1.0, 1.0))
+    limit_balance = float(
+        np.clip((facts.limit_up_count - facts.limit_down_count) / max(1, facts.sample_coverage), -1.0, 1.0)
+    )
+    high_low_balance = float(
+        np.clip((facts.new_high_count - facts.new_low_count) / max(1, facts.sample_coverage), -1.0, 1.0)
+    )
+    score = float(
+        np.clip(
+            50.0
+            + 14.0 * float(cross_section.breadth_strength)
+            + 12.0 * advance_balance
+            + 8.0 * limit_balance
+            + 8.0 * high_low_balance
+            + 10.0 * (float(capital_flow.turnover_heat) - 0.5)
+            + 6.0 * float(capital_flow.margin_balance_change)
+            + 4.0 * float(capital_flow.northbound_net_flow)
+            + 6.0 * (float(market.up_5d_prob) - 0.5)
+            - 10.0 * float(market.drawdown_risk)
+            - 6.0 * max(0.0, float(macro.fx_pressure))
+            - 5.0 * max(0.0, float(macro.commodity_pressure)),
+            0.0,
+            100.0,
+        )
+    )
+    drivers: list[tuple[float, str]] = [
+        (abs(float(cross_section.breadth_strength)), f"市场宽度强度 {_pct_text(float(cross_section.breadth_strength), signed=True)}"),
+        (abs(advance_balance), f"涨跌家数差 {facts.advancers}/{facts.decliners}"),
+        (abs(limit_balance), f"涨跌停差 {facts.limit_up_count}/{facts.limit_down_count}"),
+        (abs(high_low_balance), f"新高/新低 {facts.new_high_count}/{facts.new_low_count}"),
+        (abs(float(capital_flow.turnover_heat) - 0.5), f"成交热度 {_pct_text(float(capital_flow.turnover_heat))}"),
+        (abs(float(capital_flow.margin_balance_change)), f"两融变化 {_pct_text(float(capital_flow.margin_balance_change), signed=True)}"),
+        (abs(float(capital_flow.northbound_net_flow)), f"北向强度 {_num_text(float(capital_flow.northbound_net_flow), 2, signed=True)}"),
+    ]
+    ordered = [text for _, text in sorted(drivers, key=lambda item: item[0], reverse=True)[:4]]
+    stage = _sentiment_stage(score)
+    summary = f"{stage}阶段，下一交易日情绪分 {score:.0f}/100。"
+    return MarketSentimentState(score=score, stage=stage, drivers=ordered, summary=summary)
 
 
 def _build_date_slice_index(
@@ -1122,6 +1393,7 @@ def _build_stock_states_from_panel_slice(
     realized_3d_arr = panel_row.get("excess_ret_3_vs_mkt", pd.Series(np.nan, index=panel_row.index)).astype(float).to_numpy()
     realized_5d_arr = panel_row.get("excess_ret_5_vs_mkt", pd.Series(np.nan, index=panel_row.index)).astype(float).to_numpy()
     realized_20d_arr = panel_row.get("excess_ret_20_vs_sector", pd.Series(np.nan, index=panel_row.index)).astype(float).to_numpy()
+    latest_close_arr = panel_row.get("close", pd.Series(np.nan, index=panel_row.index)).astype(float).to_numpy()
     short_expected_arr = short_profiles["expected_return"].to_numpy(dtype=float)
     mid_expected_arr = mid_profiles["expected_return"].to_numpy(dtype=float)
 
@@ -1205,6 +1477,7 @@ def _build_stock_states_from_panel_slice(
                 up_2d_prob=two_prob,
                 up_3d_prob=three_prob,
                 up_5d_prob=five_prob,
+                up_10d_prob=float(0.45 * five_prob + 0.55 * mid_prob),
                 up_20d_prob=mid_prob,
                 excess_vs_sector_prob=float(
                     _clip(
@@ -1220,6 +1493,39 @@ def _build_stock_states_from_panel_slice(
                 tradeability_score=float(tradeability),
                 alpha_score=float(item["score"]),
                 tradability_status=status,
+                latest_close=float(latest_close_arr[idx]),
+                horizon_forecasts=_build_horizon_forecasts(
+                    latest_close=float(latest_close_arr[idx]),
+                    horizon_probs={
+                        "1d": short_prob,
+                        "2d": two_prob,
+                        "3d": three_prob,
+                        "5d": five_prob,
+                        "10d": float(0.45 * five_prob + 0.55 * mid_prob),
+                        "20d": mid_prob,
+                    },
+                    short_profile=_ReturnQuantileProfile(
+                        expected_return=float(short_profiles["expected_return"].iloc[idx]),
+                        q10=float(short_profiles["q10"].iloc[idx]),
+                        q30=float(short_profiles["q30"].iloc[idx]),
+                        q20=float(short_profiles["q20"].iloc[idx]),
+                        q50=float(short_profiles["q50"].iloc[idx]),
+                        q70=float(short_profiles["q70"].iloc[idx]),
+                        q80=float(short_profiles["q80"].iloc[idx]),
+                        q90=float(short_profiles["q90"].iloc[idx]),
+                    ),
+                    mid_profile=_ReturnQuantileProfile(
+                        expected_return=float(mid_profiles["expected_return"].iloc[idx]),
+                        q10=float(mid_profiles["q10"].iloc[idx]),
+                        q30=float(mid_profiles["q30"].iloc[idx]),
+                        q20=float(mid_profiles["q20"].iloc[idx]),
+                        q50=float(mid_profiles["q50"].iloc[idx]),
+                        q70=float(mid_profiles["q70"].iloc[idx]),
+                        q80=float(mid_profiles["q80"].iloc[idx]),
+                        q90=float(mid_profiles["q90"].iloc[idx]),
+                    ),
+                    tradability_status=status,
+                ),
             )
         )
         realized_1d = np.nan
@@ -1481,6 +1787,9 @@ def _load_v2_runtime_settings(
             if us_index_source is not None and str(us_index_source).strip()
             else str(pick("us_index_source", "akshare")).strip()
         ),
+        "use_us_sector_etf_context": _parse_boolish(pick("use_us_sector_etf_context", False), False),
+        "use_cn_etf_context": _parse_boolish(pick("use_cn_etf_context", False), False),
+        "cn_etf_source": str(pick("cn_etf_source", "akshare")).strip(),
         "universe_tier": resolved_universe_tier,
         "active_default_universe_tier": str(pick("active_default_universe_tier", "favorites_16")),
         "candidate_default_universe_tier": str(pick("candidate_default_universe_tier", "generated_80")),
@@ -1702,7 +2011,8 @@ def _resolve_v2_universe_settings(
     if requested_tier and dynamic_universe_enabled:
         normalized_tier = normalize_universe_tier(requested_tier)
         if normalized_tier.startswith("generated_"):
-            generator_source_file = str(resolved.get("generated_universe_base_file", generator_source_file)).strip()
+            if not generator_source_file:
+                generator_source_file = str(resolved.get("generated_universe_base_file", generator_source_file)).strip()
             tier_digits = "".join(ch for ch in normalized_tier if ch.isdigit())
             if tier_digits:
                 generator_target_size = int(tier_digits)
@@ -1807,11 +2117,16 @@ def _build_market_and_cross_section_states(
     margin_market_file: str,
     use_us_index_context: bool,
     us_index_source: str,
+    use_us_sector_etf_context: bool = False,
+    use_cn_etf_context: bool = False,
+    cn_etf_source: str = "akshare",
     market_short_prob: float,
     market_two_prob: float | None,
     market_three_prob: float | None,
     market_five_prob: float | None,
     market_mid_prob: float,
+    market_short_profile: _ReturnQuantileProfile | None = None,
+    market_mid_profile: _ReturnQuantileProfile | None = None,
 ) -> tuple[MarketForecastState, CrossSectionForecastState]:
     market_raw = load_symbol_daily(
         symbol=market_symbol,
@@ -1831,6 +2146,9 @@ def _build_market_and_cross_section_states(
         margin_market_file=margin_market_file,
         use_us_index_context=use_us_index_context,
         us_index_source=us_index_source,
+        use_us_sector_etf_context=use_us_sector_etf_context,
+        use_cn_etf_context=use_cn_etf_context,
+        cn_etf_source=cn_etf_source,
     )
     market_frame = market_feat_base.merge(market_context.frame, on="date", how="left")
     latest = market_frame.sort_values("date").iloc[-1]
@@ -1851,27 +2169,50 @@ def _build_market_and_cross_section_states(
     else:
         volatility_regime = "normal"
 
-    market = MarketForecastState(
-        as_of_date=str(latest["date"].date()),
-        up_1d_prob=float(market_short_prob),
-        up_2d_prob=float(
+    latest_close = float(_safe_float(latest.get("close", np.nan), np.nan))
+    horizon_probs = {
+        "1d": float(market_short_prob),
+        "2d": float(
             market_two_prob
             if market_two_prob is not None
             else (0.65 * market_short_prob + 0.35 * (market_five_prob if market_five_prob is not None else market_mid_prob))
         ),
-        up_3d_prob=float(
+        "3d": float(
             market_three_prob
             if market_three_prob is not None
             else (0.35 * market_short_prob + 0.65 * (market_five_prob if market_five_prob is not None else market_mid_prob))
         ),
-        up_5d_prob=float(
+        "5d": float(
             market_five_prob if market_five_prob is not None else (0.6 * market_short_prob + 0.4 * market_mid_prob)
         ),
+        "10d": float(
+            0.45 * (market_five_prob if market_five_prob is not None else (0.6 * market_short_prob + 0.4 * market_mid_prob))
+            + 0.55 * market_mid_prob
+        ),
+        "20d": float(market_mid_prob),
+    }
+    market_facts = _market_facts_from_row(latest)
+
+    market = MarketForecastState(
+        as_of_date=str(latest["date"].date()),
+        up_1d_prob=horizon_probs["1d"],
+        up_2d_prob=horizon_probs["2d"],
+        up_3d_prob=horizon_probs["3d"],
+        up_5d_prob=horizon_probs["5d"],
+        up_10d_prob=horizon_probs["10d"],
         up_20d_prob=float(market_mid_prob),
         trend_state=str(state.state_code),
         drawdown_risk=_clip(abs(float(latest.get("mkt_drawdown_20", 0.0) or 0.0)), 0.0, 1.0),
         volatility_regime=volatility_regime,
         liquidity_stress=_clip(0.5 - float(cross_section_record.breadth_strength), 0.0, 1.0),
+        latest_close=latest_close,
+        horizon_forecasts=_build_horizon_forecasts(
+            latest_close=latest_close,
+            horizon_probs=horizon_probs,
+            short_profile=market_short_profile,
+            mid_profile=market_mid_profile,
+        ),
+        market_facts=market_facts,
     )
     cross_section = CrossSectionForecastState(
         as_of_date=str(cross_section_record.as_of_date.date()),
@@ -1935,6 +2276,35 @@ def _build_stock_states_from_rows(
         event_impact = float(_clip(0.5 + short_expected_ret / 0.06, 0.0, 1.0))
         if status in {"halted", "delisted"}:
             event_impact = 0.0
+        latest_close = float(_safe_float(getattr(row, "latest_close", getattr(row, "close", np.nan)), np.nan))
+        short_profile = _ReturnQuantileProfile(
+            expected_return=float(short_expected_ret),
+            q10=float(_safe_float(getattr(row, "short_q10", np.nan), np.nan)),
+            q30=float(_safe_float(getattr(row, "short_q30", np.nan), np.nan)),
+            q20=float(_safe_float(getattr(row, "short_q20", np.nan), np.nan)),
+            q50=float(_safe_float(getattr(row, "short_q50", np.nan), np.nan)),
+            q70=float(_safe_float(getattr(row, "short_q70", np.nan), np.nan)),
+            q80=float(_safe_float(getattr(row, "short_q80", np.nan), np.nan)),
+            q90=float(_safe_float(getattr(row, "short_q90", np.nan), np.nan)),
+        )
+        mid_profile = _ReturnQuantileProfile(
+            expected_return=float(mid_expected_ret),
+            q10=float(_safe_float(getattr(row, "mid_q10", np.nan), np.nan)),
+            q30=float(_safe_float(getattr(row, "mid_q30", np.nan), np.nan)),
+            q20=float(_safe_float(getattr(row, "mid_q20", np.nan), np.nan)),
+            q50=float(_safe_float(getattr(row, "mid_q50", np.nan), np.nan)),
+            q70=float(_safe_float(getattr(row, "mid_q70", np.nan), np.nan)),
+            q80=float(_safe_float(getattr(row, "mid_q80", np.nan), np.nan)),
+            q90=float(_safe_float(getattr(row, "mid_q90", np.nan), np.nan)),
+        )
+        horizon_probs = {
+            "1d": float(row.short_prob),
+            "2d": float(two_prob),
+            "3d": float(three_prob),
+            "5d": float(five_prob),
+            "10d": float(0.45 * five_prob + 0.55 * float(row.mid_prob)),
+            "20d": float(row.mid_prob),
+        }
         out.append(
             StockForecastState(
                 symbol=row.symbol,
@@ -1943,6 +2313,7 @@ def _build_stock_states_from_rows(
                 up_2d_prob=float(two_prob),
                 up_3d_prob=float(three_prob),
                 up_5d_prob=float(five_prob),
+                up_10d_prob=float(horizon_probs["10d"]),
                 up_20d_prob=float(row.mid_prob),
                 excess_vs_sector_prob=float(
                     _clip(
@@ -1969,6 +2340,14 @@ def _build_stock_states_from_rows(
                     )
                 ),
                 tradability_status=status,
+                latest_close=latest_close,
+                horizon_forecasts=_build_horizon_forecasts(
+                    latest_close=latest_close,
+                    horizon_probs=horizon_probs,
+                    short_profile=short_profile,
+                    mid_profile=mid_profile,
+                    tradability_status=status,
+                ),
             )
         )
     out.sort(
@@ -2037,6 +2416,285 @@ def compose_state(
         candidate_selection=candidate_selection,
         mainlines=mainlines,
     )
+
+
+def _profile_from_horizon_map(
+    forecasts: dict[str, HorizonForecast],
+    key: str,
+) -> _ReturnQuantileProfile | None:
+    item = forecasts.get(key)
+    if item is None:
+        return None
+    q10 = float(item.q10)
+    q50 = float(item.q50)
+    q90 = float(item.q90)
+    q30 = float((2.0 * q10 + q50) / 3.0)
+    q70 = float((q50 + 2.0 * q90) / 3.0)
+    return _ReturnQuantileProfile(
+        expected_return=float(item.expected_return),
+        q10=q10,
+        q30=q30,
+        q20=float(0.5 * (q10 + q30)),
+        q50=q50,
+        q70=q70,
+        q80=float(0.5 * (q70 + q90)),
+        q90=q90,
+    )
+
+
+def _load_prediction_review_context(
+    *,
+    manifest: dict[str, object],
+    manifest_path: Path | None,
+) -> tuple[PredictionReviewState, dict[str, dict[str, float]]]:
+    if manifest_path is None:
+        return PredictionReviewState(), {}
+    backtest_path = _path_from_manifest_entry(manifest.get("backtest_summary"), run_dir=manifest_path.parent)
+    payload = _load_json_dict(backtest_path)
+    if not payload:
+        return PredictionReviewState(), {}
+    learned = payload.get("learned")
+    baseline = payload.get("baseline")
+    summary = learned if isinstance(learned, dict) else (baseline if isinstance(baseline, dict) else payload)
+    raw_horizon_metrics = summary.get("horizon_metrics", {}) if isinstance(summary, dict) else {}
+    calibration_priors = {
+        str(key): {str(metric): float(value) for metric, value in raw.items()}
+        for key, raw in raw_horizon_metrics.items()
+        if isinstance(raw, dict)
+    }
+    if "10d" not in calibration_priors and ("5d" in calibration_priors or "20d" in calibration_priors):
+        five = calibration_priors.get("5d", {})
+        twenty = calibration_priors.get("20d", {})
+        calibration_priors["10d"] = {
+            "rank_ic": float(0.45 * float(five.get("rank_ic", 0.0)) + 0.55 * float(twenty.get("rank_ic", 0.0))),
+            "top_k_hit_rate": float(
+                0.45 * float(five.get("top_k_hit_rate", 0.0)) + 0.55 * float(twenty.get("top_k_hit_rate", 0.0))
+            ),
+            "top_bottom_spread": float(
+                0.45 * float(five.get("top_bottom_spread", 0.0)) + 0.55 * float(twenty.get("top_bottom_spread", 0.0))
+            ),
+        }
+
+    curve = [float(item) for item in summary.get("nav_curve", [])] if isinstance(summary, dict) else []
+    excess_curve = [float(item) for item in summary.get("excess_nav_curve", [])] if isinstance(summary, dict) else []
+    curve_dates = [str(item) for item in summary.get("curve_dates", [])] if isinstance(summary, dict) else []
+
+    def _window_from_curve(window: int) -> PredictionReviewWindow:
+        if window in {5, 20} and f"{window}d" in calibration_priors:
+            metrics = calibration_priors[f"{window}d"]
+            return PredictionReviewWindow(
+                window_days=int(window),
+                label=f"近{window}日预测命中参考",
+                hit_rate=float(metrics.get("top_k_hit_rate", 0.0)),
+                avg_edge=float(metrics.get("top_bottom_spread", 0.0)),
+                realized_return=0.0,
+                sample_size=int(summary.get("n_days", 0)),
+                note=f"研究期 {window} 日横截面命中率与头尾价差。",
+            )
+        if len(curve) < max(2, window + 1):
+            return PredictionReviewWindow(window_days=int(window), label=f"近{window}日表现参考")
+        recent_nav = curve[-(window + 1) :]
+        base_nav = recent_nav[0]
+        realized_return = 0.0 if abs(base_nav) <= 1e-12 else float(recent_nav[-1] / base_nav - 1.0)
+        daily_rets = [
+            float(nxt / prev - 1.0)
+            for prev, nxt in zip(recent_nav[:-1], recent_nav[1:])
+            if abs(prev) > 1e-12
+        ]
+        hit_rate = float(sum(1 for item in daily_rets if item > 0.0) / max(1, len(daily_rets)))
+        avg_edge = 0.0
+        if len(excess_curve) >= len(curve):
+            recent_excess = excess_curve[-(window + 1) :]
+            base_excess = recent_excess[0]
+            if abs(base_excess) > 1e-12:
+                avg_edge = float(recent_excess[-1] / base_excess - 1.0)
+        return PredictionReviewWindow(
+            window_days=int(window),
+            label=f"近{window}日策略表现",
+            hit_rate=hit_rate,
+            avg_edge=avg_edge,
+            realized_return=realized_return,
+            sample_size=int(len(daily_rets)),
+            note=f"截至 {(curve_dates[-1] if curve_dates else '最近一期')} 的滚动净值表现。",
+        )
+
+    review = PredictionReviewState(
+        windows={
+            "5d": _window_from_curve(5),
+            "20d": _window_from_curve(20),
+            "60d": _window_from_curve(60),
+        },
+        notes=[f"复盘参考来自研究 run_id={str(manifest.get('run_id', '')).strip() or 'NA'}"],
+    )
+    return review, calibration_priors
+
+
+def _stock_reason_bundle(
+    *,
+    stock: StockForecastState,
+    info_state: InfoAggregateState,
+    state: CompositeState,
+    rank: int,
+    policy: PolicyDecision,
+) -> tuple[list[str], list[str], list[str], str, str, str, str]:
+    forecasts = dict(getattr(stock, "horizon_forecasts", {}))
+    one_day = forecasts.get("1d")
+    five_day = forecasts.get("5d")
+    twenty_day = forecasts.get("20d")
+    selection_reasons: list[str] = []
+    if twenty_day is not None and float(twenty_day.up_prob) >= 0.60:
+        selection_reasons.append(f"20日上涨概率 {twenty_day.up_prob * 100:.1f}%，中段趋势占优")
+    if five_day is not None and float(five_day.up_prob) >= 0.58:
+        selection_reasons.append(f"5日上涨概率 {five_day.up_prob * 100:.1f}%，短波段延续性较好")
+    if float(stock.excess_vs_sector_prob) >= 0.55:
+        selection_reasons.append(f"行业内相对强度 {stock.excess_vs_sector_prob * 100:.1f}%，位于板块前排")
+    if float(stock.tradeability_score) >= 0.80:
+        selection_reasons.append(f"量价结构稳定，交易一致性 {stock.tradeability_score * 100:.1f}%")
+    if float(info_state.catalyst_strength) >= 0.55:
+        selection_reasons.append(f"催化强度 {info_state.catalyst_strength * 100:.1f}%，对信号有加成")
+    if float(state.cross_section.breadth_strength) >= 0.08:
+        selection_reasons.append("市场宽度配合度尚可，前排信号更容易兑现")
+    if not selection_reasons:
+        selection_reasons.append("综合排序靠前，趋势、相对强弱和交易结构较均衡")
+
+    alpha_parts = _alpha_score_components(stock)
+    ranking_reasons: list[str] = []
+    if float(alpha_parts.get("selection_bonus", 0.0)) > 0.08:
+        ranking_reasons.append("趋势延续与稳定性加分较高")
+    if float(alpha_parts.get("sector_edge", 0.0)) > 0.03:
+        ranking_reasons.append("行业内相对强度为排名提供支持")
+    if float(alpha_parts.get("medium_edge", 0.0)) > 0.03:
+        ranking_reasons.append("中期空间优于大部分候选")
+    if float(alpha_parts.get("stability_bonus", 0.0)) > 0.30:
+        ranking_reasons.append("多周期信号一致，分歧不大")
+    if not ranking_reasons:
+        ranking_reasons.append("综合排序稳定，处于当前候选前列")
+
+    risk_flags: list[str] = []
+    if float(stock.up_1d_prob) > float(stock.up_5d_prob) + 0.06:
+        risk_flags.append("短线偏热，次日容易先冲后分化")
+    if float(stock.tradeability_score) < 0.72:
+        risk_flags.append("量价承接一般，追价性价比不高")
+    if float(info_state.negative_event_risk) >= 0.35:
+        risk_flags.append("信息面负事件风险偏高")
+    if one_day is not None and float(one_day.confidence) < 0.48:
+        risk_flags.append("次日预测置信度偏低，宜轻仓观察")
+    if str(stock.tradability_status) != "normal":
+        risk_flags.append(f"交易状态受限: {stock.tradability_status}")
+    if not risk_flags:
+        risk_flags.append("当前未见明显硬性风险，但仍需服从仓位纪律")
+
+    invalidation = "若下一交易日"
+    if one_day is not None and one_day.price_low == one_day.price_low:
+        invalidation += f"收盘跌破 {one_day.price_low:.2f}"
+    else:
+        invalidation += "低于预期下沿"
+    invalidation += "，且 5 日上涨概率回落到 50% 下方，则本次信号失效。"
+
+    target_weight = float(policy.symbol_target_weights.get(stock.symbol, 0.0))
+    desired_weight = float(policy.desired_symbol_target_weights.get(stock.symbol, target_weight))
+    action_reason = ""
+    weight_reason = ""
+    blocked_reason = ""
+    if target_weight > 0.0:
+        action_reason = f"排序第 {rank}，进入当前 {policy.target_position_count} 个目标持仓。"
+        seat_weight = float(policy.target_exposure / max(1, policy.target_position_count))
+        weight_reason = (
+            f"目标权重 {target_weight * 100:.2f}%，在总仓位 {policy.target_exposure * 100:.1f}% 下属于"
+            f"{'主仓' if target_weight >= max(0.15, seat_weight) else '辅助仓'}配置。"
+        )
+        if desired_weight > target_weight + 1e-6:
+            weight_reason += " 受风险约束后权重有所收缩。"
+    else:
+        if rank > int(policy.target_position_count):
+            blocked_reason = f"当前只开 {policy.target_position_count} 个仓位，这只排位靠前但未进入前 {policy.target_position_count}。"
+        elif float(policy.sector_budgets.get(stock.sector, 0.0)) <= 0.0:
+            blocked_reason = f"{stock.sector} 当前未分配预算，本次只保留跟踪。"
+        else:
+            blocked_reason = "综合排序仍不错，但没有超过本轮实际执行门槛。"
+    return (
+        selection_reasons[:3],
+        ranking_reasons[:3],
+        risk_flags[:3],
+        invalidation,
+        action_reason,
+        weight_reason,
+        blocked_reason,
+    )
+
+
+def _decorate_composite_state_for_reporting(
+    *,
+    state: CompositeState,
+    policy: PolicyDecision,
+    calibration_priors: dict[str, dict[str, float]],
+) -> CompositeState:
+    updated_market = replace(
+        state.market,
+        horizon_forecasts=_build_horizon_forecasts(
+            latest_close=float(getattr(state.market, "latest_close", np.nan)),
+            horizon_probs={
+                "1d": float(state.market.up_1d_prob),
+                "2d": float(state.market.up_2d_prob),
+                "3d": float(state.market.up_3d_prob),
+                "5d": float(state.market.up_5d_prob),
+                "10d": float(getattr(state.market, "up_10d_prob", 0.45 * state.market.up_5d_prob + 0.55 * state.market.up_20d_prob)),
+                "20d": float(state.market.up_20d_prob),
+            },
+            short_profile=_profile_from_horizon_map(dict(getattr(state.market, "horizon_forecasts", {})), "1d"),
+            mid_profile=_profile_from_horizon_map(dict(getattr(state.market, "horizon_forecasts", {})), "20d"),
+            calibration_priors=calibration_priors,
+        ),
+        sentiment=_build_market_sentiment_state(
+            market=state.market,
+            cross_section=state.cross_section,
+            capital_flow=state.capital_flow_state,
+            macro=state.macro_context_state,
+        ),
+    )
+    ordered_candidates = _candidate_stocks_from_state_external(state)
+    rank_map = {stock.symbol: idx for idx, stock in enumerate(ordered_candidates, start=1)}
+    updated_stocks: list[StockForecastState] = []
+    for stock in state.stocks:
+        info_state = state.stock_info_states.get(stock.symbol, InfoAggregateState())
+        refreshed_forecasts = _build_horizon_forecasts(
+            latest_close=float(getattr(stock, "latest_close", np.nan)),
+            horizon_probs={
+                "1d": float(stock.up_1d_prob),
+                "2d": float(stock.up_2d_prob),
+                "3d": float(stock.up_3d_prob),
+                "5d": float(stock.up_5d_prob),
+                "10d": float(getattr(stock, "up_10d_prob", 0.45 * stock.up_5d_prob + 0.55 * stock.up_20d_prob)),
+                "20d": float(stock.up_20d_prob),
+            },
+            short_profile=_profile_from_horizon_map(dict(getattr(stock, "horizon_forecasts", {})), "1d"),
+            mid_profile=_profile_from_horizon_map(dict(getattr(stock, "horizon_forecasts", {})), "20d"),
+            info_state=info_state,
+            calibration_priors=calibration_priors,
+            tradability_status=str(getattr(stock, "tradability_status", "normal")),
+        )
+        reasons, ranking, risks, invalidation, action_reason, weight_reason, blocked_reason = _stock_reason_bundle(
+            stock=stock,
+            info_state=info_state,
+            state=state,
+            rank=int(rank_map.get(stock.symbol, len(rank_map) + 1)),
+            policy=policy,
+        )
+        updated_stocks.append(
+            replace(
+                stock,
+                horizon_forecasts=refreshed_forecasts,
+                selection_reasons=reasons,
+                ranking_reasons=ranking,
+                risk_flags=risks,
+                invalidation_rule=invalidation,
+                action_reason=action_reason,
+                weight_reason=weight_reason,
+                blocked_reason=blocked_reason,
+            )
+        )
+    updated_stocks.sort(key=lambda item: rank_map.get(item.symbol, len(rank_map) + 999))
+    return replace(state, market=updated_market, stocks=updated_stocks)
 
 
 def _ranked_sector_budgets(sectors: Iterable[SectorForecastState], *, target_exposure: float) -> dict[str, float]:
@@ -3080,27 +3738,48 @@ def _build_market_and_cross_section_from_prebuilt_frame(
     drawdown_raw = float(latest.get("mkt_drawdown_20", 0.0))
     if drawdown_raw != drawdown_raw:
         drawdown_raw = 0.0
-    market = MarketForecastState(
-        as_of_date=str(latest["date"].date()),
-        up_1d_prob=float(market_short_prob),
-        up_2d_prob=float(
+    latest_close = float(_safe_float(latest.get("close", np.nan), np.nan))
+    horizon_probs = {
+        "1d": float(market_short_prob),
+        "2d": float(
             market_two_prob
             if market_two_prob is not None
             else (0.65 * market_short_prob + 0.35 * (market_five_prob if market_five_prob is not None else market_mid_prob))
         ),
-        up_3d_prob=float(
+        "3d": float(
             market_three_prob
             if market_three_prob is not None
             else (0.35 * market_short_prob + 0.65 * (market_five_prob if market_five_prob is not None else market_mid_prob))
         ),
-        up_5d_prob=float(
+        "5d": float(
             market_five_prob if market_five_prob is not None else (0.6 * market_short_prob + 0.4 * market_mid_prob)
         ),
+        "10d": float(
+            0.45 * (market_five_prob if market_five_prob is not None else (0.6 * market_short_prob + 0.4 * market_mid_prob))
+            + 0.55 * market_mid_prob
+        ),
+        "20d": float(market_mid_prob),
+    }
+    market = MarketForecastState(
+        as_of_date=str(latest["date"].date()),
+        up_1d_prob=horizon_probs["1d"],
+        up_2d_prob=horizon_probs["2d"],
+        up_3d_prob=horizon_probs["3d"],
+        up_5d_prob=horizon_probs["5d"],
+        up_10d_prob=horizon_probs["10d"],
         up_20d_prob=float(market_mid_prob),
         trend_state=str(state.state_code),
         drawdown_risk=_clip(abs(drawdown_raw), 0.0, 1.0),
         volatility_regime=volatility_regime,
         liquidity_stress=_clip(0.5 - float(cross_section_record.breadth_strength), 0.0, 1.0),
+        latest_close=latest_close,
+        horizon_forecasts=_build_horizon_forecasts(
+            latest_close=latest_close,
+            horizon_probs=horizon_probs,
+            short_profile=None,
+            mid_profile=None,
+        ),
+        market_facts=_market_facts_from_row(latest),
     )
     cross_section = CrossSectionForecastState(
         as_of_date=str(cross_section_record.as_of_date.date()),
@@ -3834,6 +4513,9 @@ def _prepare_v2_backtest_data(
         margin_market_file=str(settings["margin_market_file"]),
         use_us_index_context=bool(settings.get("use_us_index_context", False)),
         us_index_source=str(settings.get("us_index_source", "akshare")),
+        use_us_sector_etf_context=bool(settings.get("use_us_sector_etf_context", False)),
+        use_cn_etf_context=bool(settings.get("use_cn_etf_context", False)),
+        cn_etf_source=str(settings.get("cn_etf_source", "akshare")),
     )
     market_frame = market_feat_base.merge(market_context.frame, on="date", how="left", validate="1:1")
     market_feature_cols = list(MARKET_FEATURE_COLUMNS) + list(market_context.feature_columns)
@@ -4304,6 +4986,9 @@ def _trajectory_cache_key(
     forecast_backend: str,
     use_us_index_context: bool,
     us_index_source: str,
+    use_us_sector_etf_context: bool,
+    use_cn_etf_context: bool,
+    cn_etf_source: str,
 ) -> str:
     payload = {
         "version": "v2-trajectory-cache-2",
@@ -4316,6 +5001,9 @@ def _trajectory_cache_key(
         "forecast_backend": str(forecast_backend),
         "use_us_index_context": bool(use_us_index_context),
         "us_index_source": str(us_index_source),
+        "use_us_sector_etf_context": bool(use_us_sector_etf_context),
+        "use_cn_etf_context": bool(use_cn_etf_context),
+        "cn_etf_source": str(cn_etf_source),
     }
     raw = json.dumps(payload, sort_keys=True, ensure_ascii=False)
     return hashlib.sha256(raw.encode("utf-8")).hexdigest()[:24]
@@ -4383,6 +5071,11 @@ def _daily_result_cache_key(
         "margin_market_file": str(settings.get("margin_market_file", "")),
         "margin_market_mtime": _file_mtime_token(settings.get("margin_market_file", "")),
         "margin_stock_file": str(settings.get("margin_stock_file", "")),
+        "use_us_index_context": bool(settings.get("use_us_index_context", False)),
+        "us_index_source": str(settings.get("us_index_source", "akshare")),
+        "use_us_sector_etf_context": bool(settings.get("use_us_sector_etf_context", False)),
+        "use_cn_etf_context": bool(settings.get("use_cn_etf_context", False)),
+        "cn_etf_source": str(settings.get("cn_etf_source", "akshare")),
         "margin_stock_mtime": _file_mtime_token(settings.get("margin_stock_file", "")),
         "use_us_index_context": bool(settings.get("use_us_index_context", False)),
         "us_index_source": str(settings.get("us_index_source", "akshare")),
@@ -4469,6 +5162,9 @@ def _load_or_build_v2_backtest_trajectory(
         forecast_backend=backend.name,
         use_us_index_context=bool(settings.get("use_us_index_context", False)),
         us_index_source=str(settings.get("us_index_source", "akshare")),
+        use_us_sector_etf_context=bool(settings.get("use_us_sector_etf_context", False)),
+        use_cn_etf_context=bool(settings.get("use_cn_etf_context", False)),
+        cn_etf_source=str(settings.get("cn_etf_source", "akshare")),
     )
     cache_path = _trajectory_cache_path(cache_root=cache_root, cache_key=cache_key)
     if not refresh_cache and cache_path.exists():
@@ -5828,6 +6524,9 @@ def publish_v2_research_artifacts(
             "embargo_days": int(embargo_days),
             "use_us_index_context": bool(settings.get("use_us_index_context", False)),
             "us_index_source": str(settings.get("us_index_source", "akshare")),
+            "use_us_sector_etf_context": bool(settings.get("use_us_sector_etf_context", False)),
+            "use_cn_etf_context": bool(settings.get("use_cn_etf_context", False)),
+            "cn_etf_source": str(settings.get("cn_etf_source", "akshare")),
             "model_hashes": model_hashes,
             "data_window": {
                 "start": str(settings.get("start", "")),
@@ -5987,6 +6686,11 @@ def publish_v2_research_artifacts(
         "refined_pool_size": int(settings.get("refined_pool_size", 0)),
         "selected_pool_size": int(settings.get("selected_pool_size", 0)),
         "theme_allocations": [dict(item) for item in settings.get("theme_allocations", []) if isinstance(item, dict)],
+        "use_us_index_context": bool(settings.get("use_us_index_context", False)),
+        "us_index_source": str(settings.get("us_index_source", "akshare")),
+        "use_us_sector_etf_context": bool(settings.get("use_us_sector_etf_context", False)),
+        "use_cn_etf_context": bool(settings.get("use_cn_etf_context", False)),
+        "cn_etf_source": str(settings.get("cn_etf_source", "akshare")),
         "start": str(settings.get("start", "")),
         "end": str(settings.get("end", "")),
         "symbols": symbols,
@@ -6185,6 +6889,11 @@ def publish_v2_research_artifacts(
         "announcement_event_tags": [str(item) for item in settings.get("announcement_event_tags", [])],
         "external_signal_version": str(settings.get("external_signal_version", "v1")),
         "external_signal_enabled": bool(settings.get("external_signals", True)),
+        "use_us_index_context": bool(settings.get("use_us_index_context", False)),
+        "us_index_source": str(settings.get("us_index_source", "akshare")),
+        "use_us_sector_etf_context": bool(settings.get("use_us_sector_etf_context", False)),
+        "use_cn_etf_context": bool(settings.get("use_cn_etf_context", False)),
+        "cn_etf_source": str(settings.get("cn_etf_source", "akshare")),
         "dynamic_universe_enabled": bool(settings.get("dynamic_universe_enabled", False)),
         "generator_manifest": str(settings.get("generator_manifest_path", "")),
         "generator_version": str(settings.get("generator_version", "")),
@@ -6434,6 +7143,17 @@ def _hydrate_daily_settings_from_dataset_manifest(
     )
     hydrated["us_index_source"] = str(
         dataset_manifest.get("us_index_source", manifest.get("us_index_source", "akshare"))
+    )
+    hydrated["use_us_sector_etf_context"] = _parse_boolish(
+        dataset_manifest.get("use_us_sector_etf_context", manifest.get("use_us_sector_etf_context", False)),
+        False,
+    )
+    hydrated["use_cn_etf_context"] = _parse_boolish(
+        dataset_manifest.get("use_cn_etf_context", manifest.get("use_cn_etf_context", False)),
+        False,
+    )
+    hydrated["cn_etf_source"] = str(
+        dataset_manifest.get("cn_etf_source", manifest.get("cn_etf_source", "akshare"))
     )
     hydrated["info_subsets"] = [
         str(item)
@@ -6716,8 +7436,31 @@ def _build_daily_composite_state(
             market_three_prob=_safe_float(getattr(market_forecast, "three_prob", np.nan), np.nan),
             market_five_prob=float(market_forecast.five_prob),
             market_mid_prob=float(market_forecast.mid_prob),
+            market_short_profile=_ReturnQuantileProfile(
+                expected_return=float(_safe_float(getattr(market_forecast, "short_expected_ret", 0.0), 0.0)),
+                q10=float(_safe_float(getattr(market_forecast, "short_q10", np.nan), np.nan)),
+                q30=float(_safe_float(getattr(market_forecast, "short_q30", np.nan), np.nan)),
+                q20=float(_safe_float(getattr(market_forecast, "short_q20", np.nan), np.nan)),
+                q50=float(_safe_float(getattr(market_forecast, "short_q50", np.nan), np.nan)),
+                q70=float(_safe_float(getattr(market_forecast, "short_q70", np.nan), np.nan)),
+                q80=float(_safe_float(getattr(market_forecast, "short_q80", np.nan), np.nan)),
+                q90=float(_safe_float(getattr(market_forecast, "short_q90", np.nan), np.nan)),
+            ),
+            market_mid_profile=_ReturnQuantileProfile(
+                expected_return=float(_safe_float(getattr(market_forecast, "mid_expected_ret", 0.0), 0.0)),
+                q10=float(_safe_float(getattr(market_forecast, "mid_q10", np.nan), np.nan)),
+                q30=float(_safe_float(getattr(market_forecast, "mid_q30", np.nan), np.nan)),
+                q20=float(_safe_float(getattr(market_forecast, "mid_q20", np.nan), np.nan)),
+                q50=float(_safe_float(getattr(market_forecast, "mid_q50", np.nan), np.nan)),
+                q70=float(_safe_float(getattr(market_forecast, "mid_q70", np.nan), np.nan)),
+                q80=float(_safe_float(getattr(market_forecast, "mid_q80", np.nan), np.nan)),
+                q90=float(_safe_float(getattr(market_forecast, "mid_q90", np.nan), np.nan)),
+            ),
             use_us_index_context=bool(settings.get("use_us_index_context", False)),
             us_index_source=str(settings.get("us_index_source", "akshare")),
+            use_us_sector_etf_context=bool(settings.get("use_us_sector_etf_context", False)),
+            use_cn_etf_context=bool(settings.get("use_cn_etf_context", False)),
+            cn_etf_source=str(settings.get("cn_etf_source", "akshare")),
         )
         _emit_progress("daily", "开始独立板块预测")
         sector_frames = build_sector_daily_frames(
@@ -7099,6 +7842,15 @@ def run_daily_v2_live(
         decision=policy_decision,
         current_weights=current_weights,
     )
+    prediction_review, calibration_priors = _load_prediction_review_context(
+        manifest=manifest,
+        manifest_path=manifest_path,
+    )
+    composite_state = _decorate_composite_state_for_reporting(
+        state=composite_state,
+        policy=policy_decision,
+        calibration_priors=calibration_priors,
+    )
     result = DailyRunResult(
         snapshot=snapshot,
         composite_state=composite_state,
@@ -7128,6 +7880,7 @@ def run_daily_v2_live(
         snapshot_hash=snapshot.snapshot_hash,
         config_hash=snapshot.config_hash,
         manifest_path=snapshot.manifest_path,
+        prediction_review=prediction_review,
     )
     result = remember_daily_run(
         memory_root=memory_root,
@@ -7185,6 +7938,7 @@ def summarize_daily_run(result: DailyRunResult) -> dict[str, object]:
         "manifest_path": result.manifest_path or result.snapshot.manifest_path,
         "memory_path": result.memory_path,
         "memory_recall": asdict(result.memory_recall),
+        "prediction_review": asdict(result.prediction_review),
         "strategy_mode": result.composite_state.strategy_mode,
         "risk_regime": result.composite_state.risk_regime,
         "market": asdict(result.composite_state.market),

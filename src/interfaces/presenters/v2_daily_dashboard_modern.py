@@ -5,7 +5,6 @@ from pathlib import Path
 
 import pandas as pd
 
-from src.application.v2_contracts import CandidateSelectionState
 from src.application.v2_contracts import DailyRunResult as V2DailyRunResult
 
 
@@ -15,262 +14,161 @@ def _pct(v: float) -> str:
     return f"{v * 100:.1f}%"
 
 
-def _bp(v: float) -> str:
-    if pd.isna(v):
-        return "NA"
-    return f"{v * 10000:.0f}bp"
-
-
 def _num(v: float, digits: int = 2) -> str:
     if pd.isna(v):
         return "NA"
     return f"{v:.{digits}f}"
 
 
-def _score(v: float) -> str:
-    if pd.isna(v):
-        return "NA"
-    return f"{v:+.3f}"
-
-
-def _score_color(v: float) -> str:
-    if pd.isna(v):
-        return "#7f8c8d"
-    if v >= 0:
-        return "#d4523d"
-    return "#2e69c7"
-
-
 def write_v2_daily_dashboard(out_path: str | Path, result: V2DailyRunResult) -> Path:
     path = Path(out_path)
     path.parent.mkdir(parents=True, exist_ok=True)
-    name_map = dict(result.symbol_names)
     state = result.composite_state
-    policy = result.policy_decision
     market = state.market
-    market_info = state.market_info_state
-    capital = state.capital_flow_state
-    macro = state.macro_context_state
-    candidate_selection = getattr(state, "candidate_selection", CandidateSelectionState())
-    mainlines = list(getattr(state, "mainlines", []))
-
-    def _stock_name(symbol: str) -> str:
-        return str(name_map.get(symbol, symbol))
-
-    def _stock_label(symbol: str) -> str:
-        name = _stock_name(symbol)
-        if name and name != symbol:
-            return (
-                f"<div class='ticker'>{escape(symbol)}</div>"
-                f"<div class='ticker-name'>{escape(name)}</div>"
-            )
-        return f"<div class='ticker'>{escape(symbol)}</div>"
-
-    def _badge(text: str, tone: str = "neutral") -> str:
-        return f"<span class='badge {tone}'>{escape(text)}</span>"
-
-    def _action_tone(action: str) -> str:
-        return "buy" if action == "BUY" else ("sell" if action == "SELL" else "hold")
-
-    def _action_label(action: str) -> str:
-        return {"BUY": "Buy", "SELL": "Sell", "HOLD": "Hold"}.get(action, action)
-
-    def _meter_row(label: str, value: float, *, color: str, detail: str = "") -> str:
-        width = max(0.0, min(100.0, float(value) * 100.0))
-        detail_html = f"<span>{escape(detail)}</span>" if detail else ""
-        return (
-            "<div class='meter-row'>"
-            f"<div class='meter-head'><strong>{escape(label)}</strong>{detail_html}</div>"
-            "<div class='meter-track'>"
-            f"<div class='meter-fill' style='width:{width:.1f}%; background:{color};'></div>"
-            "</div>"
-            f"<div class='meter-value'>{_pct(value)}</div>"
-            "</div>"
-        )
-
+    sentiment = market.sentiment
+    facts = market.market_facts
+    policy = result.policy_decision
+    name_map = dict(result.symbol_names)
+    candidate_order = {
+        str(symbol): idx
+        for idx, symbol in enumerate(getattr(state.candidate_selection, "shortlisted_symbols", []))
+    }
+    ranked_stocks = sorted(
+        list(state.stocks),
+        key=lambda stock: candidate_order.get(stock.symbol, len(candidate_order) + 999),
+    )
+    top20 = ranked_stocks[:20]
     selected_symbols = {
         str(symbol)
         for symbol, weight in policy.symbol_target_weights.items()
         if float(weight) > 0.0
     }
-    selected_stocks = [stock for stock in state.stocks if stock.symbol in selected_symbols]
-    candidate_symbol_order = {
-        str(symbol): idx
-        for idx, symbol in enumerate(candidate_selection.shortlisted_symbols)
-    }
-    candidate_stocks = [stock for stock in state.stocks if stock.symbol in candidate_symbol_order]
-    candidate_stocks.sort(key=lambda stock: candidate_symbol_order.get(stock.symbol, len(candidate_symbol_order)))
-    watchlist_source = candidate_stocks or list(state.stocks)
-    watchlist_stocks = list(watchlist_source[:12])
-    risk_notes = list(policy.risk_notes) + list(policy.execution_notes)
-    top_actions = list(result.trade_actions[:6])
-
-    buy_count = sum(1 for item in result.trade_actions if item.action == "BUY")
-    sell_count = sum(1 for item in result.trade_actions if item.action == "SELL")
-    action_summary_parts = []
-    if buy_count:
-        action_summary_parts.append(f"{buy_count} buy")
-    if sell_count:
-        action_summary_parts.append(f"{sell_count} sell")
-    if not action_summary_parts:
-        action_summary_parts.append("no changes")
-    action_summary = ", ".join(action_summary_parts)
-    header_note = (
-        f"{policy.target_position_count} slots, turnover cap {_pct(policy.turnover_cap)}, "
-        f"{'rebalance' if policy.rebalance_now else 'hold'}"
-    )
-    shortlist_badge = (
-        f"{candidate_selection.shortlist_size}/{candidate_selection.total_scored} shortlisted"
-        if candidate_selection.shortlist_size and candidate_selection.total_scored
+    candidate = state.candidate_selection
+    shortlist_text = (
+        f"{candidate.shortlist_size}/{candidate.total_scored} shortlisted"
+        if candidate.shortlist_size and candidate.total_scored
         else f"{len(state.stocks)} names scored"
     )
-    shortlist_note = (
-        " | ".join(candidate_selection.selection_notes[:2])
-        if candidate_selection.selection_notes
-        else "Full universe ranking in use."
+    shortlist_notes = " | ".join(candidate.selection_notes[:2]) if candidate.selection_notes else "Full ranking in use."
+    recurring_symbols = ", ".join(result.memory_recall.recurring_symbols[:4]) or "NA"
+    mainline_rows = "".join(
+        "<li>"
+        f"{escape(item.name)} | conviction {_pct(item.conviction)} | sectors {escape(', '.join(item.sectors[:2]))}"
+        "</li>"
+        for item in getattr(state, "mainlines", [])[:4]
     )
 
-    action_rows_html = "".join(
+    def _stock_name(symbol: str) -> str:
+        return str(name_map.get(symbol, symbol))
+
+    def _next_session(date_text: str) -> str:
+        ts = pd.Timestamp(date_text)
+        if pd.isna(ts):
+            return ""
+        return str((ts + pd.offsets.BDay(1)).date())
+
+    next_session = _next_session(market.as_of_date)
+
+    def _ticker(symbol: str) -> str:
+        return (
+            f"<div class='ticker'>{escape(_stock_name(symbol))}</div>"
+            f"<div class='ticker-sub'>{escape(symbol)}</div>"
+        )
+
+    def _range_text(stock: object, key: str) -> str:
+        item = getattr(stock, "horizon_forecasts", {}).get(key)
+        if item is None:
+            return "NA"
+        if item.price_low == item.price_low and item.price_high == item.price_high:
+            return f"{item.price_low:.2f} ~ {item.price_high:.2f}"
+        return "NA"
+
+    def _stock_reason_text(stock: object) -> str:
+        if getattr(stock, "symbol", "") in selected_symbols:
+            return getattr(stock, "action_reason", "") or getattr(stock, "weight_reason", "") or "NA"
+        return getattr(stock, "blocked_reason", "") or "当前仅保留跟踪"
+
+    market_rows = "".join(
         "<tr>"
-        f"<td>{_stock_label(item.symbol)}</td>"
-        f"<td>{_badge(_action_label(item.action), _action_tone(item.action))}</td>"
-        f"<td>{_pct(item.current_weight)}</td>"
-        f"<td>{_pct(item.target_weight)}</td>"
-        f"<td class='score' style='color:{_score_color(item.delta_weight)}'>{_pct(item.delta_weight)}</td>"
+        f"<td>{escape(item.label)}</td>"
+        f"<td>{_pct(item.up_prob)}</td>"
+        f"<td>{_pct(item.q10)} ~ {_pct(item.q90)}</td>"
+        f"<td>{_pct(item.q50)}</td>"
+        f"<td>{_pct(item.confidence)}</td>"
+        "</tr>"
+        for key in ["1d", "2d", "3d", "5d", "10d", "20d"]
+        for item in [market.horizon_forecasts.get(key)]
+        if item is not None
+    )
+
+    top20_rows = "".join(
+        "<tr>"
+        f"<td>{idx}</td>"
+        f"<td>{_ticker(stock.symbol)}</td>"
+        f"<td>{escape(stock.sector)}</td>"
+        f"<td>{_range_text(stock, '1d')}</td>"
+        f"<td>{_pct(stock.horizon_forecasts.get('5d').q50 if stock.horizon_forecasts.get('5d') else float('nan'))}</td>"
+        f"<td>{_pct(stock.horizon_forecasts.get('20d').q50 if stock.horizon_forecasts.get('20d') else float('nan'))}</td>"
+        f"<td>{_pct(stock.horizon_forecasts.get('1d').up_prob if stock.horizon_forecasts.get('1d') else float('nan'))}</td>"
+        f"<td>{_pct(stock.horizon_forecasts.get('1d').confidence if stock.horizon_forecasts.get('1d') else float('nan'))}</td>"
+        "</tr>"
+        for idx, stock in enumerate(top20, start=1)
+    )
+
+    action_rows = "".join(
+        "<tr>"
+        f"<td>{_ticker(action.symbol)}</td>"
+        f"<td>{escape(action.action)}</td>"
+        f"<td>{_pct(action.current_weight)}</td>"
+        f"<td>{_pct(action.target_weight)}</td>"
+        f"<td>{_pct(action.delta_weight)}</td>"
+        f"<td>{escape(action.note or next((_stock_reason_text(stock) for stock in top20 if stock.symbol == action.symbol), 'NA'))}</td>"
+        "</tr>"
+        for action in result.trade_actions
+    )
+
+    cards_html = "".join(
+        "<article class='stock-card'>"
+        f"<h3>{escape(_stock_name(stock.symbol))} <span>{escape(stock.symbol)}</span></h3>"
+        f"<p class='meta'>{escape(stock.sector)} | 最新收盘 {(_num(stock.latest_close) if stock.latest_close == stock.latest_close else 'NA')}</p>"
+        f"<p><strong>下一交易日({escape(next_session or 'NA')})</strong>: {_range_text(stock, '1d')}，上涨概率 {_pct(stock.horizon_forecasts.get('1d').up_prob if stock.horizon_forecasts.get('1d') else float('nan'))}，置信度 {_pct(stock.horizon_forecasts.get('1d').confidence if stock.horizon_forecasts.get('1d') else float('nan'))}</p>"
+        f"<p><strong>入池原因</strong>: {escape('；'.join(stock.selection_reasons) or '综合排序靠前')}</p>"
+        f"<p><strong>排名原因</strong>: {escape('；'.join(stock.ranking_reasons) or '综合排序稳定')}</p>"
+        f"<p><strong>{'操作原因' if stock.symbol in selected_symbols else '未入组合原因'}</strong>: {escape(_stock_reason_text(stock))}</p>"
+        f"<p><strong>风险点</strong>: {escape('；'.join(stock.risk_flags) or '暂无显著硬风险')}</p>"
+        f"<p><strong>失效条件</strong>: {escape(stock.invalidation_rule or '跌破预期下沿且5日概率转弱')}</p>"
+        "</article>"
+        for stock in top20[:6]
+    )
+
+    review_rows = "".join(
+        "<tr>"
+        f"<td>{escape(item.label)}</td>"
+        f"<td>{_pct(item.hit_rate)}</td>"
+        f"<td>{_pct(item.avg_edge)}</td>"
+        f"<td>{_pct(item.realized_return)}</td>"
+        f"<td>{item.sample_size}</td>"
         f"<td>{escape(item.note or 'NA')}</td>"
         "</tr>"
-        for item in top_actions
-    )
-
-    selected_rows_html = "".join(
-        "<tr>"
-        f"<td>{_stock_label(stock.symbol)}</td>"
-        f"<td>{_pct(policy.symbol_target_weights.get(stock.symbol, 0.0))}</td>"
-        f"<td>{_pct(stock.up_5d_prob)}</td>"
-        f"<td>{_pct(stock.up_20d_prob)}</td>"
-        f"<td class='score' style='color:{_score_color(stock.alpha_score - 0.5)}'>{_num(stock.alpha_score, 3)}</td>"
-        f"<td>{_pct(stock.tradeability_score)}</td>"
-        "</tr>"
-        for stock in selected_stocks
-    )
-
-    watch_rows_html = "".join(
-        "<tr>"
-        f"<td>{idx}</td>"
-        f"<td>{_stock_label(stock.symbol)}</td>"
-        f"<td>{_pct(stock.up_1d_prob)}</td>"
-        f"<td>{_pct(stock.up_5d_prob)}</td>"
-        f"<td>{_pct(stock.up_20d_prob)}</td>"
-        f"<td class='score' style='color:{_score_color(stock.alpha_score - 0.5)}'>{_num(stock.alpha_score, 3)}</td>"
-        f"<td>{_pct(stock.tradeability_score)}</td>"
-        f"<td>{_pct(policy.symbol_target_weights.get(stock.symbol, 0.0))}</td>"
-        "</tr>"
-        for idx, stock in enumerate(watchlist_stocks, start=1)
-    )
-
-    full_rows_html = "".join(
-        "<tr>"
-        f"<td>{idx}</td>"
-        f"<td>{_stock_label(stock.symbol)}</td>"
-        f"<td>{_pct(stock.up_1d_prob)}</td>"
-        f"<td>{_pct(stock.up_2d_prob)}</td>"
-        f"<td>{_pct(stock.up_3d_prob)}</td>"
-        f"<td>{_pct(stock.up_5d_prob)}</td>"
-        f"<td>{_pct(stock.up_20d_prob)}</td>"
-        f"<td class='score' style='color:{_score_color(stock.alpha_score - 0.5)}'>{_num(stock.alpha_score, 3)}</td>"
-        f"<td>{_pct(stock.excess_vs_sector_prob)}</td>"
-        f"<td>{_pct(stock.tradeability_score)}</td>"
-        f"<td>{_pct(policy.symbol_target_weights.get(stock.symbol, 0.0))}</td>"
-        "</tr>"
-        for idx, stock in enumerate(state.stocks, start=1)
-    )
-
-    sector_budget_rows = "".join(
-        "<div class='budget-row'>"
-        f"<span>{escape(sector)}</span>"
-        "<div class='budget-track'>"
-        f"<div class='budget-fill' style='width:{max(0.0, min(100.0, float(weight) * 100.0)):.1f}%;'></div>"
-        "</div>"
-        f"<strong>{_pct(weight)}</strong>"
-        "</div>"
-        for sector, weight in sorted(policy.sector_budgets.items(), key=lambda item: float(item[1]), reverse=True)
-        if float(weight) > 0.0
-    )
-
-    risk_notes_html = "".join(f"<li>{escape(note)}</li>" for note in risk_notes[:6]) or "<li>No explicit risk note.</li>"
-    memory_notes_html = "".join(f"<li>{escape(note)}</li>" for note in result.memory_recall.narrative[:5]) or "<li>No memory narrative yet.</li>"
-    recurring_symbols = ", ".join(str(symbol) for symbol in result.memory_recall.recurring_symbols[:6]) or "NA"
-    generator_allocations = list(result.theme_allocations or result.snapshot.theme_allocations)
-    generator_rows_html = "".join(
-        "<tr>"
-        f"<td>{escape(str(item.get('theme', 'NA')))}</td>"
-        f"<td>{int(item.get('selected_count', 0))}</td>"
-        f"<td>{int(item.get('refined_count', 0))}</td>"
-        f"<td>{int(item.get('coarse_count', 0))}</td>"
-        f"<td>{_num(float(item.get('theme_strength', 0.0)), 3)}</td>"
-        "</tr>"
-        for item in generator_allocations[:8]
-    )
-
-    negative_rows_html = "".join(
-        "<tr>"
-        f"<td>{escape(item.target or 'market')}</td>"
-        f"<td>{escape(item.event_tag or item.info_type)}</td>"
-        f"<td>{_score(item.score)}</td>"
-        "</tr>"
-        for item in result.top_negative_info_events[:8]
-    )
-    positive_rows_html = "".join(
-        "<tr>"
-        f"<td>{escape(item.target or 'market')}</td>"
-        f"<td>{escape(item.event_tag or item.info_type)}</td>"
-        f"<td>{_score(item.score)}</td>"
-        "</tr>"
-        for item in result.top_positive_info_signals[:8]
-    )
-    divergence_rows_html = "".join(
-        "<tr>"
-        f"<td>{escape(item.symbol)}</td>"
-        f"<td>{_pct(item.quant_prob_20d)}</td>"
-        f"<td>{_pct(item.info_prob_20d)}</td>"
-        f"<td>{_pct(item.shadow_prob_20d)}</td>"
-        f"<td>{_bp(item.gap)}</td>"
-        "</tr>"
-        for item in result.quant_info_divergence[:8]
-    )
-    mainline_rows_html = "".join(
-        "<tr>"
-        f"<td>{escape(str(item.name))}</td>"
-        f"<td>{escape(str(item.driver))}</td>"
-        f"<td>{_pct(float(item.conviction))}</td>"
-        f"<td>{_pct(float(item.breadth))}</td>"
-        f"<td>{_pct(float(item.catalyst_strength))}</td>"
-        f"<td>{_pct(float(item.event_risk_level))}</td>"
-        f"<td>{escape(', '.join(list(item.sectors)[:2]))}</td>"
-        "</tr>"
-        for item in mainlines[:5]
+        for key in ["5d", "20d", "60d"]
+        for item in [result.prediction_review.windows.get(key)]
+        if item is not None
     )
 
     html = f"""<!doctype html>
-<html lang="en">
+<html lang="zh-CN">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>V2 Daily Dashboard</title>
+  <title>次日决策面板</title>
   <style>
     :root {{
-      --bg: #efe7d6;
-      --panel: #fffaf1;
-      --panel-strong: #fffdf8;
-      --ink: #1f2430;
-      --muted: #6f746d;
-      --line: #dccfb8;
-      --line-strong: #c9b995;
-      --accent: #b85632;
-      --buy: #c23b32;
-      --sell: #2f67c8;
-      --hold: #75836f;
-      --shadow: 0 18px 48px rgba(78, 58, 27, 0.10);
+      --bg: #f4efe6;
+      --panel: #fffaf2;
+      --ink: #1e2730;
+      --muted: #6f766d;
+      --line: #ddd1bc;
+      --shadow: 0 18px 46px rgba(45, 33, 12, 0.08);
     }}
     * {{ box-sizing: border-box; }}
     body {{
@@ -278,220 +176,110 @@ def write_v2_daily_dashboard(out_path: str | Path, result: V2DailyRunResult) -> 
       color: var(--ink);
       font-family: "Avenir Next", "PingFang SC", "Microsoft YaHei", sans-serif;
       background:
-        radial-gradient(circle at top right, rgba(184, 86, 50, 0.12), transparent 28%),
-        radial-gradient(circle at 20% 15%, rgba(31, 110, 120, 0.10), transparent 24%),
-        linear-gradient(180deg, #f7f1e5 0%, var(--bg) 100%);
+        radial-gradient(circle at top right, rgba(197, 91, 53, 0.10), transparent 26%),
+        radial-gradient(circle at left top, rgba(31, 111, 120, 0.10), transparent 24%),
+        linear-gradient(180deg, #faf5ec 0%, var(--bg) 100%);
     }}
-    .page {{ max-width: 1360px; margin: 0 auto; padding: 24px 18px 40px; }}
-    .hero {{
-      position: relative;
-      overflow: hidden;
-      background: linear-gradient(135deg, rgba(255, 252, 246, 0.96), rgba(248, 239, 224, 0.96));
-      border: 1px solid var(--line);
-      border-radius: 28px;
-      padding: 26px;
-      box-shadow: var(--shadow);
-    }}
-    .hero-top {{ display: flex; justify-content: space-between; gap: 20px; align-items: flex-start; }}
-    h1 {{ margin: 0; font-size: 38px; line-height: 1; letter-spacing: -0.03em; font-weight: 800; }}
-    .hero-sub {{ margin-top: 10px; color: var(--muted); font-size: 14px; line-height: 1.6; }}
-    .hero-flags {{ display: flex; flex-wrap: wrap; gap: 8px; justify-content: flex-end; }}
-    .badge {{
-      display: inline-flex; align-items: center; justify-content: center; padding: 7px 12px; border-radius: 999px;
-      border: 1px solid transparent; font-size: 12px; font-weight: 700; letter-spacing: 0.02em; white-space: nowrap;
-    }}
-    .badge.neutral {{ background: rgba(31, 36, 48, 0.06); color: var(--ink); border-color: rgba(31, 36, 48, 0.08); }}
-    .badge.buy {{ background: rgba(194, 59, 50, 0.10); color: var(--buy); border-color: rgba(194, 59, 50, 0.18); }}
-    .badge.sell {{ background: rgba(47, 103, 200, 0.10); color: var(--sell); border-color: rgba(47, 103, 200, 0.18); }}
-    .badge.hold {{ background: rgba(117, 131, 111, 0.12); color: var(--hold); border-color: rgba(117, 131, 111, 0.18); }}
-    .hero-strip {{ margin-top: 22px; display: grid; gap: 14px; grid-template-columns: repeat(4, minmax(0, 1fr)); }}
-    .hero-card {{ background: rgba(255, 255, 255, 0.62); border: 1px solid rgba(201, 185, 149, 0.55); border-radius: 20px; padding: 16px; }}
-    .eyebrow {{ color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: 0.10em; }}
-    .metric {{ margin-top: 8px; font-size: 32px; line-height: 1; font-weight: 800; }}
-    .metric-sub {{ margin-top: 8px; color: var(--muted); font-size: 13px; line-height: 1.5; }}
-    .section {{ margin-top: 18px; }}
-    .section-grid {{ display: grid; gap: 16px; grid-template-columns: 1.3fr 1fr; }}
-    .triple-grid {{ display: grid; gap: 16px; grid-template-columns: repeat(3, minmax(0, 1fr)); }}
-    .panel {{ background: var(--panel); border: 1px solid var(--line); border-radius: 24px; padding: 18px; box-shadow: 0 12px 28px rgba(45, 31, 8, 0.05); }}
-    .panel-title {{ display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 14px; }}
-    .panel-title h2 {{ margin: 0; font-size: 18px; letter-spacing: -0.01em; }}
-    .panel-title p {{ margin: 0; color: var(--muted); font-size: 13px; }}
-    .callout {{ border: 1px solid var(--line-strong); background: linear-gradient(180deg, rgba(255,255,255,0.58), rgba(255,255,255,0.18)); border-radius: 18px; padding: 14px; margin-top: 12px; }}
-    .callout strong {{ font-size: 14px; display: block; margin-bottom: 6px; }}
-    .meter-stack {{ display: grid; gap: 12px; }}
-    .meter-row {{ display: grid; gap: 6px; }}
-    .meter-head {{ display: flex; justify-content: space-between; gap: 10px; font-size: 13px; color: var(--muted); }}
-    .meter-head strong {{ color: var(--ink); font-weight: 700; }}
-    .meter-track {{ height: 12px; border-radius: 999px; background: #ecdfca; overflow: hidden; }}
-    .meter-fill {{ height: 100%; border-radius: 999px; }}
-    .meter-value {{ font-size: 12px; color: var(--muted); text-align: right; }}
-    .budget-stack {{ display: grid; gap: 10px; margin-top: 8px; }}
-    .budget-row {{ display: grid; grid-template-columns: 100px 1fr 56px; gap: 10px; align-items: center; font-size: 13px; }}
-    .budget-track {{ height: 11px; border-radius: 999px; background: #eadfce; overflow: hidden; }}
-    .budget-fill {{ height: 100%; border-radius: 999px; background: linear-gradient(90deg, var(--accent), #d98b4f); }}
-    .list {{ margin: 0; padding-left: 18px; color: var(--muted); }}
-    .list li + li {{ margin-top: 8px; }}
-    .table-wrap {{ border: 1px solid var(--line); border-radius: 20px; overflow: auto; background: var(--panel-strong); }}
-    table {{ width: 100%; border-collapse: collapse; min-width: 720px; }}
-    th, td {{ padding: 11px 10px; border-bottom: 1px solid #eadfce; font-size: 13px; text-align: left; vertical-align: top; }}
-    th {{ position: sticky; top: 0; z-index: 1; background: #fbf5ea; color: #5c615b; text-transform: uppercase; letter-spacing: 0.06em; font-size: 11px; }}
-    tr:last-child td {{ border-bottom: none; }}
-    .ticker {{ font-size: 13px; font-weight: 800; letter-spacing: 0.02em; }}
-    .ticker-name {{ margin-top: 3px; color: var(--muted); font-size: 12px; }}
-    .score {{ font-weight: 800; }}
-    .mini-grid {{ display: grid; gap: 12px; grid-template-columns: repeat(2, minmax(0, 1fr)); }}
-    .mini-stat {{ border: 1px solid var(--line); border-radius: 16px; padding: 12px; background: rgba(255,255,255,0.55); }}
-    .mini-stat strong {{ display: block; font-size: 20px; margin-top: 4px; }}
-    details {{ margin-top: 16px; border: 1px solid var(--line); border-radius: 20px; background: rgba(255,255,255,0.44); overflow: hidden; }}
-    summary {{ cursor: pointer; list-style: none; padding: 16px 18px; font-weight: 800; letter-spacing: 0.01em; }}
-    summary::-webkit-details-marker {{ display: none; }}
-    .details-body {{ padding: 0 18px 18px; }}
-    .empty {{ border: 1px dashed var(--line); border-radius: 16px; padding: 18px; color: var(--muted); text-align: center; background: rgba(255,255,255,0.5); }}
-    .footer-note {{ margin-top: 16px; font-size: 12px; color: var(--muted); line-height: 1.6; }}
+    .page {{ max-width: 1380px; margin: 0 auto; padding: 24px 18px 40px; }}
+    .hero, .panel {{ background: var(--panel); border: 1px solid var(--line); border-radius: 24px; box-shadow: var(--shadow); }}
+    .hero {{ padding: 24px; }}
+    .hero-grid, .triple, .stock-grid {{ display: grid; gap: 16px; }}
+    .hero-grid {{ grid-template-columns: 1.2fr 1fr; align-items: start; }}
+    .triple {{ grid-template-columns: repeat(3, minmax(0, 1fr)); margin-top: 18px; }}
+    .stock-grid {{ grid-template-columns: repeat(2, minmax(0, 1fr)); margin-top: 18px; }}
+    .panel {{ padding: 18px; margin-top: 18px; }}
+    h1 {{ margin: 0; font-size: 36px; line-height: 1; }}
+    h2 {{ margin: 0 0 12px; font-size: 18px; }}
+    h3 {{ margin: 0 0 8px; font-size: 18px; }}
+    h3 span {{ color: var(--muted); font-size: 12px; font-weight: 600; }}
+    p, li {{ line-height: 1.6; }}
+    .muted {{ color: var(--muted); }}
+    .facts {{ display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; }}
+    .fact {{ padding: 14px; border: 1px solid var(--line); border-radius: 18px; background: rgba(255,255,255,0.52); }}
+    .fact .eyebrow {{ font-size: 11px; text-transform: uppercase; color: var(--muted); letter-spacing: .08em; }}
+    .fact strong {{ display: block; margin-top: 8px; font-size: 28px; }}
+    .pill {{ display: inline-flex; padding: 7px 12px; border-radius: 999px; border: 1px solid rgba(0,0,0,.08); background: rgba(255,255,255,.72); margin-right: 8px; font-size: 12px; font-weight: 700; }}
+    .list {{ margin: 10px 0 0; padding-left: 18px; }}
+    table {{ width: 100%; border-collapse: collapse; }}
+    th, td {{ padding: 10px; border-bottom: 1px solid #e9dece; font-size: 13px; text-align: left; vertical-align: top; }}
+    th {{ background: #faf5eb; font-size: 11px; text-transform: uppercase; color: #67706a; letter-spacing: .06em; }}
+    .table-wrap {{ overflow: auto; border: 1px solid var(--line); border-radius: 18px; background: rgba(255,255,255,.55); }}
+    .ticker {{ font-weight: 800; }}
+    .ticker-sub {{ color: var(--muted); font-size: 12px; margin-top: 2px; }}
+    .stock-card {{ border: 1px solid var(--line); border-radius: 18px; background: rgba(255,255,255,.62); padding: 16px; }}
+    .stock-card .meta {{ color: var(--muted); margin-top: 0; }}
     @media (max-width: 1080px) {{
-      .hero-strip, .section-grid, .triple-grid, .mini-grid {{ grid-template-columns: 1fr; }}
-      .hero-top {{ flex-direction: column; }}
-      .hero-flags {{ justify-content: flex-start; }}
+      .hero-grid, .triple, .stock-grid, .facts {{ grid-template-columns: 1fr; }}
     }}
   </style>
 </head>
 <body>
   <main class="page">
     <section class="hero">
-      <div class="hero-top">
+      <div class="hero-grid">
         <div>
-          <h1>V2 Daily Dashboard</h1>
-          <div class="hero-sub">
-            <div>Strategy {escape(result.snapshot.strategy_id)} | As of {escape(market.as_of_date)} | Universe {escape(result.snapshot.universe_id or "custom")}</div>
-            <div>Focus: {escape(action_summary)} | {escape(header_note)}</div>
-            <div>{escape(shortlist_note)}</div>
-            <div>US context {"on" if result.snapshot.use_us_index_context else "off"} | source {escape(result.snapshot.us_index_source or "NA")}</div>
+          <h1>次日决策面板</h1>
+          <p class="muted">数据日期 {escape(market.as_of_date)}，下一交易日 {escape(next_session or 'NA')}。当前为 {escape(state.strategy_mode)} / {escape(state.risk_regime)}。</p>
+          <p class="muted">strategy {escape(result.snapshot.strategy_id)} | universe {escape(result.snapshot.universe_id)} | generator {escape(result.generator_version or result.snapshot.generator_version or 'NA')} | source {escape(result.snapshot.us_index_source or 'NA')}</p>
+          <p class="muted">{escape(shortlist_text)} | {escape(shortlist_notes)}</p>
+          <div>
+            <span class="pill">情绪阶段: {escape(sentiment.stage)}</span>
+            <span class="pill">情绪分: {_num(sentiment.score, 1)}/100</span>
+            <span class="pill">目标仓位: {_pct(policy.target_exposure)}</span>
+            <span class="pill">目标持仓: {policy.target_position_count}</span>
           </div>
+          <ul class="list">
+            {''.join(f"<li>{escape(item)}</li>" for item in sentiment.drivers[:4])}
+          </ul>
         </div>
-        <div class="hero-flags">
-          {_badge(state.strategy_mode, "neutral")}
-          {_badge(state.risk_regime, "neutral")}
-          {_badge("rebalance" if policy.rebalance_now else "hold", "buy" if policy.rebalance_now else "hold")}
-          {_badge(shortlist_badge, "neutral")}
+        <div class="facts">
+          <div class="fact"><div class="eyebrow">涨跌家数</div><strong>{facts.advancers}/{facts.decliners}</strong><div class="muted">平家数 {facts.flats}</div></div>
+          <div class="fact"><div class="eyebrow">涨停 / 跌停</div><strong>{facts.limit_up_count}/{facts.limit_down_count}</strong><div class="muted">新高/新低 {facts.new_high_count}/{facts.new_low_count}</div></div>
+          <div class="fact"><div class="eyebrow">样本中位涨跌幅</div><strong>{_pct(facts.median_return)}</strong><div class="muted">样本覆盖 {facts.sample_coverage}</div></div>
         </div>
       </div>
-      <div class="hero-strip">
-        <article class="hero-card"><div class="eyebrow">Target Exposure</div><div class="metric">{_pct(policy.target_exposure)}</div><div class="metric-sub">Target positions {policy.target_position_count} | turnover cap {_pct(policy.turnover_cap)}</div></article>
-        <article class="hero-card"><div class="eyebrow">Market Stack</div><div class="metric">{_pct(market.up_20d_prob)}</div><div class="metric-sub">1d {_pct(market.up_1d_prob)} | 5d {_pct(market.up_5d_prob)} | 20d {_pct(market.up_20d_prob)}</div></article>
-        <article class="hero-card"><div class="eyebrow">Execution State</div><div class="metric">{buy_count + sell_count}</div><div class="metric-sub">Buy {buy_count} | Sell {sell_count} | intraday T {"on" if policy.intraday_t_allowed else "off"}</div></article>
-        <article class="hero-card"><div class="eyebrow">External Layer</div><div class="metric">{escape(capital.flow_regime)}</div><div class="metric-sub">Macro {escape(macro.macro_risk_level)} | info items {result.info_item_count}</div></article>
-        <article class="hero-card"><div class="eyebrow">Dynamic Universe</div><div class="metric">{int(result.selected_pool_size or result.snapshot.selected_pool_size or len(state.stocks))}</div><div class="metric-sub">coarse {int(result.coarse_pool_size or result.snapshot.coarse_pool_size)} | refined {int(result.refined_pool_size or result.snapshot.refined_pool_size)}</div></article>
+      <div class="triple">
+        <div class="panel"><h2>大盘情绪</h2><p>{escape(sentiment.summary)}</p><p class="muted">样本成交额 {_num(facts.sample_amount, 0)}，成交热度 {_pct(state.capital_flow_state.turnover_heat)}，两融变化 {_num(state.capital_flow_state.margin_balance_change, 3)}</p></div>
+        <div class="panel"><h2>外部信号</h2><p>资金状态 {escape(state.capital_flow_state.flow_regime)}，北向强度 {_num(state.capital_flow_state.northbound_net_flow, 3)}，大单偏向 {_num(state.capital_flow_state.large_order_bias, 3)}</p><p class="muted">宏观风险 {escape(state.macro_context_state.macro_risk_level)}，风格 {escape(state.macro_context_state.style_regime)}</p></div>
+        <div class="panel"><h2>策略记忆</h2><p>{escape('；'.join(result.memory_recall.narrative[:2]) or '暂无策略记忆摘要')}</p><p class="muted">高频标的: {escape(recurring_symbols)}</p></div>
       </div>
     </section>
 
-    <section class="section section-grid">
-      <article class="panel">
-        <div class="panel-title"><div><h2>Execution Spotlight</h2><p>Only the actionable plan and the highest-signal reasons stay above the fold.</p></div>{_badge(f"{len(top_actions)} shown", "neutral")}</div>
-        {"<div class='table-wrap'><table><thead><tr><th>Name</th><th>Action</th><th>Current</th><th>Target</th><th>Delta</th><th>Note</th></tr></thead><tbody>" + action_rows_html + "</tbody></table></div>" if action_rows_html else "<div class='empty'>No trade action for this run.</div>"}
-        <div class="callout"><strong>Decision Drivers</strong><ul class="list">{risk_notes_html}</ul></div>
-      </article>
-      <article class="panel">
-        <div class="panel-title"><div><h2>Market Pulse</h2><p>Compact gauges for tomorrow's decision context.</p></div></div>
-        <div class="meter-stack">
-          {_meter_row("1d up probability", market.up_1d_prob, color="linear-gradient(90deg, #d87345, #b85632)", detail=market.trend_state)}
-          {_meter_row("5d up probability", market.up_5d_prob, color="linear-gradient(90deg, #1f8e86, #1f6e78)", detail=state.strategy_mode)}
-          {_meter_row("20d up probability", market.up_20d_prob, color="linear-gradient(90deg, #4d6fd6, #244a8f)", detail=state.risk_regime)}
-          {_meter_row("drawdown guard", 1.0 - market.drawdown_risk, color="linear-gradient(90deg, #c7a26b, #9a6b34)", detail=f"risk {_pct(market.drawdown_risk)}")}
-          {_meter_row("liquidity health", 1.0 - market.liquidity_stress, color="linear-gradient(90deg, #5f8d68, #3d6d45)", detail=f"stress {_pct(market.liquidity_stress)}")}
-        </div>
-      </article>
+    <section class="panel">
+      <h2>大盘多周期预测</h2>
+      <div class="table-wrap"><table><thead><tr><th>周期</th><th>上涨概率</th><th>预期区间</th><th>中位预期</th><th>置信度</th></tr></thead><tbody>{market_rows}</tbody></table></div>
     </section>
 
-    <section class="section section-grid">
-      <article class="panel">
-        <div class="panel-title"><div><h2>Selected Positions</h2><p>What the portfolio actually wants to hold after all risk clamps.</p></div>{_badge(f"{len(selected_stocks)} selected", "neutral")}</div>
-        {"<div class='table-wrap'><table><thead><tr><th>Name</th><th>Target</th><th>5d</th><th>20d</th><th>Alpha</th><th>Tradeability</th></tr></thead><tbody>" + selected_rows_html + "</tbody></table></div>" if selected_rows_html else "<div class='empty'>No position selected.</div>"}
-        <div class="callout"><strong>Sector Budget</strong><div class="budget-stack">{sector_budget_rows or "<div class='empty'>No sector budget assigned.</div>"}</div></div>
-      </article>
-      <article class="panel">
-        <div class="panel-title"><div><h2>Watchlist Edge</h2><p>Shortlist-first ranking: macro and sector screening cut the universe before fine timing. The full universe stays below for audit.</p></div>{_badge(f"top {len(watchlist_stocks)}", "neutral")}</div>
-        <div class="table-wrap"><table><thead><tr><th>Rank</th><th>Name</th><th>1d</th><th>5d</th><th>20d</th><th>Alpha</th><th>Tradeability</th><th>Target</th></tr></thead><tbody>{watch_rows_html or "<tr><td colspan='8'>No candidates.</td></tr>"}</tbody></table></div>
-      </article>
+    <section class="panel">
+      <h2>Dynamic Universe Funnel</h2>
+      <p class="muted">coarse {int(result.coarse_pool_size or result.snapshot.coarse_pool_size)} | refined {int(result.refined_pool_size or result.snapshot.refined_pool_size)} | selected {int(result.selected_pool_size or result.snapshot.selected_pool_size)}</p>
+      <p class="muted">{escape(result.generator_version or result.snapshot.generator_version or 'NA')} | {escape(shortlist_text)}</p>
+      <p class="muted">{escape(shortlist_notes)}</p>
     </section>
 
-    <section class="section section-grid">
-      <article class="panel">
-        <div class="panel-title"><div><h2>Dynamic Universe Funnel</h2><p>Upstream funnel before shortlist and timing. This is where dynamic 300 quality gets set.</p></div>{_badge(result.generator_version or result.snapshot.generator_version or "legacy", "neutral")}</div>
-        <div class="mini-grid">
-          <div class="mini-stat"><div class="eyebrow">Coarse Pool</div><strong>{int(result.coarse_pool_size or result.snapshot.coarse_pool_size)}</strong><div class="metric-sub">fast filter stage</div></div>
-          <div class="mini-stat"><div class="eyebrow">Refined Pool</div><strong>{int(result.refined_pool_size or result.snapshot.refined_pool_size)}</strong><div class="metric-sub">theme-aware rerank</div></div>
-          <div class="mini-stat"><div class="eyebrow">Selected Pool</div><strong>{int(result.selected_pool_size or result.snapshot.selected_pool_size or len(state.stocks))}</strong><div class="metric-sub">fed into shortlist/policy</div></div>
-          <div class="mini-stat"><div class="eyebrow">Generator Hash</div><strong>{escape((result.generator_hash or result.snapshot.generator_hash or "NA")[:10])}</strong><div class="metric-sub">manifest frozen for replay</div></div>
-        </div>
-        {"<div class='table-wrap' style='margin-top:16px;'><table><thead><tr><th>Theme</th><th>Selected</th><th>Refined</th><th>Coarse</th><th>Strength</th></tr></thead><tbody>" + generator_rows_html + "</tbody></table></div>" if generator_rows_html else "<div class='empty' style='margin-top:16px;'>No dynamic universe allocation summary.</div>"}
-      </article>
+    <section class="panel">
+      <h2>Top20 推荐</h2>
+      <div class="table-wrap"><table><thead><tr><th>排名</th><th>股票</th><th>行业</th><th>下一交易日区间</th><th>5日中位预期</th><th>20日中位预期</th><th>1日上涨概率</th><th>置信度</th></tr></thead><tbody>{top20_rows or "<tr><td colspan='8'>暂无候选</td></tr>"}</tbody></table></div>
     </section>
 
-    <section class="section triple-grid">
-      <article class="panel">
-        <div class="panel-title"><div><h2>External Signals</h2><p>Capital flow and macro context in one glance.</p></div>{_badge("enabled" if result.external_signal_enabled else "disabled", "neutral")}</div>
-        <div class="mini-grid">
-          <div class="mini-stat"><div class="eyebrow">Flow Regime</div><strong>{escape(capital.flow_regime)}</strong><div class="metric-sub">turnover heat {_pct(capital.turnover_heat)}</div></div>
-          <div class="mini-stat"><div class="eyebrow">Macro Risk</div><strong>{escape(macro.macro_risk_level)}</strong><div class="metric-sub">style {escape(macro.style_regime)}</div></div>
-          <div class="mini-stat"><div class="eyebrow">Northbound</div><strong>{_num(capital.northbound_net_flow, 3)}</strong><div class="metric-sub">large order {_num(capital.large_order_bias, 3)}</div></div>
-          <div class="mini-stat"><div class="eyebrow">FX / Commodity</div><strong>{_pct(macro.fx_pressure)}</strong><div class="metric-sub">commodity {_pct(macro.commodity_pressure)}</div></div>
-        </div>
-      </article>
-      <article class="panel">
-        <div class="panel-title"><div><h2>Mainline Radar</h2><p>Explicit market themes the strategy is willing to consume, not just sector rankings.</p></div>{_badge(f"{len(mainlines)} tracked", "neutral")}</div>
-        {"<div class='table-wrap'><table><thead><tr><th>Mainline</th><th>Driver</th><th>Conviction</th><th>Breadth</th><th>Catalyst</th><th>Risk</th><th>Sectors</th></tr></thead><tbody>" + mainline_rows_html + "</tbody></table></div>" if mainline_rows_html else "<div class='empty'>No dominant mainline detected.</div>"}
-      </article>
-      <article class="panel">
-        <div class="panel-title"><div><h2>Info Overlay</h2><p>This section should only matter when the overlay is non-empty.</p></div>{_badge("on" if result.info_shadow_enabled else "off", "neutral")}</div>
-        <div class="mini-grid">
-          <div class="mini-stat"><div class="eyebrow">Items</div><strong>{result.info_item_count}</strong><div class="metric-sub">coverage {_pct(market_info.coverage_ratio)}</div></div>
-          <div class="mini-stat"><div class="eyebrow">Event Risk</div><strong>{_pct(market_info.event_risk_level)}</strong><div class="metric-sub">negative {_pct(market_info.negative_event_risk)}</div></div>
-          <div class="mini-stat"><div class="eyebrow">Catalyst</div><strong>{_pct(market_info.catalyst_strength)}</strong><div class="metric-sub">confidence {_pct(market_info.coverage_confidence)}</div></div>
-          <div class="mini-stat"><div class="eyebrow">Shadow 20d</div><strong>{_pct(market_info.shadow_prob_20d)}</strong><div class="metric-sub">market 20d {_pct(market_info.info_prob_20d)}</div></div>
-        </div>
-      </article>
-      <article class="panel">
-        <div class="panel-title"><div><h2>Strategy Memory</h2><p>Recent recurring symbols, risk tags, and narrative.</p></div>{_badge(f"{result.memory_recall.recent_daily_run_count} runs", "neutral")}</div>
-        <div class="mini-grid">
-          <div class="mini-stat"><div class="eyebrow">Avg Exposure</div><strong>{_pct(result.memory_recall.average_target_exposure)}</strong><div class="metric-sub">rebalance ratio {_pct(result.memory_recall.rebalance_ratio)}</div></div>
-          <div class="mini-stat"><div class="eyebrow">Research IR</div><strong>{_num(result.memory_recall.latest_research_information_ratio, 2)}</strong><div class="metric-sub">excess {_pct(result.memory_recall.latest_research_excess_annual_return)}</div></div>
-        </div>
-        <div class="callout"><strong>Recurring symbols</strong>{escape(recurring_symbols)}</div>
-        <ul class="list" style="margin-top:12px;">{memory_notes_html}</ul>
-      </article>
+    <section class="panel">
+      <h2>实际操作</h2>
+      <div class="table-wrap"><table><thead><tr><th>股票</th><th>动作</th><th>当前权重</th><th>目标权重</th><th>权重变化</th><th>操作理由</th></tr></thead><tbody>{action_rows or "<tr><td colspan='6'>当前不触发调仓</td></tr>"}</tbody></table></div>
     </section>
 
-    <section class="section section-grid">
-      <article class="panel">
-        <div class="panel-title"><div><h2>Negative Event Watch</h2><p>Only top negatives are worth surfacing here.</p></div></div>
-        {"<div class='table-wrap'><table><thead><tr><th>Target</th><th>Tag</th><th>Score</th></tr></thead><tbody>" + negative_rows_html + "</tbody></table></div>" if negative_rows_html else "<div class='empty'>No negative event surfaced.</div>"}
-      </article>
-      <article class="panel">
-        <div class="panel-title"><div><h2>Positive Signal Watch</h2><p>Positive signals should support selection, not dominate it.</p></div></div>
-        {"<div class='table-wrap'><table><thead><tr><th>Target</th><th>Tag</th><th>Score</th></tr></thead><tbody>" + positive_rows_html + "</tbody></table></div>" if positive_rows_html else "<div class='empty'>No positive signal surfaced.</div>"}
-      </article>
+    <section class="stock-grid">
+      {cards_html or "<div class='panel'>暂无解释卡</div>"}
     </section>
 
-    <section class="section">
-      <article class="panel">
-        <div class="panel-title"><div><h2>Quant vs Info Divergence</h2><p>Only the largest disagreements are shown.</p></div></div>
-        {"<div class='table-wrap'><table><thead><tr><th>Symbol</th><th>Quant 20d</th><th>Info 20d</th><th>Shadow 20d</th><th>Gap</th></tr></thead><tbody>" + divergence_rows_html + "</tbody></table></div>" if divergence_rows_html else "<div class='empty'>No material quant/info divergence.</div>"}
-      </article>
+    <section class="panel">
+      <h2>Mainline Radar</h2>
+      <ul class="list">{mainline_rows or "<li>暂无主线</li>"}</ul>
     </section>
 
-    <section class="section">
-      <details>
-        <summary>Open full ranked universe ({len(state.stocks)} names)</summary>
-        <div class="details-body">
-          <div class="table-wrap">
-            <table>
-              <thead><tr><th>Rank</th><th>Name</th><th>1d</th><th>2d</th><th>3d</th><th>5d</th><th>20d</th><th>Alpha</th><th>Excess vs sector</th><th>Tradeability</th><th>Target</th></tr></thead>
-              <tbody>{full_rows_html}</tbody>
-            </table>
-          </div>
-        </div>
-      </details>
-      <div class="footer-note">This dashboard is designed as a decision page first and an audit page second. The actionable plan stays above the fold; the full universe remains available below for review.</div>
+    <section class="panel">
+      <h2>预测复盘</h2>
+      <div class="table-wrap"><table><thead><tr><th>窗口</th><th>命中参考</th><th>平均边际</th><th>近窗表现</th><th>样本数</th><th>说明</th></tr></thead><tbody>{review_rows or "<tr><td colspan='6'>暂无复盘数据</td></tr>"}</tbody></table></div>
+      <p class="muted">{escape('；'.join(result.prediction_review.notes) or '')}</p>
     </section>
   </main>
 </body>

@@ -34,6 +34,7 @@ from src.application.v2_services import (
     _sha256_file,
     calibrate_v2_policy,
     _load_or_build_v2_backtest_trajectory,
+    _resolve_v2_universe_settings,
     _make_forecast_backend,
     _policy_objective_score,
     _policy_spec_from_model,
@@ -252,6 +253,53 @@ def test_explicit_universe_file_disables_default_universe_tier(tmp_path: Path) -
     assert settings["universe_file"] == "config/universe_all_a_3y_local_ready_nost_no_kc_cy_stable3y.json"
     assert settings["universe_limit"] == 300
     assert settings["universe_tier"] == ""
+
+
+def test_explicit_universe_file_overrides_generated_base_for_dynamic_generated_tier(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    captured: dict[str, object] = {}
+
+    def fake_generate_dynamic_universe(**kwargs):
+        captured.update(kwargs)
+        manifest_dir = tmp_path / "cache" / "universe_catalog"
+        manifest_dir.mkdir(parents=True, exist_ok=True)
+        manifest_path = manifest_dir / "dynamic_300_test.generator.json"
+        manifest_path.write_text("{}", encoding="utf-8")
+        return SimpleNamespace(
+            selected_300=[{"symbol": "600000.SH"}, {"symbol": "000001.SZ"}],
+            generator_manifest=SimpleNamespace(
+                source_universe_path=str(kwargs["universe_file"]),
+                manifest_path=str(manifest_path),
+                generator_version="dynamic_universe_v2_leaders",
+                generator_hash="test-hash",
+                coarse_pool_size=1000,
+                refined_pool_size=600,
+                selected_pool_size=2,
+                theme_allocations=[],
+            ),
+        )
+
+    monkeypatch.setattr("src.application.v2_services.generate_dynamic_universe", fake_generate_dynamic_universe)
+
+    resolved = _resolve_v2_universe_settings(
+        settings={
+            "universe_tier": "generated_300",
+            "dynamic_universe_enabled": True,
+            "generated_universe_base_file": "config/universe_smoke_5.json",
+            "universe_file": "config/universe_all_a_tushare_live_20260313.json",
+            "generator_target_size": 300,
+            "generator_coarse_size": 1000,
+            "data_dir": "data",
+            "end": "2026-03-13",
+        },
+        cache_root=str(tmp_path / "cache"),
+    )
+
+    assert captured["universe_file"] == "config/universe_all_a_tushare_live_20260313.json"
+    assert resolved["source_universe_manifest_path"] == "config/universe_all_a_tushare_live_20260313.json"
+    assert resolved["selected_pool_size"] == 2
 
 
 def test_generated_80_learning_targets_prefer_realizable_alpha_and_ranking() -> None:
@@ -577,7 +625,7 @@ def test_publish_artifacts_records_universe_metadata_and_keeps_non_default_lates
     assert len(dataset_manifest["symbols"]) == 3
     assert dataset_manifest["source_universe_manifest_path"]
     assert dataset_manifest["dynamic_universe_enabled"] is True
-    assert dataset_manifest["generator_version"] == "dynamic_universe_v1"
+    assert dataset_manifest["generator_version"] == "dynamic_universe_v2_leaders"
     assert dataset_manifest["generator_hash"]
     assert dataset_manifest["coarse_pool_size"] >= 3
     assert dataset_manifest["refined_pool_size"] >= 3
@@ -599,7 +647,7 @@ def test_publish_artifacts_records_universe_metadata_and_keeps_non_default_lates
     assert manifest["info_hash"]
     assert manifest["use_us_index_context"] is True
     assert manifest["us_index_source"] == "akshare"
-    assert manifest["generator_version"] == "dynamic_universe_v1"
+    assert manifest["generator_version"] == "dynamic_universe_v2_leaders"
     assert manifest["generator_hash"]
     assert manifest["selected_pool_size"] == 3
     assert len(manifest["theme_allocations"]) >= 1

@@ -9,9 +9,12 @@ from src.application.v2_contracts import (
     CandidateSelectionState,
     CompositeState,
     CrossSectionForecastState,
+    HorizonForecast,
     InfoAggregateState,
     MainlineState,
+    MarketFactsState,
     MarketForecastState,
+    MarketSentimentState,
     MacroContextState,
     SectorForecastState,
     StockForecastState,
@@ -57,10 +60,38 @@ def decode_composite_state(payload: object) -> CompositeState | None:
     if not isinstance(sectors_raw, list) or not isinstance(stocks_raw, list):
         return None
     try:
-        market = MarketForecastState(**market_raw)
+        def _decode_horizon_map(raw: object) -> dict[str, HorizonForecast]:
+            if not isinstance(raw, dict):
+                return {}
+            out: dict[str, HorizonForecast] = {}
+            for key, value in raw.items():
+                if isinstance(value, dict):
+                    try:
+                        out[str(key)] = HorizonForecast(**value)
+                    except Exception:
+                        continue
+            return out
+
+        def _decode_market(raw: dict[str, object]) -> MarketForecastState:
+            payload = dict(raw)
+            payload["horizon_forecasts"] = _decode_horizon_map(payload.get("horizon_forecasts"))
+            market_facts_raw = payload.get("market_facts")
+            if isinstance(market_facts_raw, dict):
+                payload["market_facts"] = MarketFactsState(**market_facts_raw)
+            sentiment_raw = payload.get("sentiment")
+            if isinstance(sentiment_raw, dict):
+                payload["sentiment"] = MarketSentimentState(**sentiment_raw)
+            return MarketForecastState(**payload)
+
+        def _decode_stock(raw: dict[str, object]) -> StockForecastState:
+            payload = dict(raw)
+            payload["horizon_forecasts"] = _decode_horizon_map(payload.get("horizon_forecasts"))
+            return StockForecastState(**payload)
+
+        market = _decode_market(market_raw)
         cross = CrossSectionForecastState(**cross_raw)
         sectors = [SectorForecastState(**item) for item in sectors_raw if isinstance(item, dict)]
-        stocks = [StockForecastState(**item) for item in stocks_raw if isinstance(item, dict)]
+        stocks = [_decode_stock(item) for item in stocks_raw if isinstance(item, dict)]
         candidate_selection_raw = payload.get("candidate_selection", payload.get("candidate_selection_state", {}))
         mainlines_raw = payload.get("mainlines", [])
         market_info_raw = payload.get("market_info_state", {})
@@ -99,12 +130,83 @@ def decode_composite_state(payload: object) -> CompositeState | None:
         return None
 
 
+def _serialize_horizon_map(raw: object) -> dict[str, object]:
+    if not isinstance(raw, dict):
+        return {}
+    payload: dict[str, object] = {}
+    for key, value in raw.items():
+        item = value if isinstance(value, HorizonForecast) else HorizonForecast(**value) if isinstance(value, dict) else None
+        if item is None:
+            continue
+        payload[str(key)] = asdict(item)
+    return payload
+
+
+def _serialize_market_state(raw: object) -> dict[str, object]:
+    market = raw if isinstance(raw, MarketForecastState) else None
+    market_facts = getattr(raw, "market_facts", MarketFactsState())
+    sentiment = getattr(raw, "sentiment", MarketSentimentState())
+    return {
+        "as_of_date": str(getattr(raw, "as_of_date", "")),
+        "up_1d_prob": float(getattr(raw, "up_1d_prob", 0.5)),
+        "up_5d_prob": float(getattr(raw, "up_5d_prob", 0.5)),
+        "up_20d_prob": float(getattr(raw, "up_20d_prob", 0.5)),
+        "trend_state": str(getattr(raw, "trend_state", "neutral")),
+        "drawdown_risk": float(getattr(raw, "drawdown_risk", 0.0)),
+        "volatility_regime": str(getattr(raw, "volatility_regime", "neutral")),
+        "liquidity_stress": float(getattr(raw, "liquidity_stress", 0.0)),
+        "up_2d_prob": float(getattr(raw, "up_2d_prob", 0.5)),
+        "up_3d_prob": float(getattr(raw, "up_3d_prob", 0.5)),
+        "up_10d_prob": float(getattr(raw, "up_10d_prob", 0.5)),
+        "latest_close": float(getattr(raw, "latest_close", float("nan"))),
+        "horizon_forecasts": _serialize_horizon_map(getattr(raw, "horizon_forecasts", {})),
+        "market_facts": asdict(market_facts) if isinstance(market_facts, MarketFactsState) else asdict(MarketFactsState()),
+        "sentiment": asdict(sentiment) if isinstance(sentiment, MarketSentimentState) else asdict(MarketSentimentState()),
+    } if market is not None or raw is not None else asdict(MarketForecastState(
+        as_of_date="",
+        up_1d_prob=0.5,
+        up_5d_prob=0.5,
+        up_20d_prob=0.5,
+        trend_state="neutral",
+        drawdown_risk=0.0,
+        volatility_regime="neutral",
+        liquidity_stress=0.0,
+    ))
+
+
+def _serialize_stock_state(raw: object) -> dict[str, object]:
+    return {
+        "symbol": str(getattr(raw, "symbol", "")),
+        "sector": str(getattr(raw, "sector", "")),
+        "up_1d_prob": float(getattr(raw, "up_1d_prob", 0.5)),
+        "up_5d_prob": float(getattr(raw, "up_5d_prob", 0.5)),
+        "up_20d_prob": float(getattr(raw, "up_20d_prob", 0.5)),
+        "excess_vs_sector_prob": float(getattr(raw, "excess_vs_sector_prob", 0.5)),
+        "event_impact_score": float(getattr(raw, "event_impact_score", 0.0)),
+        "tradeability_score": float(getattr(raw, "tradeability_score", 0.0)),
+        "alpha_score": float(getattr(raw, "alpha_score", 0.0)),
+        "tradability_status": str(getattr(raw, "tradability_status", "normal")),
+        "up_2d_prob": float(getattr(raw, "up_2d_prob", 0.5)),
+        "up_3d_prob": float(getattr(raw, "up_3d_prob", 0.5)),
+        "up_10d_prob": float(getattr(raw, "up_10d_prob", 0.5)),
+        "latest_close": float(getattr(raw, "latest_close", float("nan"))),
+        "horizon_forecasts": _serialize_horizon_map(getattr(raw, "horizon_forecasts", {})),
+        "selection_reasons": [str(item) for item in getattr(raw, "selection_reasons", [])],
+        "ranking_reasons": [str(item) for item in getattr(raw, "ranking_reasons", [])],
+        "risk_flags": [str(item) for item in getattr(raw, "risk_flags", [])],
+        "invalidation_rule": str(getattr(raw, "invalidation_rule", "")),
+        "action_reason": str(getattr(raw, "action_reason", "")),
+        "weight_reason": str(getattr(raw, "weight_reason", "")),
+        "blocked_reason": str(getattr(raw, "blocked_reason", "")),
+    }
+
+
 def serialize_composite_state(state: CompositeState) -> dict[str, object]:
     return {
-        "market": asdict(getattr(state, "market")),
+        "market": _serialize_market_state(getattr(state, "market", None)),
         "cross_section": asdict(getattr(state, "cross_section")),
         "sectors": [asdict(item) for item in getattr(state, "sectors", [])],
-        "stocks": [asdict(item) for item in getattr(state, "stocks", [])],
+        "stocks": [_serialize_stock_state(item) for item in getattr(state, "stocks", [])],
         "strategy_mode": str(getattr(state, "strategy_mode", "")),
         "risk_regime": str(getattr(state, "risk_regime", "")),
         "candidate_selection": asdict(getattr(state, "candidate_selection", CandidateSelectionState())),

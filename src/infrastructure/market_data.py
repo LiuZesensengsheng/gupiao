@@ -3,7 +3,7 @@ from __future__ import annotations
 import os
 from pathlib import Path
 import time
-from typing import Dict, List
+from typing import Dict, List, Sequence
 
 import pandas as pd
 import requests
@@ -19,6 +19,8 @@ AUTO_SOURCE_CHAIN = ("eastmoney", "tushare", "akshare", "baostock")
 SUPPORTED_SOURCES = {"eastmoney", "tushare", "akshare", "baostock", "local", "auto"}
 _MEM_CACHE: Dict[tuple[str, str, str, str, str], pd.DataFrame] = {}
 _US_INDEX_MEM_CACHE: Dict[tuple[str, str], pd.DataFrame] = {}
+_US_ETF_MEM_CACHE: Dict[tuple[str, str], pd.DataFrame] = {}
+_CN_ETF_MEM_CACHE: Dict[str, pd.DataFrame] = {}
 _TUSHARE_TOKEN: str = ""
 
 
@@ -35,6 +37,17 @@ def _resolve_tushare_token() -> str:
     if _TUSHARE_TOKEN.strip():
         return _TUSHARE_TOKEN.strip()
     return str(os.getenv("TUSHARE_TOKEN", "")).strip()
+
+
+def _get_tushare_pro():
+    token = _resolve_tushare_token()
+    if not token:
+        raise DataError("tushare token is missing; set `TUSHARE_TOKEN` or pass `--tushare-token`")
+    try:
+        import tushare as ts
+    except Exception as exc:  # pragma: no cover - optional dependency
+        raise DataError("tushare is not installed, run: pip install tushare") from exc
+    return ts.pro_api(token)
 
 
 def _normalize_daily_columns(df: pd.DataFrame, symbol: str) -> pd.DataFrame:
@@ -207,21 +220,12 @@ def fetch_tushare_daily(
     start: str = "2010-01-01",
     end: str = "2099-12-31",
 ) -> pd.DataFrame:
-    token = _resolve_tushare_token()
-    if not token:
-        raise DataError("tushare token is missing; set `TUSHARE_TOKEN` or pass `--tushare-token`")
-
-    try:
-        import tushare as ts
-    except Exception as exc:  # pragma: no cover - optional dependency
-        raise DataError("tushare is not installed, run: pip install tushare") from exc
-
     try:
         info = normalize_symbol(symbol)
     except SymbolError as exc:
         raise DataError(str(exc)) from exc
 
-    pro = ts.pro_api(token)
+    pro = _get_tushare_pro()
     ts_code = info.symbol
     start_date = start.replace("-", "")
     end_date = end.replace("-", "")
@@ -275,6 +279,113 @@ def fetch_tushare_daily(
     if amount_col is not None:
         frame["amount"] = amount_col
     return _normalize_daily_columns(frame, symbol=symbol)
+
+
+def _normalize_tushare_batch_frame(raw: pd.DataFrame) -> pd.DataFrame:
+    frame = pd.DataFrame(
+        {
+            "symbol": _pick_column(raw, ["ts_code", "symbol"]),
+            "date": _pick_column(raw, ["trade_date", "date"]),
+            "open": _pick_column(raw, ["open"]),
+            "high": _pick_column(raw, ["high"]),
+            "low": _pick_column(raw, ["low"]),
+            "close": _pick_column(raw, ["close"]),
+            "volume": _pick_column(raw, ["vol", "volume"]),
+        }
+    )
+    amount_col = _pick_column(raw, ["amount"], required=False)
+    if amount_col is not None:
+        frame["amount"] = amount_col
+    return frame
+
+
+def _estimate_trading_days(start: str, end: str) -> int:
+    start_ts = pd.Timestamp(start).normalize()
+    end_ts = pd.Timestamp(end).normalize()
+    days = max(1, int((end_ts - start_ts).days) + 1)
+    return max(1, int(days * 245 / 365))
+
+
+def _merge_tushare_batch_results(
+    left: dict[str, pd.DataFrame],
+    right: dict[str, pd.DataFrame],
+) -> dict[str, pd.DataFrame]:
+    merged = dict(left)
+    for symbol, frame in right.items():
+        existing = merged.get(symbol)
+        if existing is None or existing.empty:
+            merged[symbol] = frame.copy()
+            continue
+        combined = pd.concat([existing, frame], ignore_index=True)
+        merged[symbol] = _normalize_daily_columns(combined, symbol=symbol)
+    return merged
+
+
+def fetch_tushare_daily_batch(
+    symbols: Sequence[str],
+    start: str = "2010-01-01",
+    end: str = "2099-12-31",
+) -> dict[str, pd.DataFrame]:
+    normalized: list[str] = []
+    for symbol in symbols:
+        try:
+            info = normalize_symbol(symbol)
+        except SymbolError as exc:
+            raise DataError(str(exc)) from exc
+        if not info.code.startswith(("0", "3", "6", "8", "9")):
+            raise DataError(f"{info.symbol}: tushare batch only supports stock daily data")
+        normalized.append(info.symbol)
+
+    if not normalized:
+        return {}
+
+    estimated_rows = len(normalized) * _estimate_trading_days(start, end)
+    if len(normalized) > 1 and estimated_rows > 5500:
+        start_ts = pd.Timestamp(start).normalize()
+        end_ts = pd.Timestamp(end).normalize()
+        if start_ts >= end_ts:
+            mid = max(1, len(normalized) // 2)
+            merged: dict[str, pd.DataFrame] = {}
+            merged.update(fetch_tushare_daily_batch(normalized[:mid], start=start, end=end))
+            merged.update(fetch_tushare_daily_batch(normalized[mid:], start=start, end=end))
+            return merged
+        mid_ts = start_ts + (end_ts - start_ts) / 2
+        left_end = mid_ts.normalize().strftime("%Y-%m-%d")
+        right_start = (mid_ts.normalize() + pd.Timedelta(days=1)).strftime("%Y-%m-%d")
+        merged = fetch_tushare_daily_batch(normalized, start=start, end=left_end)
+        tail = fetch_tushare_daily_batch(normalized, start=right_start, end=end)
+        return _merge_tushare_batch_results(merged, tail)
+
+    pro = _get_tushare_pro()
+    start_date = start.replace("-", "")
+    end_date = end.replace("-", "")
+    ts_codes = ",".join(normalized)
+
+    try:
+        raw = pro.daily(ts_code=ts_codes, start_date=start_date, end_date=end_date)
+    except Exception as exc:
+        raise DataError(f"tushare batch request failed: {exc}") from exc
+
+    if raw is None or raw.empty:
+        raise DataError("tushare batch returned no daily bars")
+
+    # Tushare daily is documented with a 6000-row cap per request, so split conservatively.
+    if len(normalized) > 1 and len(raw) >= 6000:
+        mid = len(normalized) // 2
+        merged: dict[str, pd.DataFrame] = {}
+        merged.update(fetch_tushare_daily_batch(normalized[:mid], start=start, end=end))
+        merged.update(fetch_tushare_daily_batch(normalized[mid:], start=start, end=end))
+        return merged
+
+    frame = _normalize_tushare_batch_frame(raw)
+    grouped: dict[str, pd.DataFrame] = {}
+    for symbol, part in frame.groupby("symbol", sort=False):
+        grouped[str(symbol)] = _normalize_daily_columns(part.drop(columns=["symbol"]), symbol=str(symbol))
+
+    missing = [symbol for symbol in normalized if symbol not in grouped]
+    if missing:
+        raise DataError(f"tushare batch missing symbols: {', '.join(missing[:10])}")
+    return grouped
 
 
 def fetch_akshare_daily(
@@ -356,6 +467,96 @@ def fetch_us_index_daily(
     if normalized.empty:
         raise DataError(f"{symbol}: US index rows are empty after normalization")
     _US_INDEX_MEM_CACHE[cache_key] = normalized
+    return _slice_date_range(normalized, start=start, end=end)
+
+
+def fetch_us_etf_daily(
+    symbol: str,
+    start: str = "2010-01-01",
+    end: str = "2099-12-31",
+    source: str = "akshare",
+) -> pd.DataFrame:
+    provider = str(source).strip().lower() or "akshare"
+    cache_key = (str(symbol).strip().upper(), provider)
+    cached = _US_ETF_MEM_CACHE.get(cache_key)
+    if cached is not None and not cached.empty:
+        return _slice_date_range(cached, start=start, end=end)
+
+    if provider != "akshare":
+        raise DataError(f"{symbol}: unsupported US ETF source: {source}")
+
+    try:
+        import akshare as ak
+    except Exception as exc:  # pragma: no cover - optional dependency
+        raise DataError("akshare is not installed, run: pip install akshare") from exc
+
+    try:
+        raw = ak.stock_us_daily(symbol=str(symbol).strip().upper(), adjust="qfq")
+    except Exception as exc:  # pragma: no cover - network/provider dependent
+        raise DataError(f"{symbol}: akshare US ETF request failed: {exc}") from exc
+
+    if raw is None or raw.empty:
+        raise DataError(f"{symbol}: akshare returned no US ETF rows")
+
+    normalized = _normalize_external_index_columns(raw, symbol=str(symbol).strip().upper())
+    if normalized.empty:
+        raise DataError(f"{symbol}: US ETF rows are empty after normalization")
+    _US_ETF_MEM_CACHE[cache_key] = normalized
+    return _slice_date_range(normalized, start=start, end=end)
+
+
+def fetch_cn_etf_daily(
+    symbol: str,
+    start: str = "2010-01-01",
+    end: str = "2099-12-31",
+    source: str = "akshare",
+) -> pd.DataFrame:
+    provider = str(source).strip().lower() or "akshare"
+    cache_key = str(symbol).strip()
+    cached = _CN_ETF_MEM_CACHE.get(cache_key)
+    if cached is not None and not cached.empty:
+        return _slice_date_range(cached, start=start, end=end)
+
+    if provider != "akshare":
+        raise DataError(f"{symbol}: unsupported CN ETF source: {source}")
+
+    try:
+        import akshare as ak
+    except Exception as exc:  # pragma: no cover - optional dependency
+        raise DataError("akshare is not installed, run: pip install akshare") from exc
+
+    try:
+        raw = ak.fund_etf_hist_em(
+            symbol=str(symbol).strip(),
+            period="daily",
+            start_date=start.replace("-", ""),
+            end_date=end.replace("-", ""),
+            adjust="qfq",
+        )
+    except Exception as exc:  # pragma: no cover - network/provider dependent
+        raise DataError(f"{symbol}: akshare CN ETF request failed: {exc}") from exc
+
+    if raw is None or raw.empty:
+        raise DataError(f"{symbol}: akshare returned no CN ETF rows")
+
+    frame = pd.DataFrame(
+        {
+            "date": _pick_column(raw, ["日期", "date"]),
+            "open": _pick_column(raw, ["开盘", "open"]),
+            "high": _pick_column(raw, ["最高", "high"]),
+            "low": _pick_column(raw, ["最低", "low"]),
+            "close": _pick_column(raw, ["收盘", "close"]),
+            "volume": _pick_column(raw, ["成交量", "volume"]),
+        }
+    )
+    amount_col = _pick_column(raw, ["成交额", "amount"], required=False)
+    if amount_col is not None:
+        frame["amount"] = amount_col
+
+    normalized = _normalize_external_index_columns(frame, symbol=str(symbol).strip())
+    if normalized.empty:
+        raise DataError(f"{symbol}: CN ETF rows are empty after normalization")
+    _CN_ETF_MEM_CACHE[cache_key] = normalized
     return _slice_date_range(normalized, start=start, end=end)
 
 

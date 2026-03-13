@@ -27,6 +27,23 @@ def _make_us_index_frame(start: str, periods: int = 90) -> pd.DataFrame:
     )
 
 
+def _make_cn_etf_frame(start: str, periods: int = 90) -> pd.DataFrame:
+    dates = pd.date_range(start, periods=periods, freq="B")
+    base = pd.Series(range(periods), dtype=float)
+    return pd.DataFrame(
+        {
+            "date": dates,
+            "open": 1.0 + base * 0.01,
+            "high": 1.01 + base * 0.01,
+            "low": 0.99 + base * 0.01,
+            "close": 1.005 + base * 0.01,
+            "volume": 10_000_000.0 + base * 5000.0,
+            "amount": (1.005 + base * 0.01) * (10_000_000.0 + base * 5000.0),
+            "symbol": "510300",
+        }
+    )
+
+
 def test_normalize_external_index_columns_supports_cn_headers() -> None:
     raw = pd.DataFrame(
         {
@@ -103,6 +120,47 @@ def test_build_market_context_features_merges_us_index_context(monkeypatch: pyte
     assert any(col.startswith("us_dji_") for col in got.feature_columns)
     assert len(got.frame) == len(market_dates)
     assert got.frame.filter(regex=r"^us_(inx|ndx|dji)_").notna().all().all()
+
+
+def test_build_market_context_features_merges_us_sector_and_cn_etf_context(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    market_dates = pd.Series(pd.date_range("2024-03-01", periods=8, freq="B"))
+
+    monkeypatch.setattr(
+        "src.infrastructure.market_context._build_index_context",
+        lambda **_: (pd.DataFrame(columns=["date"]), [], []),
+    )
+    monkeypatch.setattr(
+        "src.infrastructure.market_context._build_breadth_context",
+        lambda **_: (pd.DataFrame(columns=["date"]), [], []),
+    )
+    monkeypatch.setattr(
+        "src.infrastructure.market_context.fetch_us_etf_daily",
+        lambda symbol, **_: _make_us_index_frame("2023-11-01").assign(symbol=symbol),
+    )
+    monkeypatch.setattr(
+        "src.infrastructure.market_context.fetch_cn_etf_daily",
+        lambda symbol, **_: _make_cn_etf_frame("2024-01-01").assign(symbol=symbol),
+    )
+
+    got = build_market_context_features(
+        source="local",
+        data_dir="data",
+        start="2024-03-01",
+        end="2024-03-31",
+        market_dates=market_dates,
+        use_margin_features=False,
+        use_us_sector_etf_context=True,
+        use_cn_etf_context=True,
+        cn_etf_source="akshare",
+        min_valid_ratio=0.0,
+        min_valid_points=1,
+    )
+
+    assert any(col.startswith("us_etf_xlk_") for col in got.feature_columns)
+    assert any(col.startswith("cn_etf_300_") for col in got.feature_columns)
+    assert got.frame.filter(regex=r"^(us_etf_xlk|cn_etf_300)_").notna().all().all()
 
 
 def test_build_market_context_features_skips_us_index_when_disabled(monkeypatch: pytest.MonkeyPatch) -> None:

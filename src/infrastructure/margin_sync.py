@@ -275,27 +275,38 @@ def _fetch_tushare_stock(symbols: Sequence[str], start: str, end: str, token: st
         raise RuntimeError("tushare token missing")
 
     pro = ts.pro_api(token)
-    start_x = pd.Timestamp(start).strftime("%Y%m%d")
-    end_x = pd.Timestamp(end).strftime("%Y%m%d")
+    symbols_set = {s for s in (_safe_symbol(x) for x in symbols) if s is not None}
+    trade_days = pd.date_range(pd.Timestamp(start), pd.Timestamp(end), freq="B")
     parts: list[pd.DataFrame] = []
-    for symbol in symbols:
-        norm = _safe_symbol(symbol)
-        if norm is None:
-            continue
+    total_days = int(len(trade_days))
+    for idx, day in enumerate(trade_days, start=1):
         try:
-            raw = pro.margin_detail(ts_code=norm, start_date=start_x, end_date=end_x)
+            raw = pro.margin_detail(trade_date=day.strftime("%Y%m%d"))
         except Exception:
             continue
         frame = _normalize_stock_margin(pd.DataFrame(raw))
         if not frame.empty:
-            frame = frame[frame["symbol"] == norm]
-            parts.append(frame)
+            frame = frame[frame["symbol"].isin(symbols_set)]
+            if not frame.empty:
+                parts.append(frame)
+        if idx == 1 or idx % 50 == 0 or idx == total_days:
+            rows = int(sum(len(part) for part in parts)) if parts else 0
+            print(f"[SYNC] Tushare margin detail {idx}/{total_days} trade days collected_rows={rows}")
         if int(sleep_ms) > 0:
             time.sleep(float(sleep_ms) / 1000.0)
 
     if not parts:
         return pd.DataFrame(columns=["date", "symbol"])
     out = pd.concat(parts, ignore_index=True)
+    agg_cols = [
+        "finance_balance",
+        "securities_balance",
+        "finance_buy",
+        "finance_repay",
+        "securities_sell",
+        "securities_repay",
+    ]
+    out = out.groupby(["date", "symbol"], as_index=False)[agg_cols].sum(min_count=1)
     out = out.sort_values(["symbol", "date"]).drop_duplicates(subset=["symbol", "date"])
     return _limit_dates(out, start=start, end=end)
 
@@ -347,7 +358,8 @@ def sync_margin_data(
     market_df = pd.DataFrame(columns=["date"])
     stock_df = pd.DataFrame(columns=["date", "symbol"])
     notes: list[str] = []
-    used = ""
+    market_source = ""
+    stock_source = ""
     for src in source_order:
         try:
             m, s, local_notes = _try_source(
@@ -361,11 +373,14 @@ def sync_margin_data(
         except Exception as exc:
             notes.append(f"{src} failed: {exc}")
             continue
-        market_df = m
-        stock_df = s
         notes.extend(local_notes)
-        used = src
-        if not market_df.empty:
+        if market_df.empty and not m.empty:
+            market_df = m
+            market_source = src
+        if stock_df.empty and not s.empty:
+            stock_df = s
+            stock_source = src
+        if not market_df.empty and not stock_df.empty:
             break
 
     if market_df.empty:
@@ -382,6 +397,7 @@ def sync_margin_data(
 
     if stock_df.empty:
         # Keep a valid schema even when source cannot provide stock detail.
+        notes.append("all margin sources returned empty stock detail; stock file kept as empty schema.")
         stock_df = pd.DataFrame(
             columns=[
                 "date",
@@ -397,8 +413,14 @@ def sync_margin_data(
     stock_df = stock_df.sort_values(["symbol", "date"]).drop_duplicates(subset=["symbol", "date"])
     stock_df.to_csv(stock_path, index=False)
 
+    used_parts = [part for part in [market_source, stock_source] if part]
+    if market_source and stock_source and market_source != stock_source:
+        notes.append(
+            f"market margin sourced from {market_source}; stock detail sourced from {stock_source}."
+        )
+
     return MarginSyncResult(
-        source_used=used or "unknown",
+        source_used="+".join(dict.fromkeys(used_parts)) or "unknown",
         market_rows=int(len(market_df)),
         stock_rows=int(len(stock_df)),
         market_path=str(market_path),

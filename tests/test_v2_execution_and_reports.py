@@ -914,3 +914,20 @@ def test_v2_html_dashboards_keep_key_chinese_sections(tmp_path: Path) -> None:
     assert "64" in research_html
     assert "0.12" in research_html
 
+
+def test_v2_decision_outputs_include_new_forecast_sections(tmp_path: Path) -> None:
+    daily_result = _make_daily_result()
+
+    daily_md = write_v2_daily_report(tmp_path / "decision.md", daily_result).read_text(encoding="utf-8")
+    daily_html = write_v2_daily_dashboard(tmp_path / "decision.html", daily_result).read_text(encoding="utf-8")
+
+    assert "市场总览" in daily_md
+    assert "大盘多周期预测" in daily_md
+    assert "Top20 推荐" in daily_md
+    assert "推荐解释卡" in daily_md
+    assert "预测复盘" in daily_md
+
+    assert "次日决策面板" in daily_html
+    assert "Top20 推荐" in daily_html
+    assert "预测复盘" in daily_html
+

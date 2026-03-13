@@ -153,3 +153,48 @@ def test_dynamic_universe_generator_uses_cache(monkeypatch, tmp_path: Path) -> N
 
     assert second.generator_manifest.generator_hash == first.generator_manifest.generator_hash
     assert second.selected_300 == first.selected_300
+
+
+def test_dynamic_universe_generator_prefers_liquid_leaders(monkeypatch, tmp_path: Path) -> None:
+    data_dir = tmp_path / "data"
+    data_dir.mkdir(parents=True, exist_ok=True)
+    universe_file = tmp_path / "universe.json"
+    universe_file.write_text(
+        json.dumps(
+            {
+                "stocks": [
+                    {"symbol": "600001.SH", "name": "LeaderA", "sector": "科技"},
+                    {"symbol": "600002.SH", "name": "LeaderB", "sector": "科技"},
+                ]
+            },
+            ensure_ascii=False,
+            indent=2,
+        ),
+        encoding="utf-8",
+    )
+    _write_daily(data_dir, "600001.SH", periods=520, amount=1.2e8, slope=0.055)
+    _write_daily(data_dir, "600002.SH", periods=520, amount=2.2e7, slope=0.058)
+    monkeypatch.setattr("src.application.v2_universe_generator._load_tushare_stock_basic", lambda: {})
+    monkeypatch.setattr("src.application.v2_universe_generator._load_symbol_concepts", lambda symbols: {})
+
+    result = generate_dynamic_universe(
+        universe_file=str(universe_file),
+        data_dir=str(data_dir),
+        cache_root=str(tmp_path / "cache"),
+        target_size=1,
+        coarse_size=2,
+        theme_aware=False,
+        use_concepts=False,
+        end_date="2026-03-11",
+        min_history_days=480,
+        min_recent_amount=2.0e7,
+        theme_cap_ratio=1.0,
+        theme_floor_count=0,
+        turnover_quality_weight=0.25,
+        theme_weight=0.20,
+        refresh_cache=True,
+    )
+
+    assert result.selected_300[0]["symbol"] == "600001.SH"
+    assert result.selected_300[0]["leadership_score"] >= result.selected_300[0]["quality_score"] * 0.5
+    assert "leadership_score" in result.coarse_pool[0]

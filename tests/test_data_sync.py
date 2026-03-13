@@ -8,6 +8,7 @@ import pytest
 
 from src.domain.entities import Security
 from src.infrastructure import data_sync
+from src.interfaces.cli import run_api_cli
 
 
 def _sample_frame() -> pd.DataFrame:
@@ -164,7 +165,7 @@ def test_sync_market_data_supports_parallel_workers(
     monkeypatch.setattr(data_sync, "load_symbol_daily", loader)
 
     result = data_sync.sync_market_data(
-        source="tushare",
+        source="akshare",
         data_dir=str(tmp_path),
         start="2021-03-12",
         end="2026-03-12",
@@ -181,4 +182,115 @@ def test_sync_market_data_supports_parallel_workers(
     assert result.downloaded == 3
     assert result.attempted == 3
     assert result.failed == 0
+
+
+def test_sync_market_data_uses_tushare_batch_mode(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    rows = [
+        Security(symbol="600000.SH", name="浦发银行", sector="银行"),
+        Security(symbol="000001.SZ", name="平安银行", sector="银行"),
+        Security(symbol="600519.SH", name="贵州茅台", sector="消费"),
+        Security(symbol="000333.SZ", name="美的集团", sector="家电"),
+    ]
+
+    monkeypatch.setattr(
+        data_sync,
+        "_prepare_universe",
+        lambda **_: (rows, "file:test"),
+    )
+    monkeypatch.setattr(data_sync.time, "sleep", lambda *_: None)
+
+    batch_calls: list[list[str]] = []
+
+    def fake_batch_loader(*, symbols: list[str], start: str, end: str) -> dict[str, pd.DataFrame]:
+        batch_calls.append(list(symbols))
+        return {
+            symbol: _sample_frame().assign(symbol=symbol)
+            for symbol in symbols
+        }
+
+    monkeypatch.setattr(data_sync, "fetch_tushare_daily_batch", fake_batch_loader)
+
+    result = data_sync.sync_market_data(
+        source="tushare",
+        data_dir=str(tmp_path),
+        start="2025-01-01",
+        end="2026-03-12",
+        universe_size=4,
+        include_indices=False,
+        force_refresh=True,
+        sleep_ms=0,
+        parallel_workers=2,
+        max_failures=5,
+    )
+
+    output = capsys.readouterr().out
+    assert "Tushare batch mode enabled" in output
+    assert result.downloaded == 4
+    assert result.attempted == 4
+    assert result.failed == 0
+    assert batch_calls
+    assert sum(len(batch) for batch in batch_calls) == 4
+    assert (tmp_path / "600000.SH.csv").exists()
+    assert (tmp_path / "000001.SZ.csv").exists()
+
+
+def test_suggest_tushare_batch_size_for_long_ranges() -> None:
+    assert data_sync._suggest_tushare_batch_size("2018-01-01", "2026-03-13") == 4
+
+
+def test_sync_market_data_falls_back_to_single_symbol_when_batch_fails(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    rows = [
+        Security(symbol="600000.SH", name="浦发银行", sector="银行"),
+        Security(symbol="000001.SZ", name="平安银行", sector="银行"),
+    ]
+
+    monkeypatch.setattr(data_sync, "_prepare_universe", lambda **_: (rows, "file:test"))
+    monkeypatch.setattr(data_sync.time, "sleep", lambda *_: None)
+
+    def failing_batch(*, symbols: list[str], start: str, end: str) -> dict[str, pd.DataFrame]:
+        raise data_sync.DataError("batch empty")
+
+    fallback_calls: list[str] = []
+
+    def single_loader(*, symbol: str, source: str, **_: object) -> pd.DataFrame:
+        fallback_calls.append(f"{source}:{symbol}")
+        return _sample_frame().assign(symbol=symbol)
+
+    monkeypatch.setattr(data_sync, "fetch_tushare_daily_batch", failing_batch)
+    monkeypatch.setattr(data_sync, "load_symbol_daily", single_loader)
+
+    result = data_sync.sync_market_data(
+        source="tushare",
+        data_dir=str(tmp_path),
+        start="2025-01-01",
+        end="2026-03-12",
+        universe_size=2,
+        include_indices=False,
+        force_refresh=True,
+        sleep_ms=0,
+        parallel_workers=2,
+        max_failures=5,
+    )
+
+    output = capsys.readouterr().out
+    assert "Batch fallback to single-symbol requests" in output
+    assert result.downloaded == 2
+    assert result.failed == 0
+    assert fallback_calls == ["tushare:600000.SH", "tushare:000001.SZ"]
+
+
+def test_resolve_settings_includes_parallel_workers() -> None:
+    args = run_api_cli.build_parser().parse_args(
+        ["sync-data", "--parallel-workers", "12", "--config", "config/api.json"]
+    )
+    settings = run_api_cli._resolve_settings(args, {})
+    assert settings["parallel_workers"] == 12
 

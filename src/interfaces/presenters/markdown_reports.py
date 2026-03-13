@@ -945,3 +945,249 @@ def write_v2_research_report(
 
     report_path.write_text("\n".join(lines), encoding="utf-8")
     return report_path
+
+
+def write_v2_daily_report(out_path: str | Path, result: V2DailyRunResult) -> Path:
+    report_path = Path(out_path)
+    report_path.parent.mkdir(parents=True, exist_ok=True)
+    name_map = dict(result.symbol_names)
+
+    def _stock_name(symbol: str) -> str:
+        return str(name_map.get(symbol, symbol))
+
+    def _next_session(date_text: str) -> str:
+        ts = pd.Timestamp(date_text)
+        if pd.isna(ts):
+            return ""
+        return str((ts + pd.offsets.BDay(1)).date())
+
+    market = result.composite_state.market
+    sentiment = market.sentiment
+    facts = market.market_facts
+    next_session = _next_session(market.as_of_date)
+    candidate_order = {
+        str(symbol): idx
+        for idx, symbol in enumerate(result.composite_state.candidate_selection.shortlisted_symbols)
+    }
+    ranked_stocks = sorted(
+        list(result.composite_state.stocks),
+        key=lambda stock: candidate_order.get(stock.symbol, len(candidate_order) + 999),
+    )
+    top20 = ranked_stocks[:20]
+    selected_symbols = {
+        str(symbol)
+        for symbol, weight in result.policy_decision.symbol_target_weights.items()
+        if float(weight) > 0.0
+    }
+
+    lines: list[str] = []
+    lines.append("# V2 次日决策日报")
+    lines.append("")
+    lines.append(f"- 策略ID: {result.snapshot.strategy_id}")
+    lines.append(f"- artifact run_id: {result.run_id or result.snapshot.run_id or 'NA'}")
+    lines.append(f"- 股票池: {result.snapshot.universe_id}")
+    if result.snapshot.universe_size:
+        lines.append(f"- 股票池规模: {result.snapshot.universe_size}")
+    if result.snapshot.universe_generation_rule:
+        lines.append(f"- 股票池规则: {result.snapshot.universe_generation_rule}")
+    if result.snapshot.data_window:
+        lines.append(f"- 数据窗口: {result.snapshot.data_window}")
+    if result.snapshot.source_universe_manifest_path:
+        lines.append(f"- source universe manifest path: {result.snapshot.source_universe_manifest_path}")
+    if result.generator_manifest_path or result.snapshot.generator_manifest_path:
+        lines.append(f"- generator manifest path: {result.generator_manifest_path or result.snapshot.generator_manifest_path}")
+    if result.generator_version or result.snapshot.generator_version:
+        lines.append(f"- generator version: {result.generator_version or result.snapshot.generator_version}")
+    if result.info_manifest_path or result.snapshot.info_manifest_path:
+        lines.append(f"- info manifest path: {result.info_manifest_path or result.snapshot.info_manifest_path}")
+    if result.info_hash or result.snapshot.info_hash:
+        lines.append(f"- info_hash: {result.info_hash or result.snapshot.info_hash}")
+    lines.append(f"- info shadow enabled: {'true' if (result.info_shadow_enabled or result.snapshot.info_shadow_enabled) else 'false'}")
+    if result.external_signal_manifest_path or result.snapshot.external_signal_manifest_path:
+        lines.append(f"- external signal manifest path: {result.external_signal_manifest_path or result.snapshot.external_signal_manifest_path}")
+    lines.append(f"- external signals enabled: {'true' if (result.external_signal_enabled or result.snapshot.external_signal_enabled) else 'false'}")
+    if result.external_signal_version or result.snapshot.external_signal_version:
+        lines.append(f"- external signal version: {result.external_signal_version or result.snapshot.external_signal_version}")
+    lines.append(f"- US index context: {'enabled' if result.snapshot.use_us_index_context else 'disabled'} ({result.snapshot.us_index_source or 'NA'})")
+    if result.snapshot.manifest_path:
+        lines.append(f"- source manifest path: {result.snapshot.manifest_path}")
+    if result.snapshot.snapshot_hash or result.snapshot.config_hash:
+        lines.append(f"- snapshot_hash: {result.snapshot.snapshot_hash or result.snapshot_hash or 'NA'}")
+        lines.append(f"- config_hash: {result.snapshot.config_hash or result.config_hash or 'NA'}")
+    lines.append(f"- 数据日期: {market.as_of_date}")
+    lines.append(f"- 下一交易日: {next_session or 'NA'}")
+    lines.append(f"- 策略模式: {result.composite_state.strategy_mode}")
+    lines.append(f"- 风险状态: {result.composite_state.risk_regime}")
+    lines.append("")
+
+    lines.append("## 市场总览")
+    lines.append("")
+    lines.append("| 指标 | 数值 |")
+    lines.append("|---|---:|")
+    lines.append(f"| 情绪阶段 | {sentiment.stage} |")
+    lines.append(f"| 情绪分 | {_to_float(sentiment.score, 1)} / 100 |")
+    lines.append(f"| 目标总仓位 | {_to_percent(result.policy_decision.target_exposure)} |")
+    lines.append(f"| 目标持仓数 | {result.policy_decision.target_position_count} |")
+    lines.append(f"| 涨家数 / 跌家数 / 平家数 | {facts.advancers} / {facts.decliners} / {facts.flats} |")
+    lines.append(f"| 涨停 / 跌停 | {facts.limit_up_count} / {facts.limit_down_count} |")
+    lines.append(f"| 新高 / 新低 | {facts.new_high_count} / {facts.new_low_count} |")
+    lines.append(f"| 样本中位涨跌幅 | {_to_percent(facts.median_return)} |")
+    lines.append(f"| 样本覆盖数 | {facts.sample_coverage} |")
+    lines.append(f"| 样本成交额 | {_to_money(facts.sample_amount)} |")
+    lines.append("")
+
+    lines.append("## 大盘情绪")
+    lines.append("")
+    lines.append(f"- 情绪结论: {sentiment.summary}")
+    if sentiment.drivers:
+        lines.append(f"- 主要驱动: {'；'.join(sentiment.drivers)}")
+    if result.policy_decision.risk_notes:
+        lines.append(f"- 风险提示: {'；'.join(result.policy_decision.risk_notes)}")
+    lines.append("")
+
+    lines.append("## 大盘多周期预测")
+    lines.append("")
+    lines.append("| 周期 | 上涨概率 | 预期区间 | 中位预期 | 置信度 |")
+    lines.append("|---|---:|---:|---:|---:|")
+    for key in ["1d", "2d", "3d", "5d", "10d", "20d"]:
+        item = market.horizon_forecasts.get(key)
+        if item is None:
+            continue
+        lines.append(
+            f"| {item.label} | {_to_percent(item.up_prob)} | {_to_percent(item.q10)} ~ {_to_percent(item.q90)} | {_to_percent(item.q50)} | {_to_percent(item.confidence)} |"
+        )
+    lines.append("")
+
+    lines.append("## 动态股票池")
+    lines.append("")
+    lines.append("| 指标 | 数值 |")
+    lines.append("|---|---:|")
+    lines.append(f"| 粗排池 | {int(result.coarse_pool_size or result.snapshot.coarse_pool_size)} |")
+    lines.append(f"| 精排池 | {int(result.refined_pool_size or result.snapshot.refined_pool_size)} |")
+    lines.append(f"| 最终动态池 | {int(result.selected_pool_size or result.snapshot.selected_pool_size)} |")
+    lines.append("")
+
+    if result.memory_path:
+        recall = result.memory_recall
+        lines.append("## 策略记忆")
+        lines.append("")
+        lines.append(f"- memory path: {result.memory_path}")
+        if recall.latest_research_run_id:
+            gate_text = "通过" if recall.latest_research_release_gate_passed else "未通过"
+            lines.append(
+                f"- 最近研究: run_id={recall.latest_research_run_id}, 截止={recall.latest_research_end_date or 'NA'}, 超额年化={_to_percent(recall.latest_research_excess_annual_return)}, IR={_to_float(recall.latest_research_information_ratio, 2)}, release gate={gate_text}"
+            )
+        if recall.recent_daily_run_count:
+            lines.append(
+                f"- 近期日运行 {recall.recent_daily_run_count} 次: 平均目标仓位={_to_percent(recall.average_target_exposure)}, 调仓触发占比={_to_percent(recall.rebalance_ratio)}, 仓位趋势={_to_percent(recall.exposure_trend)}"
+            )
+        if recall.recurring_symbols:
+            lines.append(f"- 高频标的: {', '.join(recall.recurring_symbols)}")
+        for item in recall.narrative:
+            lines.append(f"- {item}")
+        lines.append("")
+
+    lines.append("## 外部信号")
+    lines.append("")
+    lines.append("| 指标 | 数值 |")
+    lines.append("|---|---:|")
+    lines.append(f"| 资金状态 | {result.composite_state.capital_flow_state.flow_regime} |")
+    lines.append(f"| 北向强度 | {_to_float(result.composite_state.capital_flow_state.northbound_net_flow, 3)} |")
+    lines.append(f"| 两融变化 | {_to_float(result.composite_state.capital_flow_state.margin_balance_change, 3)} |")
+    lines.append(f"| 成交热度 | {_to_percent(result.composite_state.capital_flow_state.turnover_heat)} |")
+    lines.append(f"| 大单偏向 | {_to_float(result.composite_state.capital_flow_state.large_order_bias, 3)} |")
+    lines.append(f"| 宏观风险 | {result.composite_state.macro_context_state.macro_risk_level} |")
+    lines.append(f"| 风格状态 | {result.composite_state.macro_context_state.style_regime} |")
+    lines.append(f"| 商品压力 | {_to_percent(result.composite_state.macro_context_state.commodity_pressure)} |")
+    lines.append(f"| 汇率压力 | {_to_percent(result.composite_state.macro_context_state.fx_pressure)} |")
+    lines.append(f"| 宽度代理 | {_to_percent(result.composite_state.macro_context_state.index_breadth_proxy)} |")
+    lines.append("")
+
+    lines.append("## Top20 推荐")
+    lines.append("")
+    lines.append("| 排名 | 股票 | 行业 | 下一交易日区间 | 5日中位预期 | 20日中位预期 | 1日上涨概率 | 置信度 |")
+    lines.append("|---:|---|---|---:|---:|---:|---:|---:|")
+    if not top20:
+        lines.append("| 1 | NA | NA | NA | NA | NA | NA | NA |")
+    else:
+        for idx, stock in enumerate(top20, start=1):
+            one = stock.horizon_forecasts.get("1d")
+            five = stock.horizon_forecasts.get("5d")
+            twenty = stock.horizon_forecasts.get("20d")
+            next_range = "NA"
+            if one is not None and one.price_low == one.price_low and one.price_high == one.price_high:
+                next_range = f"{one.price_low:.2f} ~ {one.price_high:.2f}"
+            lines.append(
+                f"| {idx} | {_stock_name(stock.symbol)} ({stock.symbol}) | {stock.sector} | {next_range} | {_to_percent(five.q50 if five is not None else float('nan'))} | {_to_percent(twenty.q50 if twenty is not None else float('nan'))} | {_to_percent(one.up_prob if one is not None else float('nan'))} | {_to_percent(one.confidence if one is not None else float('nan'))} |"
+            )
+    lines.append("")
+
+    lines.append("## 实际操作")
+    lines.append("")
+    lines.append("| 股票 | 动作 | 当前权重 | 目标权重 | 权重变化 | 操作理由 |")
+    lines.append("|---|---|---:|---:|---:|---|")
+    if not result.trade_actions:
+        lines.append("| 无 | HOLD | NA | NA | NA | 当前不触发调仓 |")
+    else:
+        stock_map = {stock.symbol: stock for stock in ranked_stocks}
+        for action in result.trade_actions:
+            stock = stock_map.get(action.symbol)
+            reason = action.note or ("" if stock is None else (stock.action_reason or stock.weight_reason))
+            lines.append(
+                f"| {_stock_name(action.symbol)} ({action.symbol}) | {action.action} | {_to_percent(action.current_weight)} | {_to_percent(action.target_weight)} | {_to_percent(action.delta_weight)} | {reason or 'NA'} |"
+            )
+    lines.append("")
+
+    lines.append("## 推荐解释卡")
+    lines.append("")
+    for stock in top20[:5]:
+        one = stock.horizon_forecasts.get("1d")
+        five = stock.horizon_forecasts.get("5d")
+        ten = stock.horizon_forecasts.get("10d")
+        twenty = stock.horizon_forecasts.get("20d")
+        lines.append(f"### {_stock_name(stock.symbol)} ({stock.symbol})")
+        lines.append(f"- 行业: {stock.sector}")
+        if stock.latest_close == stock.latest_close:
+            lines.append(f"- 最新收盘价: {_to_float(stock.latest_close, 2)}")
+        if one is not None:
+            one_range = "NA"
+            if one.price_low == one.price_low and one.price_high == one.price_high:
+                one_range = f"{one.price_low:.2f} ~ {one.price_high:.2f}"
+            lines.append(f"- 下一交易日({next_session or 'NA'})预期区间: {one_range}，中位预期 {_to_percent(one.q50)}，上涨概率 {_to_percent(one.up_prob)}，置信度 {_to_percent(one.confidence)}")
+        if five is not None and ten is not None and twenty is not None:
+            lines.append(f"- 多周期判断: 5日 {_to_percent(five.q50)} / 10日 {_to_percent(ten.q50)} / 20日 {_to_percent(twenty.q50)}")
+        if stock.selection_reasons:
+            lines.append(f"- 入池原因: {'；'.join(stock.selection_reasons)}")
+        if stock.ranking_reasons:
+            lines.append(f"- 排名原因: {'；'.join(stock.ranking_reasons)}")
+        if stock.symbol in selected_symbols and stock.action_reason:
+            lines.append(f"- 操作原因: {stock.action_reason}")
+        elif stock.blocked_reason:
+            lines.append(f"- 未入组合原因: {stock.blocked_reason}")
+        if stock.weight_reason:
+            lines.append(f"- 仓位说明: {stock.weight_reason}")
+        if stock.risk_flags:
+            lines.append(f"- 风险点: {'；'.join(stock.risk_flags)}")
+        if stock.invalidation_rule:
+            lines.append(f"- 失效条件: {stock.invalidation_rule}")
+        lines.append("")
+
+    lines.append("## 预测复盘")
+    lines.append("")
+    lines.append("| 窗口 | 命中参考 | 平均边际 | 近窗表现 | 样本数 | 说明 |")
+    lines.append("|---|---:|---:|---:|---:|---|")
+    if not result.prediction_review.windows:
+        lines.append("| 近5日 | NA | NA | NA | 0 | 暂无复盘数据 |")
+    else:
+        for key in ["5d", "20d", "60d"]:
+            item = result.prediction_review.windows.get(key)
+            if item is None:
+                continue
+            lines.append(
+                f"| {item.label} | {_to_percent(item.hit_rate)} | {_to_percent(item.avg_edge)} | {_to_percent(item.realized_return)} | {item.sample_size} | {item.note or 'NA'} |"
+            )
+    for note in result.prediction_review.notes:
+        lines.append(f"- {note}")
+
+    report_path.write_text("\n".join(lines), encoding="utf-8")
+    return report_path

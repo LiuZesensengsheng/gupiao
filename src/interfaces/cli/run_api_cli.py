@@ -11,6 +11,7 @@ from src.application.watchlist import load_watchlist
 from src.domain.symbols import SymbolError, normalize_symbol
 from src.infrastructure.data_sync import sync_market_data
 from src.infrastructure.discovery import build_candidate_universe
+from src.infrastructure.discovery import _load_universe_file as _load_discovery_universe_file
 from src.infrastructure.margin_sync import sync_margin_data
 from src.infrastructure.market_data import DataError, set_tushare_token
 from src.interfaces.presenters.html_dashboard import write_daily_dashboard
@@ -53,11 +54,14 @@ DEFAULT_TASK: dict[str, dict[str, Any]] = {
         "include_indices": True,
         "force_refresh": False,
         "sleep_ms": 80,
+        "parallel_workers": 1,
         "max_failures": 100,
         "write_universe_file": "config/universe_auto.json",
     },
     "sync-margin": {
         "symbols": "",
+        "universe_file": "",
+        "universe_limit": 0,
         "sleep_ms": 80,
     },
     "daily": {
@@ -730,6 +734,8 @@ def build_parser() -> argparse.ArgumentParser:
         help="Margin source chain: akshare/tushare/auto or comma chain",
     )
     sync_margin.add_argument("--watchlist", default=None, help="Watchlist JSON path when --symbols is not provided")
+    sync_margin.add_argument("--universe-file", dest="universe_file", default=None, help="Universe file (csv/json) used when --symbols is not provided")
+    sync_margin.add_argument("--universe-limit", dest="universe_limit", type=int, default=None, help="Optional limit on symbols loaded from universe file")
     sync_margin.add_argument("--start", default=None, help="Start date YYYY-MM-DD")
     sync_margin.add_argument("--end", default=None, help="End date YYYY-MM-DD")
     sync_margin.add_argument(
@@ -940,10 +946,18 @@ def run_sync_margin(settings: dict[str, Any]) -> int:
     set_tushare_token(settings.get("tushare_token", ""))
     symbols = _parse_symbol_list(settings.get("symbols", ""))
     if not symbols:
+        universe_file = str(settings.get("universe_file", "")).strip()
+        if universe_file:
+            rows = _load_discovery_universe_file(universe_file, enrich_metadata=False)
+            limit = int(settings.get("universe_limit", 0) or 0)
+            if limit > 0:
+                rows = rows[:limit]
+            symbols = [normalize_symbol(sec.symbol).symbol for sec in rows]
+    if not symbols:
         _, stocks, _ = load_watchlist(settings["watchlist"])
         symbols = [normalize_symbol(sec.symbol).symbol for sec in stocks]
     if not symbols:
-        print("[ERROR] No valid symbols for margin sync. Set --symbols or check watchlist.")
+        print("[ERROR] No valid symbols for margin sync. Set --symbols, --universe-file, or check watchlist.")
         return 2
 
     result = sync_margin_data(

@@ -1,0 +1,41 @@
+{
+  "generated_at": "2026-03-13T09:38:03.886409",
+  "source": "file:config/universe_fix_stale_7_stocks_20260313.json",
+  "stocks": [
+    {
+      "symbol": "002231.SZ",
+      "name": "002231.SZ",
+      "sector": "其他"
+    },
+    {
+      "symbol": "002859.SZ",
+      "name": "002859.SZ",
+      "sector": "其他"
+    },
+    {
+      "symbol": "300344.SZ",
+      "name": "300344.SZ",
+      "sector": "其他"
+    },
+    {
+      "symbol": "300391.SZ",
+      "name": "300391.SZ",
+      "sector": "其他"
+    },
+    {
+      "symbol": "600735.SH",
+      "name": "600735.SH",
+      "sector": "其他"
+    },
+    {
+      "symbol": "601555.SH",
+      "name": "601555.SH",
+      "sector": "其他"
+    },
+    {
+      "symbol": "603056.SH",
+      "name": "603056.SH",
+      "sector": "其他"
+    }
+  ]
+}

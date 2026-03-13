@@ -22,7 +22,7 @@ def _file_mtime_token(path_like: object) -> int:
 
 def build_prepared_backtest_cache_key(settings: Mapping[str, object]) -> str:
     payload = {
-        "version": "v2-prepared-cache-1",
+        "version": "v2-prepared-cache-2",
         "config_path": str(Path(str(settings.get("config_path", ""))).resolve()),
         "source": str(settings.get("source", "")),
         "data_dir": str(Path(str(settings.get("data_dir", ""))).resolve()),
@@ -44,6 +44,9 @@ def build_prepared_backtest_cache_key(settings: Mapping[str, object]) -> str:
         "margin_stock_mtime": _file_mtime_token(settings.get("margin_stock_file", "")),
         "use_us_index_context": bool(settings.get("use_us_index_context", False)),
         "us_index_source": str(settings.get("us_index_source", "akshare")),
+        "use_us_sector_etf_context": bool(settings.get("use_us_sector_etf_context", False)),
+        "use_cn_etf_context": bool(settings.get("use_cn_etf_context", False)),
+        "cn_etf_source": str(settings.get("cn_etf_source", "akshare")),
     }
     raw = json.dumps(payload, sort_keys=True, ensure_ascii=False)
     return hashlib.sha256(raw.encode("utf-8")).hexdigest()[:24]

@@ -137,6 +137,65 @@ def _mainline_priority_maps(mainlines: Iterable[MainlineState]) -> tuple[dict[st
     return sector_boosts, symbol_boosts
 
 
+def _sector_stock_support(
+    grouped: dict[str, list[tuple[StockForecastState, float, float]]],
+    *,
+    median_score: float,
+) -> dict[str, float]:
+    support: dict[str, float] = {}
+    strong_cut = max(0.56, float(median_score) + 0.02)
+    for sector, items in grouped.items():
+        if not items:
+            support[sector] = 0.0
+            continue
+        raw_scores = sorted((float(score) for _, _, score in items), reverse=True)
+        top_scores = raw_scores[: min(3, len(raw_scores))]
+        top_mean = float(np.mean(top_scores)) if top_scores else 0.0
+        strong_window = raw_scores[: min(5, len(raw_scores))]
+        strong_ratio = float(
+            sum(1 for score in strong_window if score >= strong_cut) / max(1, len(strong_window))
+        )
+        resilience = float(
+            np.mean(
+                [
+                    1.0 - 0.65 * _stock_fragility(stock)
+                    for stock, _, _ in items[: min(3, len(items))]
+                ]
+            )
+        )
+        support[sector] = float(
+            _clip(
+                0.55 * max(0.0, top_mean - max(0.54, float(median_score))) / 0.10
+                + 0.25 * strong_ratio
+                + 0.20 * resilience,
+                0.0,
+                1.0,
+            )
+        )
+    return support
+
+
+def _minimum_shortlist_size(
+    *,
+    total_scored: int,
+    shortlist_cap: int,
+    risk_regime: str,
+    quant_breadth: float,
+    breadth_strength: float,
+) -> int:
+    if total_scored <= 24:
+        return total_scored
+    if risk_regime == "risk_off":
+        floor = 4 if total_scored >= 120 else 3
+        if quant_breadth >= 0.08 or breadth_strength >= 0.08:
+            floor += 1
+    elif risk_regime == "cautious":
+        floor = 6 if total_scored >= 120 else 4
+    else:
+        floor = 8 if total_scored >= 120 else 5
+    return int(min(shortlist_cap, max(1, floor)))
+
+
 def candidate_risk_snapshot(stocks: Iterable[StockForecastState]) -> dict[str, float]:
     rows = list(stocks)
     if not rows:
@@ -209,7 +268,7 @@ def build_candidate_selection_state(
         )
 
     sector_rows = list(sectors)
-    grouped: dict[str, list[tuple[StockForecastState, float]]] = {}
+    grouped: dict[str, list[tuple[StockForecastState, float, float]]] = {}
     all_scores: list[float] = []
     risk_penalty_multiplier = 1.0
     if str(getattr(market, "volatility_regime", "")) == "high":
@@ -228,10 +287,15 @@ def build_candidate_selection_state(
             stock_score=score,
             risk_penalty=float(risk_penalty_multiplier) * fragility,
         )
-        grouped.setdefault(str(stock.sector), []).append((stock, priority))
+        grouped.setdefault(str(stock.sector), []).append((stock, priority, score))
         all_scores.append(score)
     for items in grouped.values():
         items.sort(key=lambda item: item[1], reverse=True)
+
+    median_score = float(np.median(all_scores)) if all_scores else 0.0
+    strong_cut = max(0.56, median_score + (0.025 if total_scored >= 80 else 0.015))
+    quant_breadth = float(sum(1 for score in all_scores if score >= strong_cut) / max(1, len(all_scores)))
+    sector_stock_support = _sector_stock_support(grouped, median_score=median_score)
 
     sector_priority = {
         str(sector.sector): _sector_priority(sector, strategy_mode=strategy_mode, risk_regime=risk_regime)
@@ -243,6 +307,7 @@ def build_candidate_selection_state(
     ]
     ranked_sectors.sort(
         key=lambda sector: (
+            float(sector_stock_support.get(str(sector.sector), 0.0)),
             float(sector_priority.get(str(sector.sector), 0.0)),
             float(sector.up_20d_prob),
             float(sector.relative_strength),
@@ -267,6 +332,7 @@ def build_candidate_selection_state(
         ranked_sectors.sort(
             key=lambda sector: (
                 float(mainline_sector_boosts.get(str(sector.sector), 0.0)),
+                float(sector_stock_support.get(str(sector.sector), 0.0)),
                 float(sector_priority.get(str(sector.sector), 0.0)),
                 float(sector.up_20d_prob),
                 float(sector.relative_strength),
@@ -282,7 +348,21 @@ def build_candidate_selection_state(
         shortlist_cap = max(10, int(shortlist_cap * 0.8))
     if float(getattr(cross_section, "weak_stock_ratio", 0.0)) >= 0.48:
         shortlist_cap = max(10, int(shortlist_cap * 0.85))
-    median_score = float(np.median(all_scores)) if all_scores else 0.0
+    supported_sector_count = int(sum(1 for value in sector_stock_support.values() if value >= 0.58))
+    if (
+        risk_regime == "risk_off"
+        and total_scored >= 120
+        and supported_sector_count >= 3
+        and float(getattr(cross_section, "breadth_strength", 0.0)) >= 0.05
+    ):
+        max_sectors = min(len(ranked_sectors), max_sectors + 1)
+    if (
+        risk_regime == "risk_off"
+        and total_scored >= 200
+        and supported_sector_count >= 5
+        and float(getattr(cross_section, "weak_stock_ratio", 0.0)) <= 0.52
+    ):
+        max_sectors = min(len(ranked_sectors), max_sectors + 1)
     base_gate = max(0.53, median_score + (0.01 if total_scored >= 80 else 0.0))
     if str(getattr(market, "volatility_regime", "")) == "high":
         base_gate += 0.015
@@ -294,7 +374,13 @@ def build_candidate_selection_state(
     eligible_sectors: list[str] = []
     for idx, sector in enumerate(ranked_sectors):
         priority = float(sector_priority.get(str(sector.sector), 0.0))
-        if idx == 0 or str(sector.sector) in strong_mainline_sectors or priority >= 0.03:
+        stock_support = float(sector_stock_support.get(str(sector.sector), 0.0))
+        if (
+            idx == 0
+            or str(sector.sector) in strong_mainline_sectors
+            or priority >= 0.03
+            or stock_support >= 0.60
+        ):
             eligible_sectors.append(str(sector.sector))
         if len(eligible_sectors) >= max_sectors:
             break
@@ -319,6 +405,7 @@ def build_candidate_selection_state(
             expandable,
             key=lambda sector: (
                 float(mainline_sector_boosts.get(sector, 0.0)),
+                float(sector_stock_support.get(sector, 0.0)),
                 float(sector_priority.get(sector, 0.0)) / float(slots[sector] + 0.35),
                 len(grouped.get(sector, [])),
             ),
@@ -336,32 +423,100 @@ def build_candidate_selection_state(
         if not ordered:
             continue
         sector_gate = max(0.51, base_gate - 0.03 * min(1.0, priority / 0.20))
+        sector_gate -= min(0.035, 0.05 * float(sector_stock_support.get(sector, 0.0)))
         if sector in strong_mainline_sectors:
             sector_gate -= min(0.03, float(mainline_sector_boosts.get(sector, 0.0)) * 0.18)
         elif strong_mainline_sectors:
             sector_gate += 0.01
         sector_selected = 0
-        for idx, (stock, score) in enumerate(ordered):
+        for idx, (stock, score, raw_score) in enumerate(ordered):
             if sector_selected >= slots[sector]:
                 break
             score += float(mainline_symbol_boosts.get(str(stock.symbol), 0.0))
             if idx > 0 and score + 1e-9 < sector_gate:
                 continue
-            if idx > 0 and _stock_fragility(stock) >= 0.55:
+            if idx > 0 and _stock_fragility(stock) >= (0.60 if raw_score >= strong_cut else 0.55):
                 continue
             selected_symbols.append(str(stock.symbol))
             sector_selected += 1
     if not selected_symbols:
-        selected_symbols = [str(stock.symbol) for stock, _ in sorted(
+        selected_symbols = [str(stock.symbol) for stock, _, _ in sorted(
             (item for items in grouped.values() for item in items),
             key=lambda item: item[1],
             reverse=True,
         )[:shortlist_cap]]
         notes.append("Shortlist fell back to raw stock ranking because sector gates were too strict.")
 
-    selected_symbols = list(dict.fromkeys(selected_symbols))[:shortlist_cap]
-    shortlisted_sectors = list(dict.fromkeys(str(stock_rows_by_sector.sector) for stock_rows_by_sector in ranked_sectors if str(stock_rows_by_sector.sector) in eligible_sectors))
-    shortlist_size = int(len(selected_symbols))
+    minimum_shortlist = _minimum_shortlist_size(
+        total_scored=total_scored,
+        shortlist_cap=shortlist_cap,
+        risk_regime=risk_regime,
+        quant_breadth=quant_breadth,
+        breadth_strength=float(getattr(cross_section, "breadth_strength", 0.0)),
+    )
+    if len(selected_symbols) < minimum_shortlist:
+        selected_set = set(selected_symbols)
+        global_ranked = sorted(
+            (item for items in grouped.values() for item in items),
+            key=lambda item: (
+                float(mainline_symbol_boosts.get(str(item[0].symbol), 0.0)),
+                float(item[1]),
+                float(item[2]),
+            ),
+            reverse=True,
+        )
+        added = 0
+        for stock, _, raw_score in global_ranked:
+            symbol = str(stock.symbol)
+            sector = str(stock.sector)
+            if symbol in selected_set:
+                continue
+            fragility = _stock_fragility(stock)
+            support = float(sector_stock_support.get(sector, 0.0))
+            if fragility >= 0.70:
+                continue
+            if sector not in eligible_sectors and support < 0.55 and raw_score < max(base_gate - 0.02, strong_cut - 0.01):
+                continue
+            selected_symbols.append(symbol)
+            selected_set.add(symbol)
+            slots[sector] = int(slots.get(sector, 0)) + 1
+            added += 1
+            if len(selected_symbols) >= minimum_shortlist or len(selected_symbols) >= shortlist_cap:
+                break
+        if added > 0:
+            notes.append(
+                f"Quant breadth fill added {added} names beyond macro-sector core to avoid an over-compressed shortlist."
+            )
+
+    macro_core_symbols = list(dict.fromkeys(selected_symbols))[:shortlist_cap]
+    global_ranked_symbols = [
+        str(stock.symbol)
+        for stock, _, _ in sorted(
+            (item for items in grouped.values() for item in items),
+            key=lambda item: (
+                float(mainline_symbol_boosts.get(str(item[0].symbol), 0.0)),
+                float(sector_stock_support.get(str(item[0].sector), 0.0)),
+                float(item[1]),
+                float(item[2]),
+            ),
+            reverse=True,
+        )
+    ]
+    selected_set = set(macro_core_symbols)
+    selected_symbols = list(macro_core_symbols)
+    selected_symbols.extend(symbol for symbol in global_ranked_symbols if symbol not in selected_set)
+    notes.append(
+        f"Macro ranking keeps all actionable names ordered; top {len(macro_core_symbols)} names receive sector-prioritized placement."
+    )
+    symbol_sector_map = {str(stock.symbol): str(stock.sector) for stock in stock_rows}
+    shortlisted_sectors = list(
+        dict.fromkeys(
+            symbol_sector_map.get(symbol, "")
+            for symbol in macro_core_symbols
+            if symbol_sector_map.get(symbol, "")
+        )
+    )
+    shortlist_size = int(len(macro_core_symbols))
     return CandidateSelectionState(
         shortlisted_symbols=selected_symbols,
         shortlisted_sectors=shortlisted_sectors,
@@ -369,7 +524,7 @@ def build_candidate_selection_state(
         total_scored=total_scored,
         shortlist_size=shortlist_size,
         shortlist_ratio=float(shortlist_size / max(1, total_scored)),
-        selection_mode="macro_sector_shortlist",
+        selection_mode="macro_sector_ranking",
         selection_notes=notes,
     )
 

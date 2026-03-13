@@ -14,7 +14,7 @@ import requests
 
 from src.domain.entities import Security
 from src.domain.symbols import SymbolError, normalize_symbol
-from src.infrastructure.market_data import DataError, load_symbol_daily
+from src.infrastructure.market_data import DataError, fetch_tushare_daily_batch, load_symbol_daily
 
 
 EASTMONEY_CLIST_URL = "https://push2.eastmoney.com/api/qt/clist/get"
@@ -355,6 +355,47 @@ def _load_symbol_daily_task(
     return symbol, frame
 
 
+def _estimate_trading_days(start: str, end: str) -> int:
+    start_ts = pd.Timestamp(start).normalize()
+    end_ts = pd.Timestamp(end).normalize()
+    days = max(1, int((end_ts - start_ts).days) + 1)
+    return max(1, int(days * 245 / 365))
+
+
+def _suggest_tushare_batch_size(start: str, end: str) -> int:
+    trading_days = _estimate_trading_days(start, end)
+    if trading_days >= 900:
+        return 4
+    if trading_days >= 500:
+        return 6
+    return 8
+
+
+def _load_tushare_batch_task(
+    *,
+    symbols: Sequence[str],
+    start: str,
+    end: str,
+) -> dict[str, pd.DataFrame]:
+    return fetch_tushare_daily_batch(symbols=symbols, start=start, end=end)
+
+
+def _load_single_tushare_fallback(
+    *,
+    symbol: str,
+    data_dir: str,
+    start: str,
+    end: str,
+) -> pd.DataFrame:
+    return load_symbol_daily(
+        symbol=symbol,
+        source="tushare",
+        data_dir=data_dir,
+        start=start,
+        end=end,
+    )
+
+
 def sync_market_data(
     *,
     source: str,
@@ -622,7 +663,97 @@ def sync_market_data(
             )
 
     max_workers = max(1, int(parallel_workers))
-    if max_workers > 1 and pending_rows:
+    batch_source = str(source).strip().lower()
+    if batch_source == "tushare" and pending_rows:
+        batch_size = _suggest_tushare_batch_size(start, target_end.strftime("%Y-%m-%d"))
+        batches: list[list[tuple[int, str, Path]]] = [
+            pending_rows[i : i + batch_size] for i in range(0, len(pending_rows), batch_size)
+        ]
+        print(
+            f"[SYNC] Tushare batch mode enabled workers={min(max_workers, len(batches))} "
+            f"batch_size={batch_size} batches={len(batches)}"
+        )
+        executor = ThreadPoolExecutor(max_workers=min(max_workers, len(batches)))
+        stop_early = False
+        try:
+            in_flight: dict[Future[dict[str, pd.DataFrame]], list[tuple[int, str, Path]]] = {}
+            pending_iter = iter(batches)
+
+            def _submit_next_batch() -> bool:
+                try:
+                    batch = next(pending_iter)
+                except StopIteration:
+                    return False
+                future = executor.submit(
+                    _load_tushare_batch_task,
+                    symbols=[symbol for _, symbol, _ in batch],
+                    start=start,
+                    end=end,
+                )
+                in_flight[future] = batch
+                return True
+
+            for _ in range(min(max_workers, len(batches))):
+                _submit_next_batch()
+
+            while in_flight and not stop_early:
+                done, _ = wait(tuple(in_flight.keys()), return_when=FIRST_COMPLETED)
+                for future in done:
+                    batch = in_flight.pop(future)
+                    attempts += len(batch)
+                    batch_frames: dict[str, pd.DataFrame] = {}
+                    batch_error: Exception | None = None
+                    try:
+                        batch_frames = future.result()
+                    except KeyboardInterrupt:
+                        for other in in_flight:
+                            other.cancel()
+                        raise
+                    except Exception as exc:
+                        batch_error = exc
+
+                    if batch_error is not None:
+                        symbols_text = ", ".join(symbol for _, symbol, _ in batch[:4])
+                        print(f"[WARN] [SYNC] Batch fallback to single-symbol requests: {symbols_text} | reason: {batch_error}")
+
+                    for idx, symbol, path in batch:
+                        if stop_early:
+                            break
+                        df = batch_frames.get(symbol)
+                        try:
+                            if df is None or df.empty:
+                                df = _load_single_tushare_fallback(
+                                    symbol=symbol,
+                                    data_dir=data_dir,
+                                    start=start,
+                                    end=end,
+                                )
+                            _handle_success(idx=idx, symbol=symbol, path=path, df=df)
+                        except KeyboardInterrupt:
+                            for other in in_flight:
+                                other.cancel()
+                            raise
+                        except Exception as exc:
+                            failed += 1
+                            failed_symbols.append(symbol)
+                            print(
+                                f"[WARN] [SYNC] {idx}/{total} {symbol} sync failed: {exc} | "
+                                f"downloaded={downloaded} skipped={skipped} failed={failed} done={len(completed_symbols)}/{total}"
+                            )
+                            if failed >= max(1, int(max_failures)):
+                                print(
+                                    f"[WARN] [SYNC] Reached failure limit {max(1, int(max_failures))}, "
+                                    f"resume checkpoint retained -> {checkpoint_path.resolve()}"
+                                )
+                                for other in in_flight:
+                                    other.cancel()
+                                stop_early = True
+                                break
+                    if not stop_early:
+                        _submit_next_batch()
+        finally:
+            executor.shutdown(wait=True, cancel_futures=True)
+    elif max_workers > 1 and pending_rows:
         print(f"[SYNC] Parallel download enabled workers={min(max_workers, len(pending_rows))}")
         executor = ThreadPoolExecutor(max_workers=min(max_workers, len(pending_rows)))
         stop_early = False

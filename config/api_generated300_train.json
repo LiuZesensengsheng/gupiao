@@ -1,6 +1,6 @@
 {
   "common": {
-    "source": "auto",
+    "source": "local",
     "tushare_token": "ce0d71cf4f8716ca95d18a4ea489d784eb2d67eaec9f9b125336dc4d",
     "watchlist": "config/watchlist.json",
     "data_dir": "data",
@@ -19,38 +19,25 @@
     "margin_market_file": "input/margin_market.csv",
     "margin_stock_file": "input/margin_stock.csv"
   },
-  "forecast": {
-    "report": "reports/latest_report.md"
-  },
-  "discover": {
-    "universe_file": "",
-    "candidate_limit": 120,
-    "top_k": 20,
-    "exclude_watchlist": false,
-    "report": "reports/discovery_report.md"
-  },
-  "sync-data": {
-    "universe_size": 500,
-    "universe_file": "",
-    "include_indices": true,
-    "force_refresh": false,
-    "sleep_ms": 80,
-    "max_failures": 100,
-    "write_universe_file": "config/universe_auto.json"
-  },
-  "sync-margin": {
-    "symbols": "",
-    "sleep_ms": 80
-  },
   "daily": {
-    "universe_tier": "favorites_16",
-    "active_default_universe_tier": "favorites_16",
-    "candidate_default_universe_tier": "generated_80",
+    "universe_tier": "generated_300",
+    "active_default_universe_tier": "generated_300",
+    "candidate_default_universe_tier": "generated_300",
     "favorites_universe_file": "config/universe_favorites.json",
     "generated_universe_base_file": "config/universe_all_a_3y_local_ready_nost_no_kc_cy_stable3y.json",
     "baseline_reference_run_id": "20260308_211808",
-    "universe_file": "config/universe_auto_longtrain.json",
-    "universe_limit": 500,
+    "universe_limit": 300,
+    "dynamic_universe_enabled": true,
+    "dynamic_universe_target_size": 300,
+    "dynamic_universe_coarse_size": 1000,
+    "generator_theme_aware": true,
+    "generator_use_concepts": true,
+    "dynamic_universe_min_history_days": 480,
+    "dynamic_universe_min_recent_amount": 100000.0,
+    "dynamic_universe_theme_cap_ratio": 0.16,
+    "dynamic_universe_theme_floor_count": 2,
+    "dynamic_universe_turnover_quality_weight": 0.25,
+    "dynamic_universe_theme_weight": 0.18,
     "positions_file": "",
     "portfolio_nav": 0.0,
     "trade_lot_size": 100,
@@ -122,7 +109,7 @@
     "optimizer_top_trials": 12,
     "optimizer_time_budget_minutes": 3.0,
     "report_date": "",
-    "report": "reports/daily_report.md",
-    "dashboard": "reports/daily_dashboard.html"
+    "report": "reports/v2_daily_generated300_report.md",
+    "dashboard": "reports/v2_daily_generated300_dashboard.html"
   }
 }

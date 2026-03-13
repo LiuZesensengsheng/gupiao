@@ -7,6 +7,45 @@ from src.domain.entities import TradeAction
 
 
 @dataclass(frozen=True)
+class HorizonForecast:
+    horizon_days: int
+    label: str
+    up_prob: float = 0.5
+    expected_return: float = 0.0
+    q10: float = 0.0
+    q50: float = 0.0
+    q90: float = 0.0
+    price_low: float = float("nan")
+    price_mid: float = float("nan")
+    price_high: float = float("nan")
+    confidence: float = 0.5
+    confidence_reason: str = ""
+
+
+@dataclass(frozen=True)
+class MarketFactsState:
+    sample_coverage: int = 0
+    advancers: int = 0
+    decliners: int = 0
+    flats: int = 0
+    limit_up_count: int = 0
+    limit_down_count: int = 0
+    new_high_count: int = 0
+    new_low_count: int = 0
+    median_return: float = 0.0
+    sample_amount: float = 0.0
+    amount_z20: float = 0.0
+
+
+@dataclass(frozen=True)
+class MarketSentimentState:
+    score: float = 50.0
+    stage: str = "中性"
+    drivers: List[str] = field(default_factory=list)
+    summary: str = ""
+
+
+@dataclass(frozen=True)
 class MarketForecastState:
     as_of_date: str
     up_1d_prob: float
@@ -18,6 +57,11 @@ class MarketForecastState:
     liquidity_stress: float
     up_2d_prob: float = 0.5
     up_3d_prob: float = 0.5
+    up_10d_prob: float = 0.5
+    latest_close: float = float("nan")
+    horizon_forecasts: Dict[str, HorizonForecast] = field(default_factory=dict)
+    market_facts: MarketFactsState = field(default_factory=MarketFactsState)
+    sentiment: MarketSentimentState = field(default_factory=MarketSentimentState)
 
 
 @dataclass(frozen=True)
@@ -44,6 +88,16 @@ class StockForecastState:
     tradability_status: str = "normal"
     up_2d_prob: float = 0.5
     up_3d_prob: float = 0.5
+    up_10d_prob: float = 0.5
+    latest_close: float = float("nan")
+    horizon_forecasts: Dict[str, HorizonForecast] = field(default_factory=dict)
+    selection_reasons: List[str] = field(default_factory=list)
+    ranking_reasons: List[str] = field(default_factory=list)
+    risk_flags: List[str] = field(default_factory=list)
+    invalidation_rule: str = ""
+    action_reason: str = ""
+    weight_reason: str = ""
+    blocked_reason: str = ""
 
 
 @dataclass(frozen=True)
@@ -299,6 +353,7 @@ class DailyRunResult:
     manifest_path: str = ""
     memory_path: str = ""
     memory_recall: "StrategyMemoryRecall" = field(default_factory=lambda: StrategyMemoryRecall())
+    prediction_review: "PredictionReviewState" = field(default_factory=lambda: PredictionReviewState())
 
 
 @dataclass(frozen=True)
@@ -323,6 +378,23 @@ class StrategyMemoryRecall:
     recent_flow_regimes: List[str] = field(default_factory=list)
     recurring_macro_risk_levels: List[str] = field(default_factory=list)
     narrative: List[str] = field(default_factory=list)
+
+
+@dataclass(frozen=True)
+class PredictionReviewWindow:
+    window_days: int
+    label: str
+    hit_rate: float = 0.0
+    avg_edge: float = 0.0
+    realized_return: float = 0.0
+    sample_size: int = 0
+    note: str = ""
+
+
+@dataclass(frozen=True)
+class PredictionReviewState:
+    windows: Dict[str, PredictionReviewWindow] = field(default_factory=dict)
+    notes: List[str] = field(default_factory=list)
 
 
 @dataclass(frozen=True)

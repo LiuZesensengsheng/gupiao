@@ -34,7 +34,7 @@ from src.infrastructure.universe_feature_cache import (
     store_universe_generator_cache,
 )
 
-_GENERATOR_VERSION = "dynamic_universe_v1"
+_GENERATOR_VERSION = "dynamic_universe_v2_leaders"
 
 
 def _stable_hash(payload: object) -> str:
@@ -100,10 +100,53 @@ def _volatility(frame: pd.DataFrame, lookback: int) -> float:
     return float(returns.std(ddof=0))
 
 
+def _breakout_position(frame: pd.DataFrame, lookback: int = 120) -> float:
+    if frame.empty:
+        return 0.0
+    closes = pd.to_numeric(frame.tail(max(lookback, 20))["close"], errors="coerce").dropna()
+    if closes.empty:
+        return 0.0
+    low = float(closes.min())
+    high = float(closes.max())
+    last = float(closes.iloc[-1])
+    if not np.isfinite(low) or not np.isfinite(high) or not np.isfinite(last) or high - low <= 1e-9:
+        return 0.0
+    return float(np.clip((last - low) / (high - low), 0.0, 1.0))
+
+
+def _trend_persistence(frame: pd.DataFrame) -> float:
+    if frame.empty or len(frame) < 60:
+        return 0.0
+    closes = pd.to_numeric(frame["close"], errors="coerce")
+    returns = closes.pct_change()
+    ma20 = closes.rolling(20).mean()
+    ma60 = closes.rolling(60).mean()
+    up_days_20 = float((returns.tail(20) > 0).mean()) if returns.tail(20).notna().any() else 0.0
+    close_above_ma20 = 1.0 if pd.notna(ma20.iloc[-1]) and float(closes.iloc[-1]) >= float(ma20.iloc[-1]) else 0.0
+    ma20_above_ma60 = 1.0 if pd.notna(ma20.iloc[-1]) and pd.notna(ma60.iloc[-1]) and float(ma20.iloc[-1]) >= float(ma60.iloc[-1]) else 0.0
+    return float(np.clip(0.45 * up_days_20 + 0.30 * close_above_ma20 + 0.25 * ma20_above_ma60, 0.0, 1.0))
+
+
+def _amount_trend(frame: pd.DataFrame) -> float:
+    if frame.empty:
+        return 0.0
+    amount = pd.to_numeric(frame.get("amount"), errors="coerce")
+    median_amount20 = amount.tail(20).median(skipna=True)
+    median_amount60 = amount.tail(60).median(skipna=True)
+    if not np.isfinite(median_amount20) or not np.isfinite(median_amount60) or median_amount60 <= 0.0:
+        return 0.0
+    ratio = float(median_amount20 / median_amount60)
+    return float(np.clip((ratio - 0.85) / 0.45, 0.0, 1.0))
+
+
 def _safe_rank(frame: pd.DataFrame, column: str, ascending: bool = False) -> pd.Series:
     if column not in frame.columns or frame.empty:
         return pd.Series([0.5] * len(frame), index=frame.index, dtype=float)
-    return frame[column].rank(method="average", pct=True, ascending=ascending).fillna(0.5)
+    raw_rank = frame[column].rank(method="average", ascending=ascending)
+    if len(frame) <= 1:
+        return pd.Series([1.0] * len(frame), index=frame.index, dtype=float)
+    scaled = 1.0 - (raw_rank - 1.0) / float(len(frame) - 1)
+    return scaled.fillna(0.5).clip(lower=0.0, upper=1.0)
 
 
 def _weighted_theme_strength(frame: pd.DataFrame) -> dict[str, float]:
@@ -293,7 +336,7 @@ def generate_dynamic_universe(
     warnings: list[str] = []
     for row in source_rows:
         name = str(row.name or row.symbol)
-        if "ST" in name.upper():
+        if "ST" in name.upper() or "退" in name:
             continue
         local_path = _resolve_local_symbol_path(data_dir, row.symbol)
         frame = _slice_daily_frame(_safe_read_local_daily(local_path), end_date)
@@ -303,7 +346,9 @@ def generate_dynamic_universe(
         if history_days < int(min_history_days):
             continue
         recent_60 = frame.tail(min(60, history_days))
+        recent_20 = frame.tail(min(20, history_days))
         median_amount60 = float(pd.to_numeric(recent_60.get("amount"), errors="coerce").median())
+        median_amount20 = float(pd.to_numeric(recent_20.get("amount"), errors="coerce").median())
         if not np.isfinite(median_amount60) or median_amount60 < float(min_recent_amount):
             continue
         tradeability = float(min(1.0, median_amount60 / max(float(min_recent_amount) * 6.0, 1.0)))
@@ -314,11 +359,15 @@ def generate_dynamic_universe(
             "theme": _normalize_theme(str(row.sector or "其他")),
             "history_days": history_days,
             "median_amount60": median_amount60,
+            "median_amount20": median_amount20 if np.isfinite(median_amount20) else median_amount60,
             "ret20": _ret(frame, 20),
             "ret60": _ret(frame, 60),
             "drawdown60": _drawdown(frame, 60),
             "volatility20": _volatility(frame, 20),
             "tradeability": tradeability,
+            "breakout_pos_120": _breakout_position(frame, 120),
+            "trend_persistence": _trend_persistence(frame),
+            "amount_trend": _amount_trend(frame),
         }
         records.append(record)
 
@@ -362,17 +411,31 @@ def generate_dynamic_universe(
     eligible["volatility_rank"] = _safe_rank(eligible, "volatility20", ascending=True)
     eligible["tradeability_rank"] = _safe_rank(eligible, "tradeability")
     eligible["theme_strength_rank"] = _safe_rank(eligible, "theme_strength")
+    eligible["breakout_rank"] = _safe_rank(eligible, "breakout_pos_120")
+    eligible["trend_rank"] = _safe_rank(eligible, "trend_persistence")
+    eligible["amount_trend_rank"] = _safe_rank(eligible, "amount_trend")
+    eligible["leadership_score"] = (
+        eligible["amount_rank"] * 0.58
+        + eligible["ret20_rank"] * 0.10
+        + eligible["ret60_rank"] * 0.08
+        + eligible["breakout_rank"] * 0.10
+        + eligible["trend_rank"] * 0.08
+        + eligible["history_rank"] * 0.04
+        + eligible["amount_trend_rank"] * 0.02
+    )
     eligible["coarse_score"] = (
-        eligible["amount_rank"] * 0.24
-        + eligible["history_rank"] * 0.10
-        + eligible["ret20_rank"] * 0.18
-        + eligible["ret60_rank"] * 0.12
-        + eligible["drawdown_rank"] * 0.12
-        + eligible["volatility_rank"] * 0.08
-        + eligible["tradeability_rank"] * (0.08 + float(turnover_quality_weight) * 0.08)
+        eligible["leadership_score"] * 0.46
+        + eligible["amount_rank"] * 0.16
+        + eligible["history_rank"] * 0.08
+        + eligible["drawdown_rank"] * 0.10
+        + eligible["volatility_rank"] * 0.06
+        + eligible["tradeability_rank"] * (0.06 + float(turnover_quality_weight) * 0.08)
         + eligible["theme_strength_rank"] * float(theme_weight)
     )
-    eligible = eligible.sort_values(["coarse_score", "median_amount60", "history_days"], ascending=[False, False, False])
+    eligible = eligible.sort_values(
+        ["coarse_score", "leadership_score", "median_amount60", "history_days"],
+        ascending=[False, False, False, False],
+    )
     coarse = eligible.head(max(int(target_size), int(coarse_size))).copy()
 
     if bool(use_concepts) and not coarse.empty:
@@ -391,17 +454,32 @@ def generate_dynamic_universe(
     coarse_theme_strength = _weighted_theme_strength(coarse)
     coarse["theme_strength"] = coarse["theme"].map(lambda item: float(coarse_theme_strength.get(str(item), 0.0)))
     coarse["theme_rank"] = _safe_rank(coarse, "theme_strength")
+    coarse["breakout_rank"] = _safe_rank(coarse, "breakout_pos_120")
+    coarse["trend_rank"] = _safe_rank(coarse, "trend_persistence")
+    coarse["amount_trend_rank"] = _safe_rank(coarse, "amount_trend")
+    coarse["leadership_score"] = (
+        coarse["amount_rank"] * 0.60
+        + coarse["ret20_rank"] * 0.10
+        + coarse["ret60_rank"] * 0.08
+        + coarse["breakout_rank"] * 0.10
+        + coarse["trend_rank"] * 0.08
+        + coarse["history_rank"] * 0.02
+        + coarse["amount_trend_rank"] * 0.02
+    )
     coarse["quality_score"] = (
-        coarse["ret20_rank"] * 0.24
-        + coarse["ret60_rank"] * 0.16
-        + coarse["amount_rank"] * 0.18
-        + coarse["drawdown_rank"] * 0.16
-        + coarse["tradeability_rank"] * 0.14
-        + coarse["volatility_rank"] * 0.12
+        coarse["leadership_score"] * 0.58
+        + coarse["amount_rank"] * 0.20
+        + coarse["drawdown_rank"] * 0.08
+        + coarse["tradeability_rank"] * 0.08
+        + coarse["volatility_rank"] * 0.03
+        + coarse["history_rank"] * 0.03
     )
     coarse["theme_score"] = coarse["theme_rank"] * 0.65 + coarse["ret20_rank"] * 0.20 + coarse["ret60_rank"] * 0.15
     coarse["refined_score"] = coarse["quality_score"] * (1.0 - float(theme_weight)) + coarse["theme_score"] * float(theme_weight)
-    coarse = coarse.sort_values(["refined_score", "quality_score", "median_amount60"], ascending=[False, False, False])
+    coarse = coarse.sort_values(
+        ["refined_score", "leadership_score", "quality_score", "median_amount60"],
+        ascending=[False, False, False, False],
+    )
     refined = coarse.head(max(int(target_size), min(len(coarse), max(120, int(target_size) * 2)))).copy()
 
     selected_frames: list[pd.DataFrame] = []
@@ -417,7 +495,10 @@ def generate_dynamic_universe(
             slot_count = int(allocations.get(str(theme), 0))
             if slot_count <= 0:
                 continue
-            picked = theme_frame.sort_values(["refined_score", "quality_score"], ascending=[False, False]).head(slot_count)
+            picked = theme_frame.sort_values(
+                ["refined_score", "leadership_score", "quality_score"],
+                ascending=[False, False, False],
+            ).head(slot_count)
             if not picked.empty:
                 selected_frames.append(picked)
             allocations_raw.append(
@@ -441,7 +522,10 @@ def generate_dynamic_universe(
         top_up = refined[~refined["symbol"].isin(selected_symbols)].head(int(target_size) - len(selected))
         if not top_up.empty:
             selected = pd.concat([selected, top_up], ignore_index=True)
-    selected = selected.sort_values(["refined_score", "quality_score", "median_amount60"], ascending=[False, False, False]).head(int(target_size))
+    selected = selected.sort_values(
+        ["refined_score", "leadership_score", "quality_score", "median_amount60"],
+        ascending=[False, False, False, False],
+    ).head(int(target_size))
 
     if not allocations_raw:
         allocations_raw = [
@@ -470,6 +554,8 @@ def generate_dynamic_universe(
             "refined_score": float(row["refined_score"]),
             "theme_score": float(row["theme_score"]),
             "quality_score": float(row["quality_score"]),
+            "leadership_score": float(row["leadership_score"]),
+            "median_amount60": float(row["median_amount60"]),
         }
         for _, row in selected.iterrows()
     ]
@@ -519,11 +605,11 @@ def generate_dynamic_universe(
         eligible_symbols=[str(item) for item in eligible["symbol"].tolist()],
         coarse_pool=_serialize_records(
             coarse,
-            ("symbol", "name", "theme", "coarse_score", "median_amount60", "ret20", "ret60"),
+            ("symbol", "name", "theme", "coarse_score", "leadership_score", "median_amount60", "ret20", "ret60"),
         ),
         refined_pool=_serialize_records(
             refined,
-            ("symbol", "name", "theme", "refined_score", "theme_score", "quality_score"),
+            ("symbol", "name", "theme", "refined_score", "leadership_score", "theme_score", "quality_score"),
         ),
         selected_300=selected_rows,
         theme_allocations=allocations_raw,
