@@ -28,6 +28,8 @@
     "baseline_reference_run_id": "20260308_211808",
     "universe_limit": 300,
     "dynamic_universe_enabled": true,
+    "main_board_only_universe": true,
+    "main_board_only_recommendations": true,
     "dynamic_universe_target_size": 300,
     "dynamic_universe_coarse_size": 1000,
     "generator_theme_aware": true,

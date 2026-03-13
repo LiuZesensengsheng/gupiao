@@ -198,3 +198,50 @@ def test_dynamic_universe_generator_prefers_liquid_leaders(monkeypatch, tmp_path
     assert result.selected_300[0]["symbol"] == "600001.SH"
     assert result.selected_300[0]["leadership_score"] >= result.selected_300[0]["quality_score"] * 0.5
     assert "leadership_score" in result.coarse_pool[0]
+
+
+def test_dynamic_universe_generator_can_limit_to_main_board(monkeypatch, tmp_path: Path) -> None:
+    data_dir = tmp_path / "data"
+    data_dir.mkdir(parents=True, exist_ok=True)
+    universe_file = tmp_path / "universe.json"
+    universe_file.write_text(
+        json.dumps(
+            {
+                "stocks": [
+                    {"symbol": "002409.SZ", "name": "MainBoardA", "sector": "煤化工"},
+                    {"symbol": "300001.SZ", "name": "ChiNextA", "sector": "电气设备"},
+                    {"symbol": "688001.SH", "name": "StarA", "sector": "半导体"},
+                ]
+            },
+            ensure_ascii=False,
+            indent=2,
+        ),
+        encoding="utf-8",
+    )
+    _write_daily(data_dir, "002409.SZ", periods=520, amount=8.0e7, slope=0.05)
+    _write_daily(data_dir, "300001.SZ", periods=520, amount=8.0e7, slope=0.06)
+    _write_daily(data_dir, "688001.SH", periods=520, amount=8.0e7, slope=0.07)
+    monkeypatch.setattr("src.application.v2_universe_generator._load_tushare_stock_basic", lambda: {})
+    monkeypatch.setattr("src.application.v2_universe_generator._load_symbol_concepts", lambda symbols: {})
+
+    result = generate_dynamic_universe(
+        universe_file=str(universe_file),
+        data_dir=str(data_dir),
+        cache_root=str(tmp_path / "cache"),
+        target_size=3,
+        coarse_size=3,
+        theme_aware=False,
+        use_concepts=False,
+        end_date="2026-03-11",
+        min_history_days=480,
+        min_recent_amount=2.0e7,
+        theme_cap_ratio=1.0,
+        theme_floor_count=0,
+        turnover_quality_weight=0.25,
+        theme_weight=0.20,
+        main_board_only=True,
+        refresh_cache=True,
+    )
+
+    assert [item["symbol"] for item in result.selected_300] == ["002409.SZ"]
+    assert result.generator_manifest.source_universe_size == 1

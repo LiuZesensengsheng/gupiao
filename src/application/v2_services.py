@@ -120,7 +120,7 @@ from src.infrastructure.modeling import (
     MLPQuantileModel,
     QuantileLinearModel,
 )
-from src.infrastructure.panel_dataset import build_stock_panel_dataset
+from src.infrastructure.panel_dataset import build_stock_live_panel_dataset, build_stock_panel_dataset
 from src.infrastructure.sector_data import build_sector_daily_frames
 from src.infrastructure.sector_forecast import run_sector_forecast
 from src.infrastructure.strategy_memory import remember_daily_run, remember_research_run
@@ -197,6 +197,18 @@ def _safe_float(value: object, default: float = 0.0) -> float:
 def _signal_unit(value: object, scale: float) -> float:
     denom = max(1e-9, float(scale))
     return _clip(_safe_float(value, 0.0) / denom, -1.0, 1.0)
+
+
+def _is_main_board_symbol(symbol: object) -> bool:
+    text = str(symbol or "").strip().upper()
+    if not text or "." not in text:
+        return False
+    code, market = text.split(".", 1)
+    if market == "SH":
+        return code.startswith(("600", "601", "603", "605"))
+    if market == "SZ":
+        return code.startswith(("000", "001", "002"))
+    return False
 
 
 _DEFAULT_SPLIT_MODE = "purged_wf"
@@ -920,6 +932,170 @@ def _predict_quantile_profiles(
         },
         index=frame.index,
     )
+
+
+def _serialize_binary_model(model: LogisticBinaryModel | MLPBinaryModel) -> dict[str, object]:
+    if isinstance(model, LogisticBinaryModel):
+        return {
+            "model_type": "logistic_linear",
+            "l2": float(model.l2),
+            "max_iter": int(model.max_iter),
+            "feature_names": list(model.feature_names),
+            "mean": [] if model.mean_ is None else np.asarray(model.mean_, dtype=float).tolist(),
+            "std": [] if model.std_ is None else np.asarray(model.std_, dtype=float).tolist(),
+            "coef": [] if model.coef_ is None else np.asarray(model.coef_, dtype=float).tolist(),
+            "intercept": float(model.intercept_),
+            "fallback_prob": None if model.fallback_prob_ is None else float(model.fallback_prob_),
+        }
+    return {
+        "model_type": "mlp_binary",
+        "l2": float(model.l2),
+        "hidden_dim": int(model.hidden_dim),
+        "epochs": int(model.epochs),
+        "learning_rate": float(model.learning_rate),
+        "random_state": int(model.random_state),
+        "feature_names": list(model.feature_names),
+        "mean": [] if model.mean_ is None else np.asarray(model.mean_, dtype=float).tolist(),
+        "std": [] if model.std_ is None else np.asarray(model.std_, dtype=float).tolist(),
+        "w1": [] if model.w1_ is None else np.asarray(model.w1_, dtype=float).tolist(),
+        "b1": [] if model.b1_ is None else np.asarray(model.b1_, dtype=float).tolist(),
+        "w2": [] if model.w2_ is None else np.asarray(model.w2_, dtype=float).tolist(),
+        "b2": float(model.b2_),
+        "fallback_prob": None if model.fallback_prob_ is None else float(model.fallback_prob_),
+    }
+
+
+def _deserialize_binary_model(payload: dict[str, object]) -> LogisticBinaryModel | MLPBinaryModel:
+    model_type = str(payload.get("model_type", "logistic_linear"))
+    if model_type == "mlp_binary":
+        model = MLPBinaryModel(
+            l2=float(payload.get("l2", 1.0)),
+            hidden_dim=int(payload.get("hidden_dim", 24)),
+            epochs=int(payload.get("epochs", 120)),
+            learning_rate=float(payload.get("learning_rate", 0.03)),
+            random_state=int(payload.get("random_state", 7)),
+        )
+        model.feature_names = [str(item) for item in payload.get("feature_names", [])]
+        model.mean_ = np.asarray(payload.get("mean", []), dtype=float)
+        model.std_ = np.asarray(payload.get("std", []), dtype=float)
+        model.w1_ = np.asarray(payload.get("w1", []), dtype=float)
+        model.b1_ = np.asarray(payload.get("b1", []), dtype=float)
+        model.w2_ = np.asarray(payload.get("w2", []), dtype=float)
+        model.b2_ = float(payload.get("b2", 0.0))
+        fallback_prob = payload.get("fallback_prob")
+        model.fallback_prob_ = None if fallback_prob is None else float(fallback_prob)
+        return model
+
+    model = LogisticBinaryModel(
+        l2=float(payload.get("l2", 1.0)),
+        max_iter=int(payload.get("max_iter", 400)),
+    )
+    model.feature_names = [str(item) for item in payload.get("feature_names", [])]
+    model.mean_ = np.asarray(payload.get("mean", []), dtype=float)
+    model.std_ = np.asarray(payload.get("std", []), dtype=float)
+    model.coef_ = np.asarray(payload.get("coef", []), dtype=float)
+    model.intercept_ = float(payload.get("intercept", 0.0))
+    fallback_prob = payload.get("fallback_prob")
+    model.fallback_prob_ = None if fallback_prob is None else float(fallback_prob)
+    return model
+
+
+def _serialize_quantile_model(model: QuantileLinearModel | MLPQuantileModel) -> dict[str, object]:
+    if isinstance(model, QuantileLinearModel):
+        return {
+            "model_type": "quantile_linear",
+            "quantile": float(model.quantile),
+            "l2": float(model.l2),
+            "max_iter": int(model.max_iter),
+            "feature_names": list(model.feature_names),
+            "mean": [] if model.mean_ is None else np.asarray(model.mean_, dtype=float).tolist(),
+            "std": [] if model.std_ is None else np.asarray(model.std_, dtype=float).tolist(),
+            "coef": [] if model.coef_ is None else np.asarray(model.coef_, dtype=float).tolist(),
+            "intercept": float(model.intercept_),
+            "fallback_value": None if model.fallback_value_ is None else float(model.fallback_value_),
+        }
+    return {
+        "model_type": "mlp_quantile",
+        "quantile": float(model.quantile),
+        "l2": float(model.l2),
+        "hidden_dim": int(model.hidden_dim),
+        "epochs": int(model.epochs),
+        "learning_rate": float(model.learning_rate),
+        "random_state": int(model.random_state),
+        "feature_names": list(model.feature_names),
+        "mean": [] if model.mean_ is None else np.asarray(model.mean_, dtype=float).tolist(),
+        "std": [] if model.std_ is None else np.asarray(model.std_, dtype=float).tolist(),
+        "w1": [] if model.w1_ is None else np.asarray(model.w1_, dtype=float).tolist(),
+        "b1": [] if model.b1_ is None else np.asarray(model.b1_, dtype=float).tolist(),
+        "w2": [] if model.w2_ is None else np.asarray(model.w2_, dtype=float).tolist(),
+        "b2": float(model.b2_),
+        "fallback_value": None if model.fallback_value_ is None else float(model.fallback_value_),
+    }
+
+
+def _deserialize_quantile_model(payload: dict[str, object]) -> QuantileLinearModel | MLPQuantileModel:
+    model_type = str(payload.get("model_type", "quantile_linear"))
+    if model_type == "mlp_quantile":
+        model = MLPQuantileModel(
+            quantile=float(payload.get("quantile", 0.5)),
+            l2=float(payload.get("l2", 1.0)),
+            hidden_dim=int(payload.get("hidden_dim", 24)),
+            epochs=int(payload.get("epochs", 120)),
+            learning_rate=float(payload.get("learning_rate", 0.03)),
+            random_state=int(payload.get("random_state", 7)),
+        )
+        model.feature_names = [str(item) for item in payload.get("feature_names", [])]
+        model.mean_ = np.asarray(payload.get("mean", []), dtype=float)
+        model.std_ = np.asarray(payload.get("std", []), dtype=float)
+        model.w1_ = np.asarray(payload.get("w1", []), dtype=float)
+        model.b1_ = np.asarray(payload.get("b1", []), dtype=float)
+        model.w2_ = np.asarray(payload.get("w2", []), dtype=float)
+        model.b2_ = float(payload.get("b2", 0.0))
+        fallback_value = payload.get("fallback_value")
+        model.fallback_value_ = None if fallback_value is None else float(fallback_value)
+        return model
+
+    model = QuantileLinearModel(
+        quantile=float(payload.get("quantile", 0.5)),
+        l2=float(payload.get("l2", 1.0)),
+        max_iter=int(payload.get("max_iter", 300)),
+    )
+    model.feature_names = [str(item) for item in payload.get("feature_names", [])]
+    model.mean_ = np.asarray(payload.get("mean", []), dtype=float)
+    model.std_ = np.asarray(payload.get("std", []), dtype=float)
+    model.coef_ = np.asarray(payload.get("coef", []), dtype=float)
+    model.intercept_ = float(payload.get("intercept", 0.0))
+    fallback_value = payload.get("fallback_value")
+    model.fallback_value_ = None if fallback_value is None else float(fallback_value)
+    return model
+
+
+def _serialize_quantile_bundle(
+    q_models: tuple[
+        QuantileLinearModel | MLPQuantileModel,
+        QuantileLinearModel | MLPQuantileModel,
+        QuantileLinearModel | MLPQuantileModel,
+        QuantileLinearModel | MLPQuantileModel,
+        QuantileLinearModel | MLPQuantileModel,
+    ],
+) -> list[dict[str, object]]:
+    return [_serialize_quantile_model(model) for model in q_models]
+
+
+def _deserialize_quantile_bundle(
+    payload: object,
+) -> tuple[
+    QuantileLinearModel | MLPQuantileModel,
+    QuantileLinearModel | MLPQuantileModel,
+    QuantileLinearModel | MLPQuantileModel,
+    QuantileLinearModel | MLPQuantileModel,
+    QuantileLinearModel | MLPQuantileModel,
+]:
+    items = payload if isinstance(payload, list) else []
+    models = [_deserialize_quantile_model(item) for item in items if isinstance(item, dict)]
+    if len(models) != 5:
+        raise ValueError("invalid quantile model bundle")
+    return tuple(models)  # type: ignore[return-value]
 
 
 _HORIZON_SCALE = {
@@ -1736,22 +1912,32 @@ def _load_v2_runtime_settings(
     def pick(key: str, default: object) -> object:
         return _coalesce(daily.get(key), common.get(key), default)
 
-    resolved_universe_file = (
-        str(universe_file).strip()
-        if universe_file is not None and str(universe_file).strip()
-        else str(pick("universe_file", "config/universe_smoke_5.json"))
-    )
     resolved_universe_limit = int(
         universe_limit
         if universe_limit is not None
         else int(pick("universe_limit", 5))
+    )
+    default_dynamic_universe = resolved_universe_limit >= 150
+    requested_dynamic_universe = (
+        bool(dynamic_universe)
+        if dynamic_universe is not None
+        else _parse_boolish(pick("dynamic_universe_enabled", default_dynamic_universe), default_dynamic_universe)
+    )
+    default_universe_file = (
+        str(pick("generated_universe_base_file", "config/universe_all_a_3y_local_ready_nost_no_kc_cy_stable3y.json"))
+        if requested_dynamic_universe
+        else str(pick("universe_file", "config/universe_smoke_5.json"))
+    )
+    resolved_universe_file = (
+        str(universe_file).strip()
+        if universe_file is not None and str(universe_file).strip()
+        else default_universe_file
     )
     resolved_universe_tier = (
         str(universe_tier).strip()
         if universe_tier is not None and str(universe_tier).strip()
         else ("" if resolved_universe_file else str(pick("universe_tier", "")))
     )
-    default_dynamic_universe = resolved_universe_limit >= 150
     resolved_generator_target_size = int(
         generator_target_size
         if generator_target_size is not None
@@ -1845,7 +2031,7 @@ def _load_v2_runtime_settings(
         "dynamic_universe_enabled": (
             bool(dynamic_universe)
             if dynamic_universe is not None
-            else _parse_boolish(pick("dynamic_universe_enabled", default_dynamic_universe), default_dynamic_universe)
+            else requested_dynamic_universe
         ),
         "generator_target_size": resolved_generator_target_size,
         "generator_coarse_size": resolved_generator_coarse_size,
@@ -1858,6 +2044,14 @@ def _load_v2_runtime_settings(
             bool(generator_use_concepts)
             if generator_use_concepts is not None
             else _parse_boolish(pick("generator_use_concepts", True), True)
+        ),
+        "main_board_only_universe": _parse_boolish(
+            pick("main_board_only_universe", pick("main_board_only_recommendations", False)),
+            False,
+        ),
+        "main_board_only_recommendations": _parse_boolish(
+            pick("main_board_only_recommendations", False),
+            False,
         ),
         "dynamic_universe_min_history_days": int(pick("dynamic_universe_min_history_days", 480)),
         "dynamic_universe_min_recent_amount": float(pick("dynamic_universe_min_recent_amount", 2.0e7)),
@@ -2032,6 +2226,7 @@ def _resolve_v2_universe_settings(
             theme_floor_count=int(resolved.get("dynamic_universe_theme_floor_count", 2)),
             turnover_quality_weight=float(resolved.get("dynamic_universe_turnover_quality_weight", 0.25)),
             theme_weight=float(resolved.get("dynamic_universe_theme_weight", 0.18)),
+            main_board_only=_parse_boolish(resolved.get("main_board_only_universe", False), False),
             refresh_cache=_parse_boolish(resolved.get("refresh_cache", False), False),
         )
         manifest = dynamic_result.generator_manifest
@@ -2628,35 +2823,40 @@ def _decorate_composite_state_for_reporting(
     state: CompositeState,
     policy: PolicyDecision,
     calibration_priors: dict[str, dict[str, float]],
+    reporting_market: MarketForecastState | None = None,
+    reporting_cross_section: CrossSectionForecastState | None = None,
 ) -> CompositeState:
+    base_market = reporting_market or state.market
+    base_cross_section = reporting_cross_section or state.cross_section
     updated_market = replace(
-        state.market,
+        base_market,
         horizon_forecasts=_build_horizon_forecasts(
-            latest_close=float(getattr(state.market, "latest_close", np.nan)),
+            latest_close=float(getattr(base_market, "latest_close", np.nan)),
             horizon_probs={
-                "1d": float(state.market.up_1d_prob),
-                "2d": float(state.market.up_2d_prob),
-                "3d": float(state.market.up_3d_prob),
-                "5d": float(state.market.up_5d_prob),
-                "10d": float(getattr(state.market, "up_10d_prob", 0.45 * state.market.up_5d_prob + 0.55 * state.market.up_20d_prob)),
-                "20d": float(state.market.up_20d_prob),
+                "1d": float(base_market.up_1d_prob),
+                "2d": float(base_market.up_2d_prob),
+                "3d": float(base_market.up_3d_prob),
+                "5d": float(base_market.up_5d_prob),
+                "10d": float(getattr(base_market, "up_10d_prob", 0.45 * base_market.up_5d_prob + 0.55 * base_market.up_20d_prob)),
+                "20d": float(base_market.up_20d_prob),
             },
-            short_profile=_profile_from_horizon_map(dict(getattr(state.market, "horizon_forecasts", {})), "1d"),
-            mid_profile=_profile_from_horizon_map(dict(getattr(state.market, "horizon_forecasts", {})), "20d"),
+            short_profile=_profile_from_horizon_map(dict(getattr(base_market, "horizon_forecasts", {})), "1d"),
+            mid_profile=_profile_from_horizon_map(dict(getattr(base_market, "horizon_forecasts", {})), "20d"),
             calibration_priors=calibration_priors,
         ),
         sentiment=_build_market_sentiment_state(
-            market=state.market,
-            cross_section=state.cross_section,
+            market=base_market,
+            cross_section=base_cross_section,
             capital_flow=state.capital_flow_state,
             macro=state.macro_context_state,
         ),
     )
-    ordered_candidates = _candidate_stocks_from_state_external(state)
+    reporting_state = replace(state, market=updated_market, cross_section=base_cross_section)
+    ordered_candidates = _candidate_stocks_from_state_external(reporting_state)
     rank_map = {stock.symbol: idx for idx, stock in enumerate(ordered_candidates, start=1)}
     updated_stocks: list[StockForecastState] = []
-    for stock in state.stocks:
-        info_state = state.stock_info_states.get(stock.symbol, InfoAggregateState())
+    for stock in reporting_state.stocks:
+        info_state = reporting_state.stock_info_states.get(stock.symbol, InfoAggregateState())
         refreshed_forecasts = _build_horizon_forecasts(
             latest_close=float(getattr(stock, "latest_close", np.nan)),
             horizon_probs={
@@ -2676,7 +2876,7 @@ def _decorate_composite_state_for_reporting(
         reasons, ranking, risks, invalidation, action_reason, weight_reason, blocked_reason = _stock_reason_bundle(
             stock=stock,
             info_state=info_state,
-            state=state,
+            state=reporting_state,
             rank=int(rank_map.get(stock.symbol, len(rank_map) + 1)),
             policy=policy,
         )
@@ -2694,7 +2894,77 @@ def _decorate_composite_state_for_reporting(
             )
         )
     updated_stocks.sort(key=lambda item: rank_map.get(item.symbol, len(rank_map) + 999))
-    return replace(state, market=updated_market, stocks=updated_stocks)
+    return replace(reporting_state, market=updated_market, cross_section=base_cross_section, stocks=updated_stocks)
+
+
+def _filter_state_for_recommendation_scope(
+    *,
+    state: CompositeState,
+    main_board_only: bool,
+) -> CompositeState:
+    if not main_board_only:
+        return state
+    filtered_stocks = [stock for stock in state.stocks if _is_main_board_symbol(stock.symbol)]
+    if not filtered_stocks:
+        return state
+    filtered_selection = _build_candidate_selection_state_external(
+        market=state.market,
+        cross_section=state.cross_section,
+        sectors=state.sectors,
+        stocks=filtered_stocks,
+        mainlines=state.mainlines,
+        strategy_mode=state.strategy_mode,
+        risk_regime=state.risk_regime,
+        stock_score_fn=_stock_policy_score,
+    )
+    selection_notes = list(filtered_selection.selection_notes or [])
+    selection_notes.append("Recommendation scope limited to main-board listings only.")
+    filtered_selection = replace(filtered_selection, selection_notes=selection_notes)
+    filtered_symbols = {stock.symbol for stock in filtered_stocks}
+    filtered_info_states = {
+        symbol: payload
+        for symbol, payload in state.stock_info_states.items()
+        if symbol in filtered_symbols
+    }
+    return replace(
+        state,
+        stocks=filtered_stocks,
+        candidate_selection=filtered_selection,
+        stock_info_states=filtered_info_states,
+    )
+
+
+def _build_live_market_reporting_overlay(
+    *,
+    settings: dict[str, object],
+    universe_ctx: _DailyUniverseContext,
+    state: CompositeState,
+) -> tuple[MarketForecastState | None, CrossSectionForecastState | None]:
+    try:
+        market_state, cross_section = _build_market_and_cross_section_states(
+            market_symbol=str(getattr(universe_ctx.market_security, "symbol", "")),
+            source=str(settings["source"]),
+            data_dir=str(settings["data_dir"]),
+            start=str(settings["start"]),
+            end=str(settings["end"]),
+            use_margin_features=bool(settings.get("use_margin_features", False)),
+            margin_market_file=str(settings.get("margin_market_file", "")),
+            use_us_index_context=bool(settings.get("use_us_index_context", False)),
+            us_index_source=str(settings.get("us_index_source", "akshare")),
+            use_us_sector_etf_context=bool(settings.get("use_us_sector_etf_context", False)),
+            use_cn_etf_context=bool(settings.get("use_cn_etf_context", False)),
+            cn_etf_source=str(settings.get("cn_etf_source", "akshare")),
+            market_short_prob=float(state.market.up_1d_prob),
+            market_two_prob=float(getattr(state.market, "up_2d_prob", 0.5)),
+            market_three_prob=float(getattr(state.market, "up_3d_prob", 0.5)),
+            market_five_prob=float(state.market.up_5d_prob),
+            market_mid_prob=float(state.market.up_20d_prob),
+            market_short_profile=_profile_from_horizon_map(dict(getattr(state.market, "horizon_forecasts", {})), "1d"),
+            market_mid_profile=_profile_from_horizon_map(dict(getattr(state.market, "horizon_forecasts", {})), "20d"),
+        )
+        return market_state, cross_section
+    except Exception:
+        return None, None
 
 
 def _ranked_sector_budgets(sectors: Iterable[SectorForecastState], *, target_exposure: float) -> dict[str, float]:
@@ -3716,6 +3986,8 @@ def _build_market_and_cross_section_from_prebuilt_frame(
     market_three_prob: float | None,
     market_five_prob: float | None,
     market_mid_prob: float,
+    market_short_profile: _ReturnQuantileProfile | None = None,
+    market_mid_profile: _ReturnQuantileProfile | None = None,
 ) -> tuple[MarketForecastState, CrossSectionForecastState]:
     latest = market_frame.sort_values("date").iloc[-1]
     state = decide_market_state(float(market_short_prob), float(market_mid_prob))
@@ -3776,8 +4048,8 @@ def _build_market_and_cross_section_from_prebuilt_frame(
         horizon_forecasts=_build_horizon_forecasts(
             latest_close=latest_close,
             horizon_probs=horizon_probs,
-            short_profile=None,
-            mid_profile=None,
+            short_profile=market_short_profile,
+            mid_profile=market_mid_profile,
         ),
         market_facts=_market_facts_from_row(latest),
     )
@@ -4572,6 +4844,251 @@ def _prepare_v2_backtest_data(
     except Exception:
         pass
     return prepared
+
+
+def _build_frozen_linear_forecast_bundle(
+    prepared: _PreparedV2BacktestData,
+) -> dict[str, object]:
+    settings = prepared.settings
+    market_train = prepared.market_valid.copy()
+    panel_train = prepared.panel.copy()
+
+    market_models = {
+        "1d": _serialize_binary_model(
+            LogisticBinaryModel(l2=float(settings["l2"])).fit(market_train, prepared.market_feature_cols, "mkt_target_1d_up")
+        ),
+        "2d": _serialize_binary_model(
+            LogisticBinaryModel(l2=float(settings["l2"])).fit(market_train, prepared.market_feature_cols, "mkt_target_2d_up")
+        ),
+        "3d": _serialize_binary_model(
+            LogisticBinaryModel(l2=float(settings["l2"])).fit(market_train, prepared.market_feature_cols, "mkt_target_3d_up")
+        ),
+        "5d": _serialize_binary_model(
+            LogisticBinaryModel(l2=float(settings["l2"])).fit(market_train, prepared.market_feature_cols, "mkt_target_5d_up")
+        ),
+        "20d": _serialize_binary_model(
+            LogisticBinaryModel(l2=float(settings["l2"])).fit(market_train, prepared.market_feature_cols, "mkt_target_20d_up")
+        ),
+    }
+    market_quantiles = {
+        "1d": _serialize_quantile_bundle(
+            _fit_quantile_quintet(
+                market_train,
+                feature_cols=prepared.market_feature_cols,
+                target_col="mkt_fwd_ret_1",
+                l2=float(settings["l2"]),
+            )
+        ),
+        "20d": _serialize_quantile_bundle(
+            _fit_quantile_quintet(
+                market_train,
+                feature_cols=prepared.market_feature_cols,
+                target_col="mkt_fwd_ret_20",
+                l2=float(settings["l2"]),
+            )
+        ),
+    }
+    stock_models = {
+        "1d": _serialize_binary_model(
+            LogisticBinaryModel(l2=float(settings["l2"])).fit(panel_train, prepared.feature_cols, "target_1d_excess_mkt_up")
+        ),
+        "2d": _serialize_binary_model(
+            LogisticBinaryModel(l2=float(settings["l2"])).fit(panel_train, prepared.feature_cols, "target_2d_excess_mkt_up")
+        ),
+        "3d": _serialize_binary_model(
+            LogisticBinaryModel(l2=float(settings["l2"])).fit(panel_train, prepared.feature_cols, "target_3d_excess_mkt_up")
+        ),
+        "5d": _serialize_binary_model(
+            LogisticBinaryModel(l2=float(settings["l2"])).fit(panel_train, prepared.feature_cols, "target_5d_excess_mkt_up")
+        ),
+        "20d": _serialize_binary_model(
+            LogisticBinaryModel(l2=float(settings["l2"])).fit(panel_train, prepared.feature_cols, "target_20d_excess_sector_up")
+        ),
+    }
+    stock_quantiles = {
+        "1d": _serialize_quantile_bundle(
+            _fit_quantile_quintet(
+                panel_train,
+                feature_cols=prepared.feature_cols,
+                target_col="excess_ret_1_vs_mkt",
+                l2=float(settings["l2"]),
+            )
+        ),
+        "20d": _serialize_quantile_bundle(
+            _fit_quantile_quintet(
+                panel_train,
+                feature_cols=prepared.feature_cols,
+                target_col="excess_ret_20_vs_sector",
+                l2=float(settings["l2"]),
+            )
+        ),
+    }
+    return {
+        "format_version": 1,
+        "backend": "linear",
+        "created_from_end_date": str(pd.Timestamp(max(prepared.dates)).date()),
+        "market_feature_cols": list(prepared.market_feature_cols),
+        "panel_feature_cols": list(prepared.feature_cols),
+        "market_models": market_models,
+        "market_quantiles": market_quantiles,
+        "stock_models": stock_models,
+        "stock_quantiles": stock_quantiles,
+    }
+
+
+def _load_frozen_forecast_bundle(path_like: object) -> dict[str, object]:
+    payload = _load_json_dict(path_like)
+    if not payload:
+        return {}
+    if str(payload.get("backend", "")).strip().lower() not in {"linear", "deep"}:
+        return {}
+    return payload
+
+
+def _build_live_market_frame(
+    *,
+    settings: dict[str, object],
+    market_symbol: str,
+) -> pd.DataFrame:
+    market_raw = load_symbol_daily(
+        symbol=market_symbol,
+        source=str(settings["source"]),
+        data_dir=str(settings["data_dir"]),
+        start=str(settings["start"]),
+        end=str(settings["end"]),
+    )
+    market_feat_base = make_market_feature_frame(market_raw)
+    market_context = build_market_context_features(
+        source=str(settings["source"]),
+        data_dir=str(settings["data_dir"]),
+        start=str(settings["start"]),
+        end=str(settings["end"]),
+        market_dates=market_feat_base["date"],
+        use_margin_features=bool(settings.get("use_margin_features", False)),
+        margin_market_file=str(settings.get("margin_market_file", "")),
+        use_us_index_context=bool(settings.get("use_us_index_context", False)),
+        us_index_source=str(settings.get("us_index_source", "akshare")),
+        use_us_sector_etf_context=bool(settings.get("use_us_sector_etf_context", False)),
+        use_cn_etf_context=bool(settings.get("use_cn_etf_context", False)),
+        cn_etf_source=str(settings.get("cn_etf_source", "akshare")),
+    )
+    return market_feat_base.merge(market_context.frame, on="date", how="left", validate="1:1")
+
+
+def _score_live_composite_state_from_frozen_bundle(
+    *,
+    bundle: dict[str, object],
+    settings: dict[str, object],
+    universe_ctx: _DailyUniverseContext,
+) -> tuple[CompositeState | None, list[object]]:
+    if str(bundle.get("backend", "")).strip().lower() != "linear":
+        return None, []
+
+    market_feature_cols = [str(item) for item in bundle.get("market_feature_cols", [])]
+    panel_feature_cols = [str(item) for item in bundle.get("panel_feature_cols", [])]
+    if not market_feature_cols or not panel_feature_cols:
+        return None, []
+
+    market_frame = _build_live_market_frame(
+        settings=settings,
+        market_symbol=str(getattr(universe_ctx.market_security, "symbol", "")),
+    )
+    if market_frame.empty:
+        return None, []
+    latest_market = market_frame.sort_values("date").iloc[[-1]].copy()
+    if any(col not in latest_market.columns for col in market_feature_cols):
+        return None, []
+    latest_market = latest_market.dropna(subset=market_feature_cols)
+    if latest_market.empty:
+        return None, []
+
+    market_models_raw = bundle.get("market_models", {})
+    market_quantiles_raw = bundle.get("market_quantiles", {})
+    if not isinstance(market_models_raw, dict) or not isinstance(market_quantiles_raw, dict):
+        return None, []
+    market_short_model = _deserialize_binary_model(dict(market_models_raw.get("1d", {})))
+    market_two_model = _deserialize_binary_model(dict(market_models_raw.get("2d", {})))
+    market_three_model = _deserialize_binary_model(dict(market_models_raw.get("3d", {})))
+    market_five_model = _deserialize_binary_model(dict(market_models_raw.get("5d", {})))
+    market_mid_model = _deserialize_binary_model(dict(market_models_raw.get("20d", {})))
+    market_short_q = _deserialize_quantile_bundle(market_quantiles_raw.get("1d"))
+    market_mid_q = _deserialize_quantile_bundle(market_quantiles_raw.get("20d"))
+
+    mkt_short = float(market_short_model.predict_proba(latest_market, market_feature_cols)[0])
+    mkt_two = float(market_two_model.predict_proba(latest_market, market_feature_cols)[0])
+    mkt_three = float(market_three_model.predict_proba(latest_market, market_feature_cols)[0])
+    mkt_five = float(market_five_model.predict_proba(latest_market, market_feature_cols)[0])
+    mkt_mid = float(market_mid_model.predict_proba(latest_market, market_feature_cols)[0])
+    market_short_profile = _predict_quantile_profile(
+        latest_market,
+        feature_cols=market_feature_cols,
+        q_models=market_short_q,
+    )
+    market_mid_profile = _predict_quantile_profile(
+        latest_market,
+        feature_cols=market_feature_cols,
+        q_models=market_mid_q,
+    )
+    market_state, cross_section = _build_market_and_cross_section_from_prebuilt_frame(
+        market_frame=market_frame,
+        market_short_prob=mkt_short,
+        market_two_prob=mkt_two,
+        market_three_prob=mkt_three,
+        market_five_prob=mkt_five,
+        market_mid_prob=mkt_mid,
+        market_short_profile=market_short_profile,
+        market_mid_profile=market_mid_profile,
+    )
+
+    panel_bundle = build_stock_live_panel_dataset(
+        stock_securities=universe_ctx.stocks,
+        source=str(settings["source"]),
+        data_dir=str(settings["data_dir"]),
+        start=str(settings["start"]),
+        end=str(settings["end"]),
+        market_frame=market_frame,
+        extra_market_cols=[col for col in market_frame.columns if col.startswith("us_") or col.startswith("cn_") or col.startswith("breadth_") or col.startswith("fin_") or col.startswith("sec_")],
+        use_margin_features=bool(settings.get("use_margin_features", False)),
+        margin_stock_file=str(settings.get("margin_stock_file", "")),
+    )
+    live_panel = panel_bundle.frame
+    if live_panel.empty or any(col not in live_panel.columns for col in panel_feature_cols):
+        return None, []
+    latest_panel_date = pd.to_datetime(live_panel["date"], errors="coerce").dropna().max()
+    latest_panel = live_panel[live_panel["date"] == latest_panel_date].copy()
+    latest_panel = latest_panel.dropna(subset=panel_feature_cols)
+    if latest_panel.empty:
+        return None, []
+
+    stock_models_raw = bundle.get("stock_models", {})
+    stock_quantiles_raw = bundle.get("stock_quantiles", {})
+    if not isinstance(stock_models_raw, dict) or not isinstance(stock_quantiles_raw, dict):
+        return None, []
+    stock_states, _ = _build_stock_states_from_panel_slice(
+        panel_row=latest_panel,
+        feature_cols=panel_feature_cols,
+        short_model=_deserialize_binary_model(dict(stock_models_raw.get("1d", {}))),
+        two_model=_deserialize_binary_model(dict(stock_models_raw.get("2d", {}))),
+        three_model=_deserialize_binary_model(dict(stock_models_raw.get("3d", {}))),
+        five_model=_deserialize_binary_model(dict(stock_models_raw.get("5d", {}))),
+        mid_model=_deserialize_binary_model(dict(stock_models_raw.get("20d", {}))),
+        short_q_models=_deserialize_quantile_bundle(stock_quantiles_raw.get("1d")),
+        mid_q_models=_deserialize_quantile_bundle(stock_quantiles_raw.get("20d")),
+    )
+    if not stock_states:
+        return None, []
+
+    sector_states = _build_sector_states_external(
+        stock_states,
+        stock_score_fn=_stock_policy_score,
+    )
+    composite_state = compose_state(
+        market=market_state,
+        sectors=sector_states,
+        stocks=stock_states,
+        cross_section=cross_section,
+    )
+    return composite_state, []
 
 
 def _tensorize_temporal_frame(
@@ -6476,6 +6993,7 @@ def publish_v2_research_artifacts(
     trajectory = None
     frozen_daily_state: dict[str, object] = {}
     forecast_models_manifest: dict[str, object] = {}
+    frozen_forecast_bundle: dict[str, object] = {}
     train_window = {"start": "", "end": "", "n_steps": 0}
     validation_window = {"start": "", "end": "", "n_steps": 0}
     holdout_window = {"start": "", "end": "", "n_steps": 0}
@@ -6516,6 +7034,16 @@ def publish_v2_research_artifacts(
             for step in holdout_traj.steps:
                 regime = str(step.composite_state.risk_regime or "unknown")
                 regime_counts[regime] = int(regime_counts.get(regime, 0)) + 1
+            if (
+                str(forecast_backend).strip().lower() == "linear"
+                and trajectory.prepared is not None
+                and hasattr(trajectory.prepared, "market_valid")
+                and hasattr(trajectory.prepared, "panel")
+                and hasattr(trajectory.prepared, "market_feature_cols")
+                and hasattr(trajectory.prepared, "feature_cols")
+                and hasattr(trajectory.prepared, "dates")
+            ):
+                frozen_forecast_bundle = _build_frozen_linear_forecast_bundle(trajectory.prepared)
         forecast_models_manifest = {
             "run_id": run_id,
             "strategy_id": str(strategy_id),
@@ -6533,12 +7061,14 @@ def publish_v2_research_artifacts(
                 "end": str(settings.get("end", "")),
             },
             "regime_counts": regime_counts,
+            "frozen_bundle_ready": bool(frozen_forecast_bundle),
         }
 
     dataset_path = base_dir / "dataset_manifest.json"
     calibration_path = base_dir / "policy_calibration.json"
     learning_path = base_dir / "learned_policy_model.json"
     forecast_models_path = base_dir / "forecast_models_manifest.json"
+    frozen_forecast_bundle_path = base_dir / "frozen_forecast_bundle.json"
     frozen_state_path = base_dir / "frozen_daily_state.json"
     backtest_path = base_dir / "backtest_summary.json"
     consistency_path = base_dir / "consistency_checklist.json"
@@ -6787,6 +7317,7 @@ def publish_v2_research_artifacts(
     learning_path.write_text(json.dumps(learning_manifest, ensure_ascii=False, indent=2), encoding="utf-8")
     if publish_forecast_models:
         forecast_models_path.write_text(json.dumps(forecast_models_manifest, ensure_ascii=False, indent=2), encoding="utf-8")
+        frozen_forecast_bundle_path.write_text(json.dumps(frozen_forecast_bundle, ensure_ascii=False, indent=2), encoding="utf-8")
         frozen_state_path.write_text(json.dumps(frozen_daily_state, ensure_ascii=False, indent=2), encoding="utf-8")
     backtest_path.write_text(json.dumps(backtest_manifest, ensure_ascii=False, indent=2), encoding="utf-8")
     consistency_path.write_text(json.dumps(consistency_manifest, ensure_ascii=False, indent=2), encoding="utf-8")
@@ -6921,6 +7452,7 @@ def publish_v2_research_artifacts(
         "policy_calibration": str(calibration_path),
         "learned_policy_model": str(learning_path),
         "forecast_models_manifest": str(forecast_models_path) if publish_forecast_models else "",
+        "frozen_forecast_bundle": str(frozen_forecast_bundle_path) if publish_forecast_models else "",
         "frozen_daily_state": str(frozen_state_path) if publish_forecast_models else "",
         "backtest_summary": str(backtest_path),
         "consistency_checklist": str(consistency_path),
@@ -6996,6 +7528,7 @@ def publish_v2_research_artifacts(
         "policy_calibration": str(calibration_path),
         "learned_policy_model": str(learning_path),
         "forecast_models_manifest": str(forecast_models_path) if publish_forecast_models else "",
+        "frozen_forecast_bundle": str(frozen_forecast_bundle_path) if publish_forecast_models else "",
         "frozen_daily_state": str(frozen_state_path) if publish_forecast_models else "",
         "backtest_summary": str(backtest_path),
         "consistency_checklist": str(consistency_path),
@@ -7511,6 +8044,10 @@ def _build_daily_composite_state(
         manifest.get("frozen_daily_state"),
         run_dir=manifest_path.parent,
     )
+    frozen_bundle_path = _path_from_manifest_entry(
+        manifest.get("frozen_forecast_bundle"),
+        run_dir=manifest_path.parent,
+    )
     frozen_state_payload = _load_json_dict(frozen_state_path) if frozen_state_path is not None else {}
     composite_payload = frozen_state_payload.get("composite_state")
     composite_state = _decode_composite_state(composite_payload)
@@ -7520,6 +8057,17 @@ def _build_daily_composite_state(
             "Re-run research with `--publish-forecast-models` or set `--allow-retrain`."
         )
     _emit_progress("daily", f"已加载发布快照: run_id={snapshot.run_id or 'NA'}")
+    frozen_bundle = _load_frozen_forecast_bundle(frozen_bundle_path) if frozen_bundle_path is not None else {}
+    if frozen_bundle:
+        live_composite_state, live_stock_rows = _score_live_composite_state_from_frozen_bundle(
+            bundle=frozen_bundle,
+            settings=settings,
+            universe_ctx=universe_ctx,
+        )
+        if live_composite_state is not None:
+            composite_state = live_composite_state
+            stock_rows = live_stock_rows
+            _emit_progress("daily", "loaded frozen forecast models and refreshed live scores")
     return composite_state, stock_rows
 
 
@@ -7808,6 +8356,10 @@ def run_daily_v2_live(
         info_items=info_items,
         allow_rebuild=allow_retrain,
     )
+    composite_state = _filter_state_for_recommendation_scope(
+        state=composite_state,
+        main_board_only=_parse_boolish(settings.get("main_board_only_recommendations", False), False),
+    )
 
     learned_policy = _resolve_daily_policy_model(
         strategy_id=strategy_id,
@@ -7846,10 +8398,17 @@ def run_daily_v2_live(
         manifest=manifest,
         manifest_path=manifest_path,
     )
+    reporting_market, reporting_cross_section = _build_live_market_reporting_overlay(
+        settings=settings,
+        universe_ctx=universe_ctx,
+        state=composite_state,
+    )
     composite_state = _decorate_composite_state_for_reporting(
         state=composite_state,
         policy=policy_decision,
         calibration_priors=calibration_priors,
+        reporting_market=reporting_market,
+        reporting_cross_section=reporting_cross_section,
     )
     result = DailyRunResult(
         snapshot=snapshot,

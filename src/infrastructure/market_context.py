@@ -72,6 +72,17 @@ _BREADTH_FEATURE_COLS = [
     "breadth_amount_z20",
     "breadth_coverage",
 ]
+_BREADTH_DIAGNOSTIC_COLS = [
+    "breadth_advancers",
+    "breadth_decliners",
+    "breadth_flats",
+    "breadth_limit_up_count",
+    "breadth_limit_down_count",
+    "breadth_new_high_count",
+    "breadth_new_low_count",
+    "breadth_median_return",
+    "breadth_sample_amount",
+]
 _BREADTH_CACHE: dict[tuple[str, int, int], pd.DataFrame] = {}
 
 
@@ -544,14 +555,18 @@ def build_market_context_features(
         else:
             notes.append(f"context column dropped {col}: valid={valid_n}, ratio={valid_ratio:.2f}")
 
-    if not selected_cols:
+    diagnostic_cols = [col for col in _BREADTH_DIAGNOSTIC_COLS if col in merged.columns]
+    if not selected_cols and not diagnostic_cols:
         return MarketContextBundle(frame=base, feature_columns=[], notes=notes)
 
-    out = merged[["date"] + selected_cols].copy().sort_values("date")
+    ordered_cols = ["date"] + selected_cols + [col for col in diagnostic_cols if col not in selected_cols]
+    out = merged[ordered_cols].copy().sort_values("date")
     for col in selected_cols:
         # Keep alignment stable while avoiding full-row drops from sparse context values.
         out[col] = out[col].ffill()
         if out[col].isna().any():
             out[col] = out[col].fillna(float(out[col].median(skipna=True)))
+    for col in diagnostic_cols:
+        out[col] = pd.to_numeric(out[col], errors="coerce").ffill().fillna(0.0)
     out.replace([np.inf, -np.inf], np.nan, inplace=True)
     return MarketContextBundle(frame=out, feature_columns=selected_cols, notes=notes)

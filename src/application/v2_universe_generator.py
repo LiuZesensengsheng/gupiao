@@ -49,6 +49,18 @@ def _normalize_theme(value: object) -> str:
     return text or "其他"
 
 
+def _is_main_board_symbol(symbol: object) -> bool:
+    text = str(symbol or "").strip().upper()
+    if not text or "." not in text:
+        return False
+    code, market = text.split(".", 1)
+    if market == "SH":
+        return code.startswith(("600", "601", "603", "605"))
+    if market == "SZ":
+        return code.startswith(("000", "001", "002"))
+    return False
+
+
 def _load_source_rows(*, universe_file: str, data_dir: str) -> list[Security]:
     rows = _load_universe_file(universe_file, enrich_metadata=False) if str(universe_file).strip() else []
     if rows:
@@ -305,9 +317,12 @@ def generate_dynamic_universe(
     theme_floor_count: int,
     turnover_quality_weight: float,
     theme_weight: float,
+    main_board_only: bool = False,
     refresh_cache: bool = False,
 ) -> DynamicUniverseResult:
     source_rows = _load_source_rows(universe_file=universe_file, data_dir=data_dir)
+    if main_board_only:
+        source_rows = [row for row in source_rows if _is_main_board_symbol(row.symbol)]
     metadata_map = _load_tushare_stock_basic()
     cache_payload = {
         "generator_version": _GENERATOR_VERSION,
@@ -325,6 +340,7 @@ def generate_dynamic_universe(
         "theme_floor_count": int(theme_floor_count),
         "turnover_quality_weight": float(turnover_quality_weight),
         "theme_weight": float(theme_weight),
+        "main_board_only": bool(main_board_only),
     }
     cache_key = build_universe_generator_cache_key(cache_payload)
     if not refresh_cache:
