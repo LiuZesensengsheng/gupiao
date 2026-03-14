@@ -40,6 +40,13 @@ from src.application.v2_contracts import (
     StockForecastState,
     StrategySnapshot,
 )
+from src.contracts.artifacts import (
+    DatasetManifest,
+    ForecastBundle,
+    LearnedPolicyArtifact,
+    ResearchManifest,
+    add_artifact_metadata,
+)
 from src.application.v2_external_signal_support import (
     attach_external_signals_to_state,
     build_external_signal_package,
@@ -4942,6 +4949,7 @@ def _load_frozen_forecast_bundle(path_like: object) -> dict[str, object]:
         return {}
     if str(payload.get("backend", "")).strip().lower() not in {"linear", "deep"}:
         return {}
+    ForecastBundle.from_payload(payload)
     return payload
 
 
@@ -6350,7 +6358,7 @@ def _placeholder_learning_result(baseline: V2BacktestSummary) -> V2PolicyLearnin
     )
 
 
-def run_v2_research_workflow(
+def _run_v2_research_workflow_impl(
     *,
     strategy_id: str = "swing_v2",
     config_path: str = "config/api.json",
@@ -6559,7 +6567,7 @@ def run_v2_research_workflow(
     return baseline, calibration, learning
 
 
-def run_v2_research_matrix(
+def _run_v2_research_matrix_impl(
     *,
     strategy_id: str = "swing_v2",
     config_path: str = "config/api.json",
@@ -6578,7 +6586,7 @@ def run_v2_research_matrix(
     normalized_tiers = [normalize_universe_tier(item) for item in universe_tiers]
     for tier_id in normalized_tiers:
         _emit_progress("matrix", f"开始研究矩阵档位: {tier_id}")
-        baseline, calibration, learning = run_v2_research_workflow(
+        baseline, calibration, learning = _run_v2_research_workflow_impl(
             strategy_id=strategy_id,
             config_path=config_path,
             source=source,
@@ -6591,7 +6599,7 @@ def run_v2_research_matrix(
             split_mode=split_mode,
             embargo_days=embargo_days,
         )
-        artifacts = publish_v2_research_artifacts(
+        artifacts = _publish_v2_research_artifacts_impl(
             strategy_id=strategy_id,
             artifact_root=artifact_root,
             config_path=config_path,
@@ -6636,7 +6644,7 @@ def run_v2_research_matrix(
     }
 
 
-def load_published_v2_policy_model(
+def _load_published_v2_policy_model_impl(
     *,
     strategy_id: str,
     artifact_root: str = "artifacts/v2",
@@ -6651,19 +6659,7 @@ def _load_policy_model_from_path(model_path: Path) -> LearnedPolicyModel | None:
     payload = _load_json_dict(model_path)
     if not isinstance(payload, dict):
         return None
-    return LearnedPolicyModel(
-        feature_names=[str(x) for x in payload.get("feature_names", [])],
-        exposure_intercept=float(payload.get("exposure_intercept", 0.60)),
-        exposure_coef=[float(x) for x in payload.get("exposure_coef", [])],
-        position_intercept=float(payload.get("position_intercept", 3.0)),
-        position_coef=[float(x) for x in payload.get("position_coef", [])],
-        turnover_intercept=float(payload.get("turnover_intercept", 0.22)),
-        turnover_coef=[float(x) for x in payload.get("turnover_coef", [])],
-        train_rows=int(payload.get("train_rows", 0)),
-        train_r2_exposure=float(payload.get("train_r2_exposure", 0.0)),
-        train_r2_positions=float(payload.get("train_r2_positions", 0.0)),
-        train_r2_turnover=float(payload.get("train_r2_turnover", 0.0)),
-    )
+    return LearnedPolicyArtifact.from_payload(payload).model
 
 
 def _with_backtest_metadata(
@@ -6865,7 +6861,7 @@ def _build_snapshot_from_manifest(
     )
 
 
-def publish_v2_research_artifacts(
+def _publish_v2_research_artifacts_impl(
     *,
     strategy_id: str,
     artifact_root: str = "artifacts/v2",
@@ -6944,7 +6940,10 @@ def publish_v2_research_artifacts(
     baseline_reference_run_id = str(settings.get("baseline_reference_run_id", "")).strip()
 
     config_hash = _stable_json_hash(settings)
-    learning_manifest = asdict(learning.model)
+    learning_manifest = add_artifact_metadata(
+        asdict(learning.model),
+        artifact_type="learned_policy_model",
+    )
     policy_hash = _stable_json_hash(learning_manifest)
     universe_hash = str(settings.get("universe_hash", "")) or _sha256_file(universe_path) or _stable_json_hash(symbols)
     model_hashes = {
@@ -7044,7 +7043,8 @@ def publish_v2_research_artifacts(
                 and hasattr(trajectory.prepared, "dates")
             ):
                 frozen_forecast_bundle = _build_frozen_linear_forecast_bundle(trajectory.prepared)
-        forecast_models_manifest = {
+        forecast_models_manifest = add_artifact_metadata(
+            {
             "run_id": run_id,
             "strategy_id": str(strategy_id),
             "forecast_backend": str(forecast_backend),
@@ -7062,7 +7062,9 @@ def publish_v2_research_artifacts(
             },
             "regime_counts": regime_counts,
             "frozen_bundle_ready": bool(frozen_forecast_bundle),
-        }
+            },
+            artifact_type="forecast_models_manifest",
+        )
 
     dataset_path = base_dir / "dataset_manifest.json"
     calibration_path = base_dir / "policy_calibration.json"
@@ -7195,8 +7197,18 @@ def publish_v2_research_artifacts(
                 info_items=info_items,
             )
             frozen_daily_state["composite_state"] = _serialize_composite_state(frozen_composite)
+        frozen_daily_state = add_artifact_metadata(
+            frozen_daily_state,
+            artifact_type="frozen_daily_state",
+        )
+    if publish_forecast_models and frozen_forecast_bundle:
+        frozen_forecast_bundle = add_artifact_metadata(
+            frozen_forecast_bundle,
+            artifact_type="forecast_bundle",
+        )
 
-    dataset_manifest = {
+    dataset_manifest = add_artifact_metadata(
+        {
         "strategy_id": str(strategy_id),
         "config_path": str(settings.get("config_path", "")),
         "source": str(settings.get("source", "")),
@@ -7253,19 +7265,28 @@ def publish_v2_research_artifacts(
         "macro_context_snapshot": dict(external_signal_package.get("macro_context_snapshot", {})),
         "active_default_universe_tier": active_default_universe_tier,
         "candidate_default_universe_tier": candidate_default_universe_tier,
-    }
-    calibration_manifest = {
+        },
+        artifact_type="dataset_manifest",
+    )
+    calibration_manifest = add_artifact_metadata(
+        {
         "best_score": float(calibration.best_score),
         "best_policy": asdict(calibration.best_policy),
         "trials": calibration.trials,
         "policy_hash": _stable_json_hash(asdict(calibration.best_policy)),
-    }
-    backtest_manifest = {
+        },
+        artifact_type="policy_calibration",
+    )
+    backtest_manifest = add_artifact_metadata(
+        {
         "baseline": asdict(baseline_meta),
         "calibrated": asdict(calibrated_meta),
         "learned": asdict(learned_meta),
-    }
-    consistency_manifest = {
+        },
+        artifact_type="backtest_summary",
+    )
+    consistency_manifest = add_artifact_metadata(
+        {
         "run_id": run_id,
         "universe_tier": universe_tier_value,
         "universe_id": universe_id,
@@ -7286,8 +7307,11 @@ def publish_v2_research_artifacts(
         "external_signal_version": str(settings.get("external_signal_version", "v1")),
         "use_us_index_context": bool(settings.get("use_us_index_context", False)),
         "us_index_source": str(settings.get("us_index_source", "akshare")),
-    }
-    rolling_oos_manifest = {
+        },
+        artifact_type="consistency_checklist",
+    )
+    rolling_oos_manifest = add_artifact_metadata(
+        {
         "run_id": run_id,
         "universe_tier": universe_tier_value,
         "windows": [
@@ -7309,7 +7333,9 @@ def publish_v2_research_artifacts(
             },
         ],
         "regime_breakdown": regime_counts,
-    }
+        },
+        artifact_type="rolling_oos_report",
+    )
     latest_policy_path.parent.mkdir(parents=True, exist_ok=True)
 
     dataset_path.write_text(json.dumps(dataset_manifest, ensure_ascii=False, indent=2), encoding="utf-8")
@@ -7403,7 +7429,8 @@ def publish_v2_research_artifacts(
         "passed": bool(default_switch_gate_passed),
     }
 
-    manifest = {
+    manifest = add_artifact_metadata(
+        {
         "run_id": run_id,
         "strategy_id": str(strategy_id),
         "created_at": created_at,
@@ -7466,7 +7493,9 @@ def publish_v2_research_artifacts(
         "tier_latest_research_manifest": str(tier_latest_manifest_path),
         "release_gate": release_gate,
         "default_switch_gate": default_switch_gate,
-    }
+        },
+        artifact_type="research_manifest",
+    )
     manifest_path.write_text(json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8")
     tier_latest_manifest_path.write_text(json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8")
     if gate_ok:
@@ -7588,6 +7617,7 @@ def _hydrate_daily_settings_from_dataset_manifest(
     dataset_manifest = _load_json_dict(dataset_path) if dataset_path is not None else {}
     if not dataset_manifest:
         return settings
+    DatasetManifest.from_payload(dataset_manifest)
 
     manifest_universe_tier = str(dataset_manifest.get("universe_tier", "")).strip()
     manifest_universe_file = str(dataset_manifest.get("universe_file", "")).strip()
@@ -7778,6 +7808,8 @@ def _build_daily_snapshot_context(
             run_id=run_id,
             snapshot_path=snapshot_path,
         )
+        if manifest:
+            ResearchManifest.from_payload(manifest)
     except Exception:
         if not allow_retrain:
             raise
@@ -8206,14 +8238,14 @@ def _resolve_daily_policy_model(
         if model_path is not None:
             learned_policy = _load_policy_model_from_path(model_path)
     if learned_policy is None:
-        learned_policy = load_published_v2_policy_model(
+        learned_policy = _load_published_v2_policy_model_impl(
             strategy_id=strategy_id,
             artifact_root=artifact_root,
         )
     return learned_policy
 
 
-def run_daily_v2_live(
+def _run_daily_v2_live_impl(
     *,
     strategy_id: str = "swing_v2",
     config_path: str = "config/api.json",
@@ -8452,6 +8484,56 @@ def run_daily_v2_live(
     except Exception:
         pass
     return result
+
+
+def run_v2_research_workflow(**kwargs: object) -> tuple[V2BacktestSummary, V2CalibrationResult, V2PolicyLearningResult]:
+    from src.workflows.research_workflow import run_v2_research_workflow as _run
+
+    return _run(**kwargs)
+
+
+def run_v2_research_matrix(**kwargs: object) -> dict[str, object]:
+    from src.workflows.research_workflow import run_v2_research_matrix as _run
+
+    return _run(**kwargs)
+
+
+def load_published_v2_policy_model(
+    *,
+    strategy_id: str,
+    artifact_root: str = "artifacts/v2",
+) -> LearnedPolicyModel | None:
+    from src.artifact_registry.v2_registry import load_published_v2_policy_model as _load
+
+    return _load(
+        strategy_id=strategy_id,
+        artifact_root=artifact_root,
+    )
+
+
+def publish_v2_research_artifacts(
+    *,
+    baseline: V2BacktestSummary,
+    calibration: V2CalibrationResult,
+    learning: V2PolicyLearningResult,
+    settings: dict[str, object] | None = None,
+    **kwargs: object,
+) -> dict[str, str]:
+    from src.artifact_registry.v2_registry import publish_v2_research_artifacts as _publish
+
+    return _publish(
+        baseline=baseline,
+        calibration=calibration,
+        learning=learning,
+        settings=settings,
+        **kwargs,
+    )
+
+
+def run_daily_v2_live(**kwargs: object) -> DailyRunResult:
+    from src.workflows.daily_workflow import run_daily_v2_live as _run
+
+    return _run(**kwargs)
 
 
 def summarize_daily_run(result: DailyRunResult) -> dict[str, object]:
