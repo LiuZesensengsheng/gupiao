@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import json
+import ast
+from datetime import datetime
 from pathlib import Path
 
 import pytest
@@ -19,6 +21,7 @@ from src.application.v2_daily_snapshot_runtime import (
 from src.application.v2_artifact_runtime import (
     load_policy_model_from_path as load_policy_model_from_path_runtime,
 )
+from src.application.v2_research_publish_runtime import publish_research_artifacts as publish_research_artifacts_runtime
 from src.artifact_registry.v2_registry import publish_v2_research_artifacts
 from src.contracts.artifacts import (
     CURRENT_ARTIFACT_VERSION,
@@ -243,6 +246,93 @@ def test_publish_artifacts_include_contract_metadata(tmp_path: Path) -> None:
     assert dataset_payload["artifact_type"] == "dataset_manifest"
     assert manifest_payload["artifact_type"] == "research_manifest"
     assert learning_payload["artifact_type"] == "learned_policy_model"
+
+
+def test_research_publish_runtime_keeps_facade_contract(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    class _FrozenDatetime(datetime):
+        @classmethod
+        def now(cls, tz=None):  # type: ignore[override]
+            return cls(2026, 3, 14, 9, 30, 15, tzinfo=tz)
+
+    import src.application.v2_research_publish_runtime as publish_runtime_module
+    from src.application import v2_services as legacy
+
+    monkeypatch.setattr(publish_runtime_module, "datetime", _FrozenDatetime)
+
+    baseline = _make_backtest(0.20, 0.18)
+    calibrated = _make_backtest(0.22, 0.20)
+    learned = _make_backtest(0.24, 0.22)
+    learning_result = V2PolicyLearningResult(
+        model=LearnedPolicyModel(
+            feature_names=["x1"],
+            exposure_intercept=0.5,
+            exposure_coef=[0.1],
+            position_intercept=2.0,
+            position_coef=[0.1],
+            turnover_intercept=0.2,
+            turnover_coef=[0.05],
+            train_rows=64,
+            train_r2_exposure=0.2,
+            train_r2_positions=0.18,
+            train_r2_turnover=0.12,
+        ),
+        baseline=baseline,
+        learned=learned,
+    )
+    calibration = V2CalibrationResult(
+        best_policy=PolicySpec(),
+        best_score=0.12,
+        baseline=baseline,
+        calibrated=calibrated,
+        trials=[],
+    )
+    settings = {
+        "config_path": "config/api.json",
+        "source": "local",
+        "watchlist": "config/watchlist.json",
+        "universe_file": "config/universe_smoke_5.json",
+        "universe_limit": 5,
+        "symbols": ["000001.SZ", "000002.SZ"],
+        "symbol_count": 2,
+        "start": "2024-01-01",
+        "end": "2024-12-31",
+    }
+
+    runtime_paths = publish_research_artifacts_runtime(
+        dependencies=legacy._research_publish_dependencies(),
+        strategy_id="swing_v2",
+        artifact_root=str(tmp_path),
+        publish_forecast_models=False,
+        settings=settings,
+        baseline=baseline,
+        calibration=calibration,
+        learning=learning_result,
+    )
+    facade_paths = legacy._publish_v2_research_artifacts_impl(
+        strategy_id="swing_v2",
+        artifact_root=str(tmp_path),
+        publish_forecast_models=False,
+        settings=settings,
+        baseline=baseline,
+        calibration=calibration,
+        learning=learning_result,
+    )
+
+    assert facade_paths == runtime_paths
+    assert Path(facade_paths["research_manifest"]).exists()
+
+
+def test_artifact_registry_does_not_directly_import_legacy_services() -> None:
+    module_path = Path("src/artifact_registry/v2_registry.py")
+    tree = ast.parse(module_path.read_text(encoding="utf-8"))
+
+    imported_modules = {
+        node.module
+        for node in ast.walk(tree)
+        if isinstance(node, ast.ImportFrom) and node.module is not None
+    }
+
+    assert "src.application" not in imported_modules
 
 
 def test_daily_report_view_model_uses_summary_shape() -> None:
