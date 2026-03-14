@@ -22,6 +22,8 @@ from src.contracts.artifacts import (
 )
 from src.contracts.runtime import DailyRunOptions, ResearchMatrixOptions, ResearchRunOptions
 from src.interfaces.cli.run_v2_cli import build_parser
+from src.reporting.view_models import build_daily_report_view_model, build_research_report_view_model
+from src.review_analytics.summaries import summarize_daily_run
 
 
 def _make_backtest(total_return: float = 0.20, annual_return: float = 0.18) -> V2BacktestSummary:
@@ -173,3 +175,116 @@ def test_publish_artifacts_include_contract_metadata(tmp_path: Path) -> None:
     assert dataset_payload["artifact_type"] == "dataset_manifest"
     assert manifest_payload["artifact_type"] == "research_manifest"
     assert learning_payload["artifact_type"] == "learned_policy_model"
+
+
+def test_daily_report_view_model_uses_summary_shape() -> None:
+    baseline = _make_backtest()
+    learning_result = V2PolicyLearningResult(
+        model=LearnedPolicyModel(
+            feature_names=["x1"],
+            exposure_intercept=0.55,
+            exposure_coef=[0.1],
+            position_intercept=2.5,
+            position_coef=[0.05],
+            turnover_intercept=0.20,
+            turnover_coef=[0.01],
+            train_rows=88,
+            train_r2_exposure=0.33,
+            train_r2_positions=0.25,
+            train_r2_turnover=0.19,
+        ),
+        baseline=baseline,
+        learned=_make_backtest(0.24, 0.22),
+    )
+    calibration = V2CalibrationResult(
+        best_policy=PolicySpec(),
+        best_score=0.12,
+        baseline=baseline,
+        calibrated=_make_backtest(0.22, 0.20),
+        trials=[],
+    )
+    import tempfile
+
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        paths = publish_v2_research_artifacts(
+        strategy_id="swing_v2",
+        artifact_root=tmp_dir,
+        publish_forecast_models=False,
+        settings={
+            "config_path": "config/api.json",
+            "source": "local",
+            "watchlist": "config/watchlist.json",
+            "universe_file": "config/universe_smoke_5.json",
+            "universe_limit": 5,
+            "symbols": ["000001.SZ"],
+            "symbol_count": 1,
+            "start": "2024-01-01",
+            "end": "2024-12-31",
+        },
+        baseline=baseline,
+        calibration=calibration,
+        learning=learning_result,
+        )
+        from src.application.v2_contracts import (
+            CompositeState,
+            CrossSectionForecastState,
+            DailyRunResult,
+            MarketForecastState,
+            PolicyDecision,
+        )
+        from src.application.v2_services import build_strategy_snapshot
+
+        result = DailyRunResult(
+            snapshot=build_strategy_snapshot(strategy_id="swing_v2", universe_id="demo_universe"),
+            composite_state=CompositeState(
+                market=MarketForecastState(
+                    as_of_date="2026-03-01",
+                    up_1d_prob=0.5,
+                    up_5d_prob=0.5,
+                    up_20d_prob=0.5,
+                    trend_state="trend",
+                    drawdown_risk=0.1,
+                    volatility_regime="normal",
+                    liquidity_stress=0.1,
+                ),
+                cross_section=CrossSectionForecastState(
+                    as_of_date="2026-03-01",
+                    large_vs_small_bias=0.0,
+                    growth_vs_value_bias=0.0,
+                    fund_flow_strength=0.0,
+                    margin_risk_on_score=0.0,
+                    breadth_strength=0.0,
+                    leader_participation=0.0,
+                    weak_stock_ratio=0.0,
+                ),
+                sectors=[],
+                stocks=[],
+                strategy_mode="trend_follow",
+                risk_regime="risk_on",
+            ),
+            policy_decision=PolicyDecision(
+                target_exposure=0.8,
+                target_position_count=3,
+                rebalance_now=True,
+                rebalance_intensity=0.5,
+                intraday_t_allowed=False,
+                turnover_cap=0.2,
+            ),
+            trade_actions=[],
+        )
+
+        daily_vm = build_daily_report_view_model(result)
+        research_vm = build_research_report_view_model(
+            strategy_id="swing_v2",
+            baseline=baseline,
+            calibration=calibration,
+            learning=learning_result,
+            artifacts=paths,
+        )
+
+        assert daily_vm.strategy_id == summarize_daily_run(result)["strategy_id"]
+        assert daily_vm.strategy_mode == "trend_follow"
+        assert research_vm.strategy_id == "swing_v2"
+        assert research_vm.release_gate_passed is (
+            str(paths.get("release_gate_passed", "false")).strip().lower() == "true"
+        )
