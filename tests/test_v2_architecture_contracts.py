@@ -16,6 +16,9 @@ from src.application.v2_daily_snapshot_runtime import (
     build_strategy_snapshot as build_strategy_snapshot_runtime,
     resolve_manifest_path,
 )
+from src.application.v2_artifact_runtime import (
+    load_policy_model_from_path as load_policy_model_from_path_runtime,
+)
 from src.artifact_registry.v2_registry import publish_v2_research_artifacts
 from src.contracts.artifacts import (
     CURRENT_ARTIFACT_VERSION,
@@ -113,6 +116,48 @@ def test_daily_snapshot_runtime_keeps_facade_contract() -> None:
         )
         == Path("artifacts/v2") / "alpha_v2" / "20260314_010203" / "research_manifest.json"
     )
+
+
+def test_policy_artifact_runtime_keeps_facade_contract(tmp_path: Path) -> None:
+    payload_path = tmp_path / "latest_policy_model.json"
+    payload_path.write_text(
+        json.dumps(
+            {
+                "artifact_type": "learned_policy_model",
+                "artifact_version": CURRENT_ARTIFACT_VERSION,
+                "feature_names": ["x1"],
+                "exposure_intercept": 0.5,
+                "exposure_coef": [0.1],
+                "position_intercept": 2.0,
+                "position_coef": [0.1],
+                "turnover_intercept": 0.2,
+                "turnover_coef": [0.05],
+                "train_rows": 64,
+                "train_r2_exposure": 0.2,
+                "train_r2_positions": 0.18,
+                "train_r2_turnover": 0.12,
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    runtime_model = load_policy_model_from_path_runtime(
+        payload_path,
+        load_json_dict=lambda path_like: json.loads(Path(path_like).read_text(encoding="utf-8")),
+    )
+
+    from src.application.v2_services import _load_policy_model_from_path
+    from src.artifact_registry.v2_registry import load_published_v2_policy_model
+
+    facade_model = _load_policy_model_from_path(payload_path)
+
+    strategy_dir = tmp_path / "alpha_v2"
+    strategy_dir.mkdir()
+    (strategy_dir / "latest_policy_model.json").write_text(payload_path.read_text(encoding="utf-8"), encoding="utf-8")
+    registry_model = load_published_v2_policy_model(strategy_id="alpha_v2", artifact_root=str(tmp_path))
+
+    assert runtime_model == facade_model
+    assert registry_model == facade_model
 
 
 def test_artifact_contract_rejects_unsupported_version(tmp_path: Path) -> None:

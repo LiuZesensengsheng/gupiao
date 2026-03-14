@@ -42,7 +42,6 @@ from src.application.v2_contracts import (
 )
 from src.contracts.artifacts import (
     ForecastBundle,
-    LearnedPolicyArtifact,
     add_artifact_metadata,
 )
 from src.application.v2_external_signal_support import (
@@ -94,6 +93,11 @@ from src.application.v2_daily_snapshot_runtime import (
     is_daily_universe_override_mismatch as _is_daily_universe_override_mismatch_external,
     load_research_manifest_for_daily as _load_research_manifest_for_daily_runtime_external,
     resolve_manifest_path as _resolve_manifest_path_external,
+)
+from src.application.v2_artifact_runtime import (
+    load_policy_model_from_path as _load_policy_model_from_path_external,
+    load_published_v2_policy_model as _load_published_v2_policy_model_external,
+    resolve_daily_policy_model as _resolve_daily_policy_model_external,
 )
 from src.application.v2_universe_generator import generate_dynamic_universe
 from src.application.v2_sector_support import (
@@ -6647,17 +6651,18 @@ def _load_published_v2_policy_model_impl(
     strategy_id: str,
     artifact_root: str = "artifacts/v2",
 ) -> LearnedPolicyModel | None:
-    model_path = Path(str(artifact_root)) / str(strategy_id) / "latest_policy_model.json"
-    return _load_policy_model_from_path(model_path)
+    return _load_published_v2_policy_model_external(
+        strategy_id=strategy_id,
+        artifact_root=artifact_root,
+        load_policy_model_from_path_fn=_load_policy_model_from_path,
+    )
 
 
 def _load_policy_model_from_path(model_path: Path) -> LearnedPolicyModel | None:
-    if not model_path.exists():
-        return None
-    payload = _load_json_dict(model_path)
-    if not isinstance(payload, dict):
-        return None
-    return LearnedPolicyArtifact.from_payload(payload).model
+    return _load_policy_model_from_path_external(
+        model_path,
+        load_json_dict=_load_json_dict,
+    )
 
 
 def _with_backtest_metadata(
@@ -7943,20 +7948,15 @@ def _resolve_daily_policy_model(
     manifest: dict[str, object],
     manifest_path: Path | None,
 ) -> LearnedPolicyModel | None:
-    learned_policy = None
-    if manifest and manifest_path is not None:
-        model_path = _path_from_manifest_entry(
-            manifest.get("learned_policy_model"),
-            run_dir=manifest_path.parent,
-        )
-        if model_path is not None:
-            learned_policy = _load_policy_model_from_path(model_path)
-    if learned_policy is None:
-        learned_policy = _load_published_v2_policy_model_impl(
-            strategy_id=strategy_id,
-            artifact_root=artifact_root,
-        )
-    return learned_policy
+    return _resolve_daily_policy_model_external(
+        strategy_id=strategy_id,
+        artifact_root=artifact_root,
+        manifest=manifest,
+        manifest_path=manifest_path,
+        path_from_manifest_entry=_path_from_manifest_entry,
+        load_policy_model_from_path_fn=_load_policy_model_from_path,
+        load_published_v2_policy_model_fn=_load_published_v2_policy_model_impl,
+    )
 
 
 def _run_daily_v2_live_impl(

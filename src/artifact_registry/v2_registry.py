@@ -3,6 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from src.application import v2_services as legacy
+from src.application.v2_artifact_runtime import load_published_v2_policy_model as _load_published_v2_policy_model
 from src.contracts.artifacts import DatasetManifest, ForecastBundle, LearnedPolicyArtifact, ResearchManifest
 from src.contracts.runtime import ResearchRunOptions
 
@@ -12,9 +13,10 @@ def load_published_v2_policy_model(
     strategy_id: str,
     artifact_root: str = "artifacts/v2",
 ):
-    return legacy._load_published_v2_policy_model_impl(
+    return _load_published_v2_policy_model(
         strategy_id=strategy_id,
         artifact_root=artifact_root,
+        load_policy_model_from_path_fn=legacy._load_policy_model_from_path,
     )
 
 
