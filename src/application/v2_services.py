@@ -41,10 +41,8 @@ from src.application.v2_contracts import (
     StrategySnapshot,
 )
 from src.contracts.artifacts import (
-    DatasetManifest,
     ForecastBundle,
     LearnedPolicyArtifact,
-    ResearchManifest,
     add_artifact_metadata,
 )
 from src.application.v2_external_signal_support import (
@@ -84,9 +82,18 @@ from src.application.v2_publish_support import (
 from src.application.v2_snapshot_support import (
     build_frozen_daily_state_payload as _build_frozen_daily_state_payload_external,
     decode_composite_state as _decode_composite_state_external,
-    load_research_manifest_for_daily as _load_research_manifest_for_daily_external,
     resolve_manifest_entry_path as _path_from_manifest_entry_external,
     serialize_composite_state as _serialize_composite_state_external,
+)
+from src.application.v2_daily_snapshot_runtime import (
+    DailySnapshotContext as _DailySnapshotContextExternal,
+    build_daily_snapshot_context as _build_daily_snapshot_context_external,
+    build_snapshot_from_manifest as _build_snapshot_from_manifest_external,
+    build_strategy_snapshot as _build_strategy_snapshot_external,
+    hydrate_daily_settings_from_dataset_manifest as _hydrate_daily_settings_from_dataset_manifest_external,
+    is_daily_universe_override_mismatch as _is_daily_universe_override_mismatch_external,
+    load_research_manifest_for_daily as _load_research_manifest_for_daily_runtime_external,
+    resolve_manifest_path as _resolve_manifest_path_external,
 )
 from src.application.v2_universe_generator import generate_dynamic_universe
 from src.application.v2_sector_support import (
@@ -646,14 +653,12 @@ def _resolve_manifest_path(
     run_id: str | None,
     snapshot_path: str | None,
 ) -> Path:
-    if snapshot_path is not None and str(snapshot_path).strip():
-        path = Path(str(snapshot_path))
-        if path.is_dir():
-            return path / "research_manifest.json"
-        return path
-    if run_id is not None and str(run_id).strip():
-        return Path(str(artifact_root)) / str(strategy_id) / str(run_id).strip() / "research_manifest.json"
-    return Path(str(artifact_root)) / str(strategy_id) / "latest_research_manifest.json"
+    return _resolve_manifest_path_external(
+        strategy_id=strategy_id,
+        artifact_root=artifact_root,
+        run_id=run_id,
+        snapshot_path=snapshot_path,
+    )
 
 
 def _path_from_manifest_entry(entry: object, *, run_dir: Path) -> Path | None:
@@ -1834,45 +1839,38 @@ def build_strategy_snapshot(
     use_us_index_context: bool = False,
     us_index_source: str = "",
 ) -> StrategySnapshot:
-    return StrategySnapshot(
-        strategy_id=str(strategy_id).strip() or "swing_v2",
-        universe_id=str(universe_id).strip() or "top_liquid_200",
-        feature_set_version="fset_v2_core",
-        market_model_id="mkt_lr_v2",
-        sector_model_id="sector_lr_v2",
-        stock_model_id="stock_lr_v2",
-        cross_section_model_id="cross_section_v2",
-        policy_version="policy_v2_rules",
-        execution_version="exec_t1_v2",
-        universe_size=int(universe_size),
-        universe_generation_rule=str(universe_generation_rule),
-        source_universe_manifest_path=str(source_universe_manifest_path),
-        info_manifest_path=str(info_manifest_path),
-        info_hash=str(info_hash),
-        info_shadow_enabled=bool(info_shadow_enabled),
-        external_signal_manifest_path=str(external_signal_manifest_path),
-        external_signal_version=str(external_signal_version),
-        external_signal_enabled=bool(external_signal_enabled),
-        capital_flow_snapshot=dict(capital_flow_snapshot or {}),
-        macro_context_snapshot=dict(macro_context_snapshot or {}),
-        generator_manifest_path=str(generator_manifest_path),
-        generator_version=str(generator_version),
-        generator_hash=str(generator_hash),
-        coarse_pool_size=int(coarse_pool_size),
-        refined_pool_size=int(refined_pool_size),
-        selected_pool_size=int(selected_pool_size),
-        theme_allocations=list(theme_allocations or []),
-        run_id=str(run_id),
-        data_window=str(data_window),
-        model_hashes=dict(model_hashes or {}),
-        policy_hash=str(policy_hash),
-        universe_hash=str(universe_hash),
-        created_at=str(created_at),
-        snapshot_hash=str(snapshot_hash),
-        config_hash=str(config_hash),
-        manifest_path=str(manifest_path),
-        use_us_index_context=bool(use_us_index_context),
-        us_index_source=str(us_index_source),
+    return _build_strategy_snapshot_external(
+        strategy_id=strategy_id,
+        universe_id=universe_id,
+        universe_size=universe_size,
+        universe_generation_rule=universe_generation_rule,
+        source_universe_manifest_path=source_universe_manifest_path,
+        info_manifest_path=info_manifest_path,
+        info_hash=info_hash,
+        info_shadow_enabled=info_shadow_enabled,
+        external_signal_manifest_path=external_signal_manifest_path,
+        external_signal_version=external_signal_version,
+        external_signal_enabled=external_signal_enabled,
+        capital_flow_snapshot=capital_flow_snapshot,
+        macro_context_snapshot=macro_context_snapshot,
+        generator_manifest_path=generator_manifest_path,
+        generator_version=generator_version,
+        generator_hash=generator_hash,
+        coarse_pool_size=coarse_pool_size,
+        refined_pool_size=refined_pool_size,
+        selected_pool_size=selected_pool_size,
+        theme_allocations=theme_allocations,
+        run_id=run_id,
+        data_window=data_window,
+        model_hashes=model_hashes,
+        policy_hash=policy_hash,
+        universe_hash=universe_hash,
+        created_at=created_at,
+        snapshot_hash=snapshot_hash,
+        config_hash=config_hash,
+        manifest_path=manifest_path,
+        use_us_index_context=use_us_index_context,
+        us_index_source=us_index_source,
     )
 
 
@@ -6772,12 +6770,12 @@ def _load_research_manifest_for_daily(
     run_id: str | None,
     snapshot_path: str | None,
 ) -> tuple[dict[str, object], Path]:
-    return _load_research_manifest_for_daily_external(
+    return _load_research_manifest_for_daily_runtime_external(
         strategy_id=strategy_id,
         artifact_root=artifact_root,
         run_id=run_id,
         snapshot_path=snapshot_path,
-        resolve_manifest_path=_resolve_manifest_path,
+        resolve_manifest_path_fn=_resolve_manifest_path,
         load_json_dict=_load_json_dict,
     )
 
@@ -6789,75 +6787,16 @@ def _build_snapshot_from_manifest(
     manifest: dict[str, object],
     manifest_path: Path,
 ) -> StrategySnapshot:
-    dataset_path = _path_from_manifest_entry(manifest.get("dataset_manifest"), run_dir=manifest_path.parent)
-    dataset_manifest = _load_json_dict(dataset_path) if dataset_path is not None else {}
-    config_hash = str(manifest.get("config_hash", "")) or _stable_json_hash(settings)
-    model_hashes_raw = manifest.get("model_hashes", {})
-    model_hashes = (
-        {str(k): str(v) for k, v in model_hashes_raw.items()}
-        if isinstance(model_hashes_raw, dict)
-        else {}
-    )
-    policy_hash = str(manifest.get("policy_hash", ""))
-    universe_hash = str(manifest.get("universe_hash", ""))
-    run_id = str(manifest.get("run_id", ""))
-    snapshot_hash = str(manifest.get("snapshot_hash", "")) or _compose_run_snapshot_hash(
-        run_id=run_id,
+    return _build_snapshot_from_manifest_external(
         strategy_id=strategy_id,
-        config_hash=config_hash,
-        policy_hash=policy_hash,
-        universe_hash=universe_hash,
-        model_hashes=model_hashes,
-    )
-    universe_file = str(dataset_manifest.get("universe_file", settings.get("universe_file", "")))
-    universe_id = str(dataset_manifest.get("universe_id", "")).strip() or Path(universe_file).stem or Path(str(settings.get("universe_file", ""))).stem or "v2_universe"
-    start = str(dataset_manifest.get("start", settings.get("start", "")))
-    end = str(dataset_manifest.get("end", settings.get("end", "")))
-    data_window = f"{start}~{end}" if start or end else ""
-    return build_strategy_snapshot(
-        strategy_id=strategy_id,
-        universe_id=universe_id,
-        universe_size=int(dataset_manifest.get("universe_size", dataset_manifest.get("symbol_count", 0)) or 0),
-        universe_generation_rule=str(dataset_manifest.get("universe_generation_rule", "")),
-        source_universe_manifest_path=str(
-            dataset_manifest.get("source_universe_manifest_path", dataset_manifest.get("universe_file", ""))
-        ),
-        info_manifest_path=str(manifest.get("info_manifest", "")),
-        info_hash=str(manifest.get("info_hash", dataset_manifest.get("info_hash", ""))),
-        info_shadow_enabled=_parse_boolish(manifest.get("info_shadow_enabled", dataset_manifest.get("info_shadow_enabled", False)), False),
-        external_signal_manifest_path=str(manifest.get("external_signal_manifest", dataset_manifest.get("external_signal_manifest", ""))),
-        external_signal_version=str(manifest.get("external_signal_version", dataset_manifest.get("external_signal_version", "v1"))),
-        external_signal_enabled=_parse_boolish(
-            manifest.get("external_signal_enabled", dataset_manifest.get("external_signal_enabled", False)),
-            False,
-        ),
-        capital_flow_snapshot=dict(manifest.get("capital_flow_snapshot", dataset_manifest.get("capital_flow_snapshot", {}))),
-        macro_context_snapshot=dict(manifest.get("macro_context_snapshot", dataset_manifest.get("macro_context_snapshot", {}))),
-        generator_manifest_path=str(manifest.get("generator_manifest", dataset_manifest.get("generator_manifest", ""))),
-        generator_version=str(manifest.get("generator_version", dataset_manifest.get("generator_version", ""))),
-        generator_hash=str(manifest.get("generator_hash", dataset_manifest.get("generator_hash", ""))),
-        coarse_pool_size=int(manifest.get("coarse_pool_size", dataset_manifest.get("coarse_pool_size", 0)) or 0),
-        refined_pool_size=int(manifest.get("refined_pool_size", dataset_manifest.get("refined_pool_size", 0)) or 0),
-        selected_pool_size=int(manifest.get("selected_pool_size", dataset_manifest.get("selected_pool_size", 0)) or 0),
-        theme_allocations=[
-            dict(item)
-            for item in manifest.get("theme_allocations", dataset_manifest.get("theme_allocations", []))
-            if isinstance(item, dict)
-        ],
-        run_id=run_id,
-        data_window=data_window,
-        model_hashes=model_hashes,
-        policy_hash=policy_hash,
-        universe_hash=universe_hash,
-        created_at=str(manifest.get("created_at", "")),
-        snapshot_hash=snapshot_hash,
-        config_hash=config_hash,
-        manifest_path=str(manifest_path.resolve()),
-        use_us_index_context=_parse_boolish(
-            dataset_manifest.get("use_us_index_context", manifest.get("use_us_index_context", False)),
-            False,
-        ),
-        us_index_source=str(dataset_manifest.get("us_index_source", manifest.get("us_index_source", ""))),
+        settings=settings,
+        manifest=manifest,
+        manifest_path=manifest_path,
+        path_from_manifest_entry=_path_from_manifest_entry,
+        load_json_dict=_load_json_dict,
+        parse_boolish=_parse_boolish,
+        stable_json_hash=_stable_json_hash,
+        compose_run_snapshot_hash=_compose_run_snapshot_hash,
     )
 
 
@@ -7574,13 +7513,7 @@ def _publish_v2_research_artifacts_impl(
     }
 
 
-@dataclass(frozen=True)
-class _DailySnapshotContext:
-    settings: dict[str, object]
-    manifest: dict[str, object]
-    manifest_path: Path | None
-    snapshot: StrategySnapshot
-    resolved_run_id: str
+_DailySnapshotContext = _DailySnapshotContextExternal
 
 
 @dataclass(frozen=True)
@@ -7613,127 +7546,20 @@ def _hydrate_daily_settings_from_dataset_manifest(
     universe_tier: str | None,
     universe_file: str | None,
 ) -> dict[str, object]:
-    dataset_path = _path_from_manifest_entry(manifest.get("dataset_manifest"), run_dir=manifest_path.parent)
-    dataset_manifest = _load_json_dict(dataset_path) if dataset_path is not None else {}
-    if not dataset_manifest:
-        return settings
-    DatasetManifest.from_payload(dataset_manifest)
-
-    manifest_universe_tier = str(dataset_manifest.get("universe_tier", "")).strip()
-    manifest_universe_file = str(dataset_manifest.get("universe_file", "")).strip()
-    requested_universe_tier = str(settings.get("universe_tier", "")).strip()
-    requested_universe_file = str(settings.get("universe_file", "")).strip()
-    if universe_tier is not None and requested_universe_tier and manifest_universe_tier and requested_universe_tier != manifest_universe_tier:
-        raise ValueError(
-            f"universe tier mismatch: requested={requested_universe_tier}, manifest={manifest_universe_tier}"
-        )
-    if universe_file is not None and requested_universe_file and manifest_universe_file:
-        requested_path = str(Path(requested_universe_file).resolve())
-        manifest_path_resolved = str(Path(manifest_universe_file).resolve())
-        if requested_path != manifest_path_resolved:
-            raise ValueError(
-                f"universe file mismatch: requested={requested_path}, manifest={manifest_path_resolved}"
-            )
-
-    hydrated = dict(settings)
-    hydrated["universe_file"] = str(dataset_manifest.get("universe_file", hydrated.get("universe_file", "")))
-    hydrated["universe_limit"] = int(dataset_manifest.get("universe_limit", hydrated.get("universe_limit", 0)))
-    hydrated["universe_tier"] = str(dataset_manifest.get("universe_tier", hydrated.get("universe_tier", "")))
-    hydrated["universe_id"] = str(dataset_manifest.get("universe_id", hydrated.get("universe_id", "")))
-    hydrated["universe_size"] = int(
-        dataset_manifest.get("universe_size", dataset_manifest.get("symbol_count", hydrated.get("universe_size", 0)))
+    return _hydrate_daily_settings_from_dataset_manifest_external(
+        settings=settings,
+        manifest=manifest,
+        manifest_path=manifest_path,
+        universe_tier=universe_tier,
+        universe_file=universe_file,
+        path_from_manifest_entry=_path_from_manifest_entry,
+        load_json_dict=_load_json_dict,
+        parse_boolish=_parse_boolish,
     )
-    hydrated["universe_generation_rule"] = str(
-        dataset_manifest.get("universe_generation_rule", hydrated.get("universe_generation_rule", ""))
-    )
-    hydrated["source_universe_manifest_path"] = str(
-        dataset_manifest.get("source_universe_manifest_path", hydrated.get("source_universe_manifest_path", ""))
-    )
-    hydrated["symbols"] = [
-        str(item)
-        for item in dataset_manifest.get("symbols", hydrated.get("symbols", []))
-        if str(item).strip()
-    ]
-    hydrated["symbol_count"] = int(dataset_manifest.get("symbol_count", len(hydrated["symbols"])))
-    hydrated["universe_hash"] = str(dataset_manifest.get("universe_hash", hydrated.get("universe_hash", "")))
-    hydrated["dynamic_universe_enabled"] = _parse_boolish(
-        dataset_manifest.get("dynamic_universe_enabled", hydrated.get("dynamic_universe_enabled", False)),
-        False,
-    )
-    hydrated["generator_manifest_path"] = str(
-        dataset_manifest.get("generator_manifest", hydrated.get("generator_manifest_path", ""))
-    )
-    hydrated["generator_version"] = str(dataset_manifest.get("generator_version", hydrated.get("generator_version", "")))
-    hydrated["generator_hash"] = str(dataset_manifest.get("generator_hash", hydrated.get("generator_hash", "")))
-    hydrated["coarse_pool_size"] = int(dataset_manifest.get("coarse_pool_size", hydrated.get("coarse_pool_size", 0)))
-    hydrated["refined_pool_size"] = int(dataset_manifest.get("refined_pool_size", hydrated.get("refined_pool_size", 0)))
-    hydrated["selected_pool_size"] = int(dataset_manifest.get("selected_pool_size", hydrated.get("selected_pool_size", 0)))
-    hydrated["theme_allocations"] = [
-        dict(item)
-        for item in dataset_manifest.get("theme_allocations", hydrated.get("theme_allocations", []))
-        if isinstance(item, dict)
-    ]
-    hydrated["info_file"] = str(dataset_manifest.get("info_file", hydrated.get("info_file", "")))
-    hydrated["event_file"] = str(dataset_manifest.get("event_file", hydrated.get("event_file", hydrated.get("info_file", ""))))
-    hydrated["info_hash"] = str(dataset_manifest.get("info_hash", hydrated.get("info_hash", "")))
-    hydrated["info_shadow_enabled"] = _parse_boolish(
-        dataset_manifest.get("info_shadow_enabled", hydrated.get("info_shadow_enabled", False)),
-        False,
-    )
-    hydrated["capital_flow_file"] = str(dataset_manifest.get("capital_flow_file", hydrated.get("capital_flow_file", "")))
-    hydrated["macro_file"] = str(dataset_manifest.get("macro_file", hydrated.get("macro_file", "")))
-    hydrated["external_signals"] = _parse_boolish(
-        dataset_manifest.get("external_signal_enabled", hydrated.get("external_signals", True)),
-        True,
-    )
-    hydrated["external_signal_version"] = str(
-        dataset_manifest.get("external_signal_version", hydrated.get("external_signal_version", "v1"))
-    )
-    hydrated["event_lookback_days"] = int(dataset_manifest.get("event_lookback_days", hydrated.get("event_lookback_days", hydrated.get("info_lookback_days", 45))))
-    hydrated["capital_flow_lookback_days"] = int(
-        dataset_manifest.get("capital_flow_lookback_days", hydrated.get("capital_flow_lookback_days", 20))
-    )
-    hydrated["macro_lookback_days"] = int(
-        dataset_manifest.get("macro_lookback_days", hydrated.get("macro_lookback_days", 60))
-    )
-    hydrated["event_risk_cutoff"] = float(dataset_manifest.get("event_risk_cutoff", hydrated.get("event_risk_cutoff", 0.55)))
-    hydrated["catalyst_boost_cap"] = float(dataset_manifest.get("catalyst_boost_cap", hydrated.get("catalyst_boost_cap", 0.12)))
-    hydrated["flow_exposure_cap"] = float(dataset_manifest.get("flow_exposure_cap", hydrated.get("flow_exposure_cap", 0.08)))
-    hydrated["info_source_mode"] = str(dataset_manifest.get("info_source_mode", hydrated.get("info_source_mode", "layered")))
-    hydrated["use_us_index_context"] = _parse_boolish(
-        dataset_manifest.get("use_us_index_context", manifest.get("use_us_index_context", False)),
-        False,
-    )
-    hydrated["us_index_source"] = str(
-        dataset_manifest.get("us_index_source", manifest.get("us_index_source", "akshare"))
-    )
-    hydrated["use_us_sector_etf_context"] = _parse_boolish(
-        dataset_manifest.get("use_us_sector_etf_context", manifest.get("use_us_sector_etf_context", False)),
-        False,
-    )
-    hydrated["use_cn_etf_context"] = _parse_boolish(
-        dataset_manifest.get("use_cn_etf_context", manifest.get("use_cn_etf_context", False)),
-        False,
-    )
-    hydrated["cn_etf_source"] = str(
-        dataset_manifest.get("cn_etf_source", manifest.get("cn_etf_source", "akshare"))
-    )
-    hydrated["info_subsets"] = [
-        str(item)
-        for item in dataset_manifest.get("info_subsets", hydrated.get("info_subsets", []))
-        if str(item).strip()
-    ]
-    hydrated["announcement_event_tags"] = [
-        str(item)
-        for item in dataset_manifest.get("announcement_event_tags", hydrated.get("announcement_event_tags", []))
-        if str(item).strip()
-    ]
-    return hydrated
 
 
 def _is_daily_universe_override_mismatch(exc: Exception) -> bool:
-    text = str(exc)
-    return "universe tier mismatch:" in text or "universe file mismatch:" in text
+    return _is_daily_universe_override_mismatch_external(exc)
 
 
 def _build_daily_snapshot_context(
@@ -7770,7 +7596,8 @@ def _build_daily_snapshot_context(
     snapshot_path: str | None,
     allow_retrain: bool,
 ) -> _DailySnapshotContext:
-    settings = _load_v2_runtime_settings(
+    return _build_daily_snapshot_context_external(
+        strategy_id=strategy_id,
         config_path=config_path,
         source=source,
         universe_file=universe_file,
@@ -7795,134 +7622,21 @@ def _build_daily_snapshot_context(
         macro_file=macro_file,
         use_us_index_context=use_us_index_context,
         us_index_source=us_index_source,
-    )
-    settings["refresh_cache"] = bool(refresh_cache)
-    settings = _resolve_v2_universe_settings(settings=settings, cache_root=cache_root)
-
-    manifest: dict[str, object] = {}
-    manifest_path: Path | None = None
-    try:
-        manifest, manifest_path = _load_research_manifest_for_daily(
-            strategy_id=strategy_id,
-            artifact_root=artifact_root,
-            run_id=run_id,
-            snapshot_path=snapshot_path,
-        )
-        if manifest:
-            ResearchManifest.from_payload(manifest)
-    except Exception:
-        if not allow_retrain:
-            raise
-
-    resolved_run_id = ""
-    if manifest:
-        resolved_run_id = str(manifest.get("run_id", "")).strip()
-    elif run_id is not None:
-        resolved_run_id = str(run_id).strip()
-
-    if manifest and manifest_path is not None:
-        try:
-            settings = _hydrate_daily_settings_from_dataset_manifest(
-                settings=settings,
-                manifest=manifest,
-                manifest_path=manifest_path,
-                universe_tier=universe_tier,
-                universe_file=universe_file,
-            )
-            snapshot = _build_snapshot_from_manifest(
-                strategy_id=strategy_id,
-                settings=settings,
-                manifest=manifest,
-                manifest_path=manifest_path,
-            )
-        except ValueError as exc:
-            explicit_universe_override = universe_tier is not None or universe_file is not None
-            if not (allow_retrain and explicit_universe_override and _is_daily_universe_override_mismatch(exc)):
-                raise
-            _emit_progress(
-                "load-strategy-snapshot",
-                "detected explicit universe override; bypassing published snapshot and rebuilding daily state.",
-            )
-            manifest = {}
-            manifest_path = None
-            resolved_run_id = ""
-            data_window = f"{settings.get('start', '')}~{settings.get('end', '')}"
-            snapshot = build_strategy_snapshot(
-                strategy_id=strategy_id,
-                universe_id=str(settings.get("universe_id", "")).strip()
-                or Path(str(settings["universe_file"])).stem
-                or "v2_universe",
-                universe_size=int(settings.get("universe_size", settings.get("symbol_count", 0)) or 0),
-                universe_generation_rule=str(settings.get("universe_generation_rule", "")),
-                source_universe_manifest_path=str(
-                    settings.get("source_universe_manifest_path", settings.get("universe_file", ""))
-                ),
-                info_manifest_path=str(settings.get("info_manifest_path", "")),
-                info_hash=str(settings.get("info_hash", "")),
-                info_shadow_enabled=_parse_boolish(settings.get("info_shadow_enabled", False), False),
-                external_signal_manifest_path=str(settings.get("external_signal_manifest", "")),
-                external_signal_version=str(settings.get("external_signal_version", "v1")),
-                external_signal_enabled=_parse_boolish(settings.get("external_signals", False), False),
-                capital_flow_snapshot=dict(settings.get("capital_flow_snapshot", {})),
-                macro_context_snapshot=dict(settings.get("macro_context_snapshot", {})),
-                generator_manifest_path=str(settings.get("generator_manifest_path", "")),
-                generator_version=str(settings.get("generator_version", "")),
-                generator_hash=str(settings.get("generator_hash", "")),
-                coarse_pool_size=int(settings.get("coarse_pool_size", 0)),
-                refined_pool_size=int(settings.get("refined_pool_size", 0)),
-                selected_pool_size=int(settings.get("selected_pool_size", 0)),
-                theme_allocations=[dict(item) for item in settings.get("theme_allocations", []) if isinstance(item, dict)],
-                run_id="",
-                data_window=data_window,
-                model_hashes={},
-                policy_hash="",
-                universe_hash=str(settings.get("universe_hash", "")),
-                created_at=str(pd.Timestamp.now().isoformat()),
-                snapshot_hash="",
-                config_hash=_stable_json_hash(settings),
-                manifest_path="",
-                use_us_index_context=_parse_boolish(settings.get("use_us_index_context", False), False),
-                us_index_source=str(settings.get("us_index_source", "")),
-            )
-    else:
-        data_window = f"{settings.get('start', '')}~{settings.get('end', '')}"
-        snapshot = build_strategy_snapshot(
-            strategy_id=strategy_id,
-            universe_id=str(settings.get("universe_id", "")).strip() or Path(str(settings["universe_file"])).stem or "v2_universe",
-            universe_size=int(settings.get("universe_size", settings.get("symbol_count", 0)) or 0),
-            universe_generation_rule=str(settings.get("universe_generation_rule", "")),
-            source_universe_manifest_path=str(
-                settings.get("source_universe_manifest_path", settings.get("universe_file", ""))
-            ),
-            info_manifest_path=str(settings.get("info_manifest_path", "")),
-            info_hash=str(settings.get("info_hash", "")),
-            info_shadow_enabled=_parse_boolish(settings.get("info_shadow_enabled", False), False),
-            external_signal_manifest_path=str(settings.get("external_signal_manifest", "")),
-            external_signal_version=str(settings.get("external_signal_version", "v1")),
-            external_signal_enabled=_parse_boolish(settings.get("external_signals", True), True),
-            capital_flow_snapshot=dict(settings.get("capital_flow_snapshot", {})),
-            macro_context_snapshot=dict(settings.get("macro_context_snapshot", {})),
-            generator_manifest_path=str(settings.get("generator_manifest_path", "")),
-            generator_version=str(settings.get("generator_version", "")),
-            generator_hash=str(settings.get("generator_hash", "")),
-            coarse_pool_size=int(settings.get("coarse_pool_size", 0)),
-            refined_pool_size=int(settings.get("refined_pool_size", 0)),
-            selected_pool_size=int(settings.get("selected_pool_size", 0)),
-            theme_allocations=[dict(item) for item in settings.get("theme_allocations", []) if isinstance(item, dict)],
-            run_id=resolved_run_id,
-            data_window=data_window,
-            config_hash=_stable_json_hash(settings),
-            universe_hash=str(settings.get("universe_hash", "")) or _sha256_file(settings.get("universe_file", "")),
-            use_us_index_context=bool(settings.get("use_us_index_context", False)),
-            us_index_source=str(settings.get("us_index_source", "akshare")),
-        )
-
-    return _DailySnapshotContext(
-        settings=settings,
-        manifest=manifest,
-        manifest_path=manifest_path,
-        snapshot=snapshot,
-        resolved_run_id=resolved_run_id,
+        artifact_root=artifact_root,
+        cache_root=cache_root,
+        refresh_cache=refresh_cache,
+        run_id=run_id,
+        snapshot_path=snapshot_path,
+        allow_retrain=allow_retrain,
+        load_v2_runtime_settings=_load_v2_runtime_settings,
+        resolve_v2_universe_settings=_resolve_v2_universe_settings,
+        load_research_manifest_for_daily_fn=_load_research_manifest_for_daily,
+        hydrate_daily_settings_from_dataset_manifest_fn=_hydrate_daily_settings_from_dataset_manifest,
+        build_snapshot_from_manifest_fn=_build_snapshot_from_manifest,
+        parse_boolish=_parse_boolish,
+        stable_json_hash=_stable_json_hash,
+        sha256_file=_sha256_file,
+        emit_progress=_emit_progress,
     )
 
 

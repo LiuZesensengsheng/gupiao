@@ -12,6 +12,10 @@ from src.application.v2_contracts import (
     V2CalibrationResult,
     V2PolicyLearningResult,
 )
+from src.application.v2_daily_snapshot_runtime import (
+    build_strategy_snapshot as build_strategy_snapshot_runtime,
+    resolve_manifest_path,
+)
 from src.artifact_registry.v2_registry import publish_v2_research_artifacts
 from src.contracts.artifacts import (
     CURRENT_ARTIFACT_VERSION,
@@ -90,6 +94,25 @@ def test_runtime_options_are_built_from_cli_namespace() -> None:
     matrix_options = ResearchMatrixOptions.from_namespace(matrix_args)
     assert matrix_options.strategy_id == "alpha_v2"
     assert matrix_options.universe_tiers == ("favorites_16", "generated_80")
+
+
+def test_daily_snapshot_runtime_keeps_facade_contract() -> None:
+    runtime_snapshot = build_strategy_snapshot_runtime(strategy_id="alpha_v2", universe_id="demo")
+
+    from src.application.v2_services import build_strategy_snapshot
+
+    facade_snapshot = build_strategy_snapshot(strategy_id="alpha_v2", universe_id="demo")
+
+    assert facade_snapshot == runtime_snapshot
+    assert (
+        resolve_manifest_path(
+            strategy_id="alpha_v2",
+            artifact_root="artifacts/v2",
+            run_id="20260314_010203",
+            snapshot_path=None,
+        )
+        == Path("artifacts/v2") / "alpha_v2" / "20260314_010203" / "research_manifest.json"
+    )
 
 
 def test_artifact_contract_rejects_unsupported_version(tmp_path: Path) -> None:
