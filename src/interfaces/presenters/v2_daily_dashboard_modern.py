@@ -288,3 +288,20 @@ def write_v2_daily_dashboard(out_path: str | Path, result: V2DailyRunResult) -> 
 
     path.write_text(html, encoding="utf-8")
     return path
+
+
+from src.contracts.reporting import DailyReportViewModel
+from src.interfaces.presenters.v2_view_model_renderers import render_daily_html
+from src.reporting.view_models import build_daily_report_view_model
+
+
+def write_v2_daily_dashboard_from_view_model(out_path: str | Path, view_model: DailyReportViewModel) -> Path:
+    path = Path(out_path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(render_daily_html(view_model), encoding="utf-8")
+    return path
+
+
+def write_v2_daily_dashboard(out_path: str | Path, result: V2DailyRunResult) -> Path:
+    view_model = build_daily_report_view_model(result)
+    return write_v2_daily_dashboard_from_view_model(out_path, view_model)

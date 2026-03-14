@@ -284,7 +284,10 @@ def test_daily_report_view_model_uses_summary_shape() -> None:
 
         assert daily_vm.strategy_id == summarize_daily_run(result)["strategy_id"]
         assert daily_vm.strategy_mode == "trend_follow"
+        assert daily_vm.market_forecasts == []
+        assert "candidate_selection" in daily_vm.dynamic_universe
         assert research_vm.strategy_id == "swing_v2"
         assert research_vm.release_gate_passed is (
             str(paths.get("release_gate_passed", "false")).strip().lower() == "true"
         )
+        assert research_vm.learning_model["train_rows"] == 88

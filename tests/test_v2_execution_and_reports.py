@@ -28,8 +28,19 @@ from src.application.v2_contracts import (
 )
 from src.application.v2_services import _simulate_execution_day
 from src.domain.entities import TradeAction
-from src.interfaces.presenters.html_dashboard import write_v2_daily_dashboard, write_v2_research_dashboard
-from src.interfaces.presenters.markdown_reports import write_v2_daily_report, write_v2_research_report
+from src.interfaces.presenters.html_dashboard import (
+    write_v2_daily_dashboard,
+    write_v2_daily_dashboard_from_view_model,
+    write_v2_research_dashboard,
+    write_v2_research_dashboard_from_view_model,
+)
+from src.interfaces.presenters.markdown_reports import (
+    write_v2_daily_report,
+    write_v2_daily_report_from_view_model,
+    write_v2_research_report,
+    write_v2_research_report_from_view_model,
+)
+from src.reporting.view_models import build_daily_report_view_model, build_research_report_view_model
 
 
 def _make_daily_result() -> DailyRunResult:
@@ -913,6 +924,83 @@ def test_v2_html_dashboards_keep_key_chinese_sections(tmp_path: Path) -> None:
     assert "x1" in research_html
     assert "64" in research_html
     assert "0.12" in research_html
+
+
+def test_v2_presenters_can_render_from_view_models(tmp_path: Path) -> None:
+    daily_result = _make_daily_result()
+    daily_view_model = build_daily_report_view_model(daily_result)
+
+    daily_md = write_v2_daily_report_from_view_model(tmp_path / "daily_vm.md", daily_view_model).read_text(encoding="utf-8")
+    daily_html = write_v2_daily_dashboard_from_view_model(tmp_path / "daily_vm.html", daily_view_model).read_text(encoding="utf-8")
+
+    assert "市场总览" in daily_md
+    assert "Top20 推荐" in daily_md
+    assert "generator manifest path" in daily_md
+    assert "Dynamic Universe Funnel" in daily_html
+    assert "Mainline Radar" in daily_html
+    assert "AAA, BBB" in daily_html
+
+    baseline = _make_backtest(0.24)
+    calibrated = _make_backtest(0.26)
+    learned = _make_backtest(0.20)
+    research_view_model = build_research_report_view_model(
+        strategy_id="swing_v2",
+        baseline=baseline,
+        calibration=V2CalibrationResult(
+            best_policy=PolicySpec(),
+            best_score=0.12,
+            baseline=baseline,
+            calibrated=calibrated,
+            trials=[
+                {
+                    "policy": {
+                        "risk_on_exposure": 0.85,
+                        "risk_on_positions": 4,
+                        "risk_on_turnover_cap": 0.40,
+                    },
+                    "summary": {
+                        "annual_return": 0.22,
+                        "benchmark_annual_return": 0.09,
+                        "excess_annual_return": 0.12,
+                        "information_ratio": 0.61,
+                        "max_drawdown": -0.07,
+                    },
+                    "score": 0.185,
+                }
+            ],
+        ),
+        learning=V2PolicyLearningResult(
+            model=LearnedPolicyModel(
+                feature_names=["x1"],
+                exposure_intercept=0.5,
+                exposure_coef=[0.1],
+                position_intercept=2.0,
+                position_coef=[0.1],
+                turnover_intercept=0.2,
+                turnover_coef=[0.05],
+                train_rows=64,
+                train_r2_exposure=0.20,
+                train_r2_positions=0.18,
+                train_r2_turnover=0.12,
+            ),
+            baseline=baseline,
+            learned=learned,
+        ),
+    )
+
+    research_md = write_v2_research_report_from_view_model(
+        tmp_path / "research_vm.md",
+        research_view_model,
+    ).read_text(encoding="utf-8")
+    research_html = write_v2_research_dashboard_from_view_model(
+        tmp_path / "research_vm.html",
+        research_view_model,
+    ).read_text(encoding="utf-8")
+
+    assert "Validation Trials" in research_md
+    assert "0.1850" in research_md
+    assert "Horizon Metrics" in research_html
+    assert "x1" in research_html
 
 
 def test_v2_decision_outputs_include_new_forecast_sections(tmp_path: Path) -> None:
