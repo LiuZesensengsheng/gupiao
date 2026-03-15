@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import sys
 from pathlib import Path
 from typing import Iterable
 
@@ -60,8 +61,22 @@ def build_sector_map_from_state(state: CompositeState) -> dict[str, str]:
     return {str(stock.symbol): str(stock.sector) for stock in state.stocks}
 
 
+def _write_console_line(text: str) -> None:
+    stream = sys.stdout
+    line = f"{text}\n"
+    try:
+        stream.write(line)
+    except UnicodeEncodeError:
+        encoding = getattr(stream, "encoding", None) or "utf-8"
+        safe_line = line.encode(encoding, errors="replace").decode(encoding, errors="replace")
+        stream.write(safe_line)
+    flush = getattr(stream, "flush", None)
+    if callable(flush):
+        flush()
+
+
 def emit_progress(stage: str, message: str) -> None:
-    print(f"[V2][{stage}] {message}")
+    _write_console_line(f"[V2][{stage}] {message}")
 
 
 def trajectory_step_count(trajectory: object) -> int:

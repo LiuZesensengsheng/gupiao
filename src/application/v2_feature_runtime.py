@@ -4,6 +4,7 @@ import time
 from dataclasses import dataclass
 from typing import Any, Callable, Protocol
 
+import numpy as np
 import pandas as pd
 
 
@@ -35,7 +36,67 @@ class ForecastBackend(Protocol):
         *,
         retrain_days: int = 20,
     ) -> object:
-        ...
+        ...        
+
+
+MARKET_BINARY_TARGETS = [
+    "mkt_target_1d_up",
+    "mkt_target_2d_up",
+    "mkt_target_3d_up",
+    "mkt_target_5d_up",
+    "mkt_target_20d_up",
+]
+
+PANEL_BINARY_TARGETS = [
+    "target_1d_excess_mkt_up",
+    "target_2d_excess_mkt_up",
+    "target_3d_excess_mkt_up",
+    "target_5d_excess_mkt_up",
+    "target_20d_excess_sector_up",
+]
+
+
+def _prepare_binary_training_family(
+    df: pd.DataFrame,
+    *,
+    feature_cols: list[str],
+    target_cols: list[str],
+) -> dict[str, tuple[np.ndarray, np.ndarray]]:
+    if df.empty:
+        return {target: (np.empty((0, len(feature_cols))), np.empty(0)) for target in target_cols}
+    work = df[feature_cols + target_cols].astype(float)
+    feature_frame = work[feature_cols]
+    x_all = feature_frame.to_numpy(copy=True)
+    feature_valid = ~feature_frame.isna().any(axis=1).to_numpy()
+    prepared: dict[str, tuple[np.ndarray, np.ndarray]] = {}
+    for target_col in target_cols:
+        y_all = work[target_col].to_numpy(copy=True)
+        valid_mask = feature_valid & ~np.isnan(y_all)
+        prepared[target_col] = (x_all[valid_mask], y_all[valid_mask].astype(float))
+    return prepared
+
+
+def _fit_binary_model_family(
+    *,
+    model_cls: Callable[..., Any],
+    l2: float,
+    feature_cols: list[str],
+    prepared_targets: dict[str, tuple[np.ndarray, np.ndarray]],
+) -> dict[str, Any]:
+    models: dict[str, Any] = {}
+    for target_col, (x, y) in prepared_targets.items():
+        model = model_cls(l2=float(l2))
+        fit_prepared = getattr(model, "fit_prepared", None)
+        if callable(fit_prepared):
+            fit_prepared(x=x, y=y, feature_cols=feature_cols)
+        else:
+            raise AttributeError(f"{type(model).__name__} is missing fit_prepared")
+        models[target_col] = model
+    return models
+
+
+def _history_slice(frame: pd.DataFrame, end: int) -> pd.DataFrame:
+    return frame.iloc[:end]
 
 
 def tensorize_temporal_frame(
@@ -103,7 +164,7 @@ class LinearForecastBackend:
         block_starts = list(range(min_train_days, len(dates) - 1, max(1, int(retrain_days))))
         self._deps.emit_progress(
             "trajectory",
-            f"backend={self.name} 寮€濮嬫瀯寤鸿建杩? blocks={len(block_starts)}, dates={len(dates)}, universe={len(getattr(prepared, 'stock_frames'))}",
+            f"backend={self.name} building trajectory: blocks={len(block_starts)}, dates={len(dates)}, universe={len(getattr(prepared, 'stock_frames'))}",
         )
         trajectory_started = time.perf_counter()
 
@@ -113,65 +174,35 @@ class LinearForecastBackend:
             eta = 0.0 if completed <= 0 else (elapsed / completed) * (len(block_starts) - completed)
             self._deps.emit_progress(
                 "trajectory",
-                f"backend={self.name} 璁粌鍧?{block_idx}/{len(block_starts)}: 鎴 {pd.Timestamp(dates[block_start - 1]).date()} | elapsed={self._deps.format_elapsed(elapsed)} | eta={self._deps.format_elapsed(eta)}",
+                f"backend={self.name} training block {block_idx}/{len(block_starts)}: cutoff {pd.Timestamp(dates[block_start - 1]).date()} | elapsed={self._deps.format_elapsed(elapsed)} | eta={self._deps.format_elapsed(eta)}",
             )
             train_cutoff = market_bounds.get(dates[block_start - 1], (0, 0))[1]
-            market_train = market_sorted.iloc[:train_cutoff].copy()
+            market_train = market_sorted.iloc[:train_cutoff]
             if market_train.empty:
                 continue
-            market_short_model = self._deps.logistic_model_cls(l2=float(settings["l2"])).fit(
-                market_train,
-                market_feature_cols,
-                "mkt_target_1d_up",
-            )
-            market_two_model = self._deps.logistic_model_cls(l2=float(settings["l2"])).fit(
-                market_train,
-                market_feature_cols,
-                "mkt_target_2d_up",
-            )
-            market_three_model = self._deps.logistic_model_cls(l2=float(settings["l2"])).fit(
-                market_train,
-                market_feature_cols,
-                "mkt_target_3d_up",
-            )
-            market_five_model = self._deps.logistic_model_cls(l2=float(settings["l2"])).fit(
-                market_train,
-                market_feature_cols,
-                "mkt_target_5d_up",
-            )
-            market_mid_model = self._deps.logistic_model_cls(l2=float(settings["l2"])).fit(
-                market_train,
-                market_feature_cols,
-                "mkt_target_20d_up",
+            market_models = _fit_binary_model_family(
+                model_cls=self._deps.logistic_model_cls,
+                l2=float(settings["l2"]),
+                feature_cols=market_feature_cols,
+                prepared_targets=_prepare_binary_training_family(
+                    market_train,
+                    feature_cols=market_feature_cols,
+                    target_cols=MARKET_BINARY_TARGETS,
+                ),
             )
             panel_cutoff = panel_bounds.get(dates[block_start - 1], (0, 0))[1]
-            panel_train = panel_sorted.iloc[:panel_cutoff].copy()
+            panel_train = panel_sorted.iloc[:panel_cutoff]
             if panel_train.empty:
                 continue
-            panel_short_model = self._deps.logistic_model_cls(l2=float(settings["l2"])).fit(
-                panel_train,
-                feature_cols,
-                "target_1d_excess_mkt_up",
-            )
-            panel_two_model = self._deps.logistic_model_cls(l2=float(settings["l2"])).fit(
-                panel_train,
-                feature_cols,
-                "target_2d_excess_mkt_up",
-            )
-            panel_three_model = self._deps.logistic_model_cls(l2=float(settings["l2"])).fit(
-                panel_train,
-                feature_cols,
-                "target_3d_excess_mkt_up",
-            )
-            panel_five_model = self._deps.logistic_model_cls(l2=float(settings["l2"])).fit(
-                panel_train,
-                feature_cols,
-                "target_5d_excess_mkt_up",
-            )
-            panel_mid_model = self._deps.logistic_model_cls(l2=float(settings["l2"])).fit(
-                panel_train,
-                feature_cols,
-                "target_20d_excess_sector_up",
+            panel_models = _fit_binary_model_family(
+                model_cls=self._deps.logistic_model_cls,
+                l2=float(settings["l2"]),
+                feature_cols=feature_cols,
+                prepared_targets=_prepare_binary_training_family(
+                    panel_train,
+                    feature_cols=feature_cols,
+                    target_cols=PANEL_BINARY_TARGETS,
+                ),
             )
             panel_short_q_models = self._deps.fit_quantile_quintet(
                 panel_train,
@@ -191,16 +222,16 @@ class LinearForecastBackend:
                 date = dates[idx]
                 next_date = dates[idx + 1]
                 market_start, market_end = market_bounds.get(date, (0, 0))
-                market_row = market_sorted.iloc[market_start:market_end].copy()
+                market_row = market_sorted.iloc[market_start:market_end]
                 if market_row.empty:
                     continue
-                mkt_short = float(market_short_model.predict_proba(market_row, market_feature_cols)[0])
-                mkt_two = float(market_two_model.predict_proba(market_row, market_feature_cols)[0])
-                mkt_three = float(market_three_model.predict_proba(market_row, market_feature_cols)[0])
-                mkt_five = float(market_five_model.predict_proba(market_row, market_feature_cols)[0])
-                mkt_mid = float(market_mid_model.predict_proba(market_row, market_feature_cols)[0])
+                mkt_short = float(market_models["mkt_target_1d_up"].predict_proba(market_row, market_feature_cols)[0])
+                mkt_two = float(market_models["mkt_target_2d_up"].predict_proba(market_row, market_feature_cols)[0])
+                mkt_three = float(market_models["mkt_target_3d_up"].predict_proba(market_row, market_feature_cols)[0])
+                mkt_five = float(market_models["mkt_target_5d_up"].predict_proba(market_row, market_feature_cols)[0])
+                mkt_mid = float(market_models["mkt_target_20d_up"].predict_proba(market_row, market_feature_cols)[0])
                 market_state, cross_section = self._deps.build_market_and_cross_section_from_prebuilt_frame(
-                    market_frame=market_sorted.iloc[:market_end].copy(),
+                    market_frame=_history_slice(market_sorted, market_end),
                     market_short_prob=mkt_short,
                     market_two_prob=mkt_two,
                     market_three_prob=mkt_three,
@@ -208,15 +239,15 @@ class LinearForecastBackend:
                     market_mid_prob=mkt_mid,
                 )
                 panel_start, panel_end = panel_bounds.get(date, (0, 0))
-                panel_row = panel_sorted.iloc[panel_start:panel_end].copy()
+                panel_row = panel_sorted.iloc[panel_start:panel_end]
                 stock_states, scored_rows = self._deps.build_stock_states_from_panel_slice(
                     panel_row=panel_row,
                     feature_cols=feature_cols,
-                    short_model=panel_short_model,
-                    two_model=panel_two_model,
-                    three_model=panel_three_model,
-                    five_model=panel_five_model,
-                    mid_model=panel_mid_model,
+                    short_model=panel_models["target_1d_excess_mkt_up"],
+                    two_model=panel_models["target_2d_excess_mkt_up"],
+                    three_model=panel_models["target_3d_excess_mkt_up"],
+                    five_model=panel_models["target_5d_excess_mkt_up"],
+                    mid_model=panel_models["target_20d_excess_sector_up"],
                     short_q_models=panel_short_q_models,
                     mid_q_models=panel_mid_q_models,
                 )
@@ -293,7 +324,7 @@ class DeepForecastBackend:
         block_starts = list(range(min_train_days, len(dates) - 1, max(1, int(retrain_days))))
         self._deps.emit_progress(
             "trajectory",
-            f"backend={self.name} 寮€濮嬫瀯寤鸿建杩? blocks={len(block_starts)}, dates={len(dates)}, universe={len(getattr(prepared, 'stock_frames'))}",
+            f"backend={self.name} building trajectory: blocks={len(block_starts)}, dates={len(dates)}, universe={len(getattr(prepared, 'stock_frames'))}",
         )
         trajectory_started = time.perf_counter()
 
@@ -303,65 +334,35 @@ class DeepForecastBackend:
             eta = 0.0 if completed <= 0 else (elapsed / completed) * (len(block_starts) - completed)
             self._deps.emit_progress(
                 "trajectory",
-                f"backend={self.name} 璁粌鍧?{block_idx}/{len(block_starts)}: 鎴 {pd.Timestamp(dates[block_start - 1]).date()} | elapsed={self._deps.format_elapsed(elapsed)} | eta={self._deps.format_elapsed(eta)}",
+                f"backend={self.name} training block {block_idx}/{len(block_starts)}: cutoff {pd.Timestamp(dates[block_start - 1]).date()} | elapsed={self._deps.format_elapsed(elapsed)} | eta={self._deps.format_elapsed(eta)}",
             )
             train_cutoff = tensor_market_bounds.get(dates[block_start - 1], (0, 0))[1]
-            market_train = tensor_market_sorted.iloc[:train_cutoff].copy()
+            market_train = tensor_market_sorted.iloc[:train_cutoff]
             if market_train.empty:
                 continue
-            market_short_model = self._deps.mlp_model_cls(l2=float(settings["l2"])).fit(
-                market_train,
-                tensor_market_cols,
-                "mkt_target_1d_up",
-            )
-            market_two_model = self._deps.mlp_model_cls(l2=float(settings["l2"])).fit(
-                market_train,
-                tensor_market_cols,
-                "mkt_target_2d_up",
-            )
-            market_three_model = self._deps.mlp_model_cls(l2=float(settings["l2"])).fit(
-                market_train,
-                tensor_market_cols,
-                "mkt_target_3d_up",
-            )
-            market_five_model = self._deps.mlp_model_cls(l2=float(settings["l2"])).fit(
-                market_train,
-                tensor_market_cols,
-                "mkt_target_5d_up",
-            )
-            market_mid_model = self._deps.mlp_model_cls(l2=float(settings["l2"])).fit(
-                market_train,
-                tensor_market_cols,
-                "mkt_target_20d_up",
+            market_models = _fit_binary_model_family(
+                model_cls=self._deps.mlp_model_cls,
+                l2=float(settings["l2"]),
+                feature_cols=tensor_market_cols,
+                prepared_targets=_prepare_binary_training_family(
+                    market_train,
+                    feature_cols=tensor_market_cols,
+                    target_cols=MARKET_BINARY_TARGETS,
+                ),
             )
             panel_cutoff = tensor_panel_bounds.get(dates[block_start - 1], (0, 0))[1]
-            panel_train = tensor_panel_sorted.iloc[:panel_cutoff].copy()
+            panel_train = tensor_panel_sorted.iloc[:panel_cutoff]
             if panel_train.empty:
                 continue
-            panel_short_model = self._deps.mlp_model_cls(l2=float(settings["l2"])).fit(
-                panel_train,
-                tensor_panel_cols,
-                "target_1d_excess_mkt_up",
-            )
-            panel_two_model = self._deps.mlp_model_cls(l2=float(settings["l2"])).fit(
-                panel_train,
-                tensor_panel_cols,
-                "target_2d_excess_mkt_up",
-            )
-            panel_three_model = self._deps.mlp_model_cls(l2=float(settings["l2"])).fit(
-                panel_train,
-                tensor_panel_cols,
-                "target_3d_excess_mkt_up",
-            )
-            panel_five_model = self._deps.mlp_model_cls(l2=float(settings["l2"])).fit(
-                panel_train,
-                tensor_panel_cols,
-                "target_5d_excess_mkt_up",
-            )
-            panel_mid_model = self._deps.mlp_model_cls(l2=float(settings["l2"])).fit(
-                panel_train,
-                tensor_panel_cols,
-                "target_20d_excess_sector_up",
+            panel_models = _fit_binary_model_family(
+                model_cls=self._deps.mlp_model_cls,
+                l2=float(settings["l2"]),
+                feature_cols=tensor_panel_cols,
+                prepared_targets=_prepare_binary_training_family(
+                    panel_train,
+                    feature_cols=tensor_panel_cols,
+                    target_cols=PANEL_BINARY_TARGETS,
+                ),
             )
             panel_short_q_models = self._deps.fit_mlp_quantile_quintet(
                 panel_train,
@@ -381,17 +382,17 @@ class DeepForecastBackend:
                 date = dates[idx]
                 next_date = dates[idx + 1]
                 market_start, market_end = tensor_market_bounds.get(date, (0, 0))
-                market_row = tensor_market_sorted.iloc[market_start:market_end].copy()
+                market_row = tensor_market_sorted.iloc[market_start:market_end]
                 if market_row.empty:
                     continue
-                mkt_short = float(market_short_model.predict_proba(market_row, tensor_market_cols)[0])
-                mkt_two = float(market_two_model.predict_proba(market_row, tensor_market_cols)[0])
-                mkt_three = float(market_three_model.predict_proba(market_row, tensor_market_cols)[0])
-                mkt_five = float(market_five_model.predict_proba(market_row, tensor_market_cols)[0])
-                mkt_mid = float(market_mid_model.predict_proba(market_row, tensor_market_cols)[0])
+                mkt_short = float(market_models["mkt_target_1d_up"].predict_proba(market_row, tensor_market_cols)[0])
+                mkt_two = float(market_models["mkt_target_2d_up"].predict_proba(market_row, tensor_market_cols)[0])
+                mkt_three = float(market_models["mkt_target_3d_up"].predict_proba(market_row, tensor_market_cols)[0])
+                mkt_five = float(market_models["mkt_target_5d_up"].predict_proba(market_row, tensor_market_cols)[0])
+                mkt_mid = float(market_models["mkt_target_20d_up"].predict_proba(market_row, tensor_market_cols)[0])
                 market_hist_end = market_valid_bounds.get(date, (0, 0))[1]
                 market_state, cross_section = self._deps.build_market_and_cross_section_from_prebuilt_frame(
-                    market_frame=market_valid_sorted.iloc[:market_hist_end].copy(),
+                    market_frame=_history_slice(market_valid_sorted, market_hist_end),
                     market_short_prob=mkt_short,
                     market_two_prob=mkt_two,
                     market_three_prob=mkt_three,
@@ -399,15 +400,15 @@ class DeepForecastBackend:
                     market_mid_prob=mkt_mid,
                 )
                 panel_start, panel_end = tensor_panel_bounds.get(date, (0, 0))
-                panel_row = tensor_panel_sorted.iloc[panel_start:panel_end].copy()
+                panel_row = tensor_panel_sorted.iloc[panel_start:panel_end]
                 stock_states, scored_rows = self._deps.build_stock_states_from_panel_slice(
                     panel_row=panel_row,
                     feature_cols=tensor_panel_cols,
-                    short_model=panel_short_model,
-                    two_model=panel_two_model,
-                    three_model=panel_three_model,
-                    five_model=panel_five_model,
-                    mid_model=panel_mid_model,
+                    short_model=panel_models["target_1d_excess_mkt_up"],
+                    two_model=panel_models["target_2d_excess_mkt_up"],
+                    three_model=panel_models["target_3d_excess_mkt_up"],
+                    five_model=panel_models["target_5d_excess_mkt_up"],
+                    mid_model=panel_models["target_20d_excess_sector_up"],
                     short_q_models=panel_short_q_models,
                     mid_q_models=panel_mid_q_models,
                 )

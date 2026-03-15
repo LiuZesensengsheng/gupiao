@@ -524,7 +524,10 @@ def build_market_and_cross_section_from_prebuilt_frame(
     market_mid_profile: object | None = None,
     deps: StateBuildRuntimeDependencies,
 ) -> tuple[MarketForecastState, CrossSectionForecastState]:
-    latest = market_frame.sort_values("date").iloc[-1]
+    if market_frame["date"].is_monotonic_increasing:
+        latest = market_frame.iloc[-1]
+    else:
+        latest = market_frame.sort_values("date").iloc[-1]
     state = deps.decide_market_state(float(market_short_prob), float(market_mid_prob))
     cross_section_record = deps.forecast_cross_section_state(market_frame)
 

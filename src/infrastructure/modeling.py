@@ -56,6 +56,13 @@ class LogisticBinaryModel:
 
         y = train[target_col].astype(float).to_numpy()
         x = _as_float_array(train, feature_cols)
+        return self.fit_prepared(x=x, y=y, feature_cols=feature_cols)
+
+    def fit_prepared(self, *, x: np.ndarray, y: np.ndarray, feature_cols: List[str]) -> "LogisticBinaryModel":
+        if len(y) == 0 or np.asarray(x).size == 0:
+            raise ValueError("No rows available for training after dropping NaN.")
+        x = np.asarray(x, dtype=float)
+        y = np.asarray(y, dtype=float)
 
         self.feature_names = list(feature_cols)
         self.mean_ = np.nanmean(x, axis=0)
@@ -295,6 +302,13 @@ class MLPBinaryModel(_BaseMLPModel):
 
         y = train[target_col].astype(float).to_numpy()
         x = _as_float_array(train, feature_cols)
+        return self.fit_prepared(x=x, y=y, feature_cols=feature_cols)
+
+    def fit_prepared(self, *, x: np.ndarray, y: np.ndarray, feature_cols: List[str]) -> "MLPBinaryModel":
+        if len(y) == 0 or np.asarray(x).size == 0:
+            raise ValueError("No rows available for MLP binary training after dropping NaN.")
+        x = np.asarray(x, dtype=float)
+        y = np.asarray(y, dtype=float)
 
         self.feature_names = list(feature_cols)
         self.mean_ = np.nanmean(x, axis=0)

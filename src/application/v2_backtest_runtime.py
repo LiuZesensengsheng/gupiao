@@ -9,6 +9,9 @@ import pandas as pd
 from src.application.v2_contracts import LearnedPolicyModel, PolicyInput, PolicySpec, StockForecastState, V2BacktestSummary
 
 
+FrameRow = dict[str, object]
+
+
 @dataclass(frozen=True)
 class BacktestExecutionDependencies:
     safe_float: Callable[[object, float], float]
@@ -29,6 +32,62 @@ class BacktestCoreDependencies:
     load_or_build_v2_backtest_trajectory: Callable[..., Any]
     empty_v2_backtest_result: Callable[[], tuple[V2BacktestSummary, list[dict[str, float]]]]
     execute_v2_backtest_trajectory: Callable[..., tuple[V2BacktestSummary, list[dict[str, float]]]]
+
+
+@dataclass(frozen=True)
+class BacktestFrameLookups:
+    stock_rows_by_symbol_date: dict[str, dict[pd.Timestamp, FrameRow]]
+    market_valid_by_date: dict[pd.Timestamp, FrameRow]
+
+
+def _date_lookup_key(value: object) -> pd.Timestamp:
+    return pd.Timestamp(value)
+
+
+def _build_first_row_lookup(frame: pd.DataFrame | None) -> dict[pd.Timestamp, FrameRow]:
+    if frame is None or frame.empty or "date" not in frame.columns:
+        return {}
+    records = frame.drop_duplicates(subset=["date"], keep="first").to_dict(orient="records")
+    return {
+        _date_lookup_key(record["date"]): record
+        for record in records
+        if record.get("date") is not None
+    }
+
+
+def _build_backtest_frame_lookups(
+    *,
+    stock_frames: dict[str, pd.DataFrame],
+    market_valid: pd.DataFrame | None,
+) -> BacktestFrameLookups:
+    return BacktestFrameLookups(
+        stock_rows_by_symbol_date={
+            symbol: _build_first_row_lookup(frame)
+            for symbol, frame in stock_frames.items()
+        },
+        market_valid_by_date=_build_first_row_lookup(market_valid),
+    )
+
+
+def _lookup_stock_row(
+    *,
+    symbol: str,
+    date: pd.Timestamp,
+    stock_frames: dict[str, pd.DataFrame],
+    stock_rows_by_symbol_date: dict[str, dict[pd.Timestamp, FrameRow]] | None = None,
+) -> FrameRow | None:
+    lookup_key = _date_lookup_key(date)
+    if stock_rows_by_symbol_date is not None:
+        symbol_rows = stock_rows_by_symbol_date.get(symbol)
+        if symbol_rows is not None:
+            return symbol_rows.get(lookup_key)
+    frame = stock_frames.get(symbol)
+    if frame is None:
+        return None
+    row = frame[frame["date"] == date]
+    if row.empty:
+        return None
+    return row.iloc[0].to_dict()
 
 
 def to_v2_backtest_summary(
@@ -139,10 +198,23 @@ def simulate_execution_day(
     stock_frames: dict[str, pd.DataFrame],
     total_commission_rate: float,
     base_slippage_rate: float,
+    stock_rows_by_symbol_date: dict[str, dict[pd.Timestamp, FrameRow]] | None = None,
     deps: BacktestExecutionDependencies,
 ) -> tuple[float, float, float, float, float, dict[str, float], float]:
     _ = next_date, current_cash
     state_map = {item.symbol: item for item in stock_states}
+    day_rows: dict[str, FrameRow | None] = {}
+
+    def _get_day_row(symbol: str) -> FrameRow | None:
+        if symbol not in day_rows:
+            day_rows[symbol] = _lookup_stock_row(
+                symbol=symbol,
+                date=date,
+                stock_frames=stock_frames,
+                stock_rows_by_symbol_date=stock_rows_by_symbol_date,
+            )
+        return day_rows[symbol]
+
     symbols = sorted(set(current_weights) | set(decision.symbol_target_weights))
     raw_deltas = {
         symbol: float(decision.symbol_target_weights.get(symbol, 0.0)) - float(current_weights.get(symbol, 0.0))
@@ -163,20 +235,18 @@ def simulate_execution_day(
             continue
         state = state_map.get(symbol)
         frame = stock_frames.get(symbol)
-        day_row = None
-        if frame is not None:
-            day_row = frame[frame["date"] == date]
+        day_row = _get_day_row(symbol)
         status = "normal"
         if state is not None:
             status = str(getattr(state, "tradability_status", "normal") or "normal")
-        elif frame is None or day_row is None or day_row.empty:
+        elif frame is None or day_row is None:
             status = "halted"
         if not deps.is_actionable_status(status):
             continue
         if status == "data_insufficient" and delta > 0.0:
             continue
-        if day_row is not None and not day_row.empty:
-            latest = day_row.iloc[0]
+        if day_row is not None:
+            latest = day_row
             close_px = deps.safe_float(latest.get("close"), np.nan)
             open_px = deps.safe_float(latest.get("open"), np.nan)
             low_px = deps.safe_float(latest.get("low"), np.nan)
@@ -204,8 +274,8 @@ def simulate_execution_day(
         impact = max_abs_trade / max(liquidity_cap, 1e-6)
         open_gap_penalty = 0.0
         intraday_range_penalty = 0.0
-        if day_row is not None and not day_row.empty:
-            latest = day_row.iloc[0]
+        if day_row is not None:
+            latest = day_row
             close_px = deps.safe_float(latest.get("close"), np.nan)
             open_px = deps.safe_float(latest.get("open"), np.nan)
             low_px = deps.safe_float(latest.get("low"), np.nan)
@@ -257,11 +327,11 @@ def simulate_execution_day(
         if frame is None:
             realized_ret = -0.30 if status == "delisted" else 0.0
         else:
-            row = frame[frame["date"] == date]
-            if row.empty:
+            row = _get_day_row(symbol)
+            if row is None:
                 realized_ret = -0.30 if status == "delisted" else 0.0
             else:
-                realized_ret = float(row.iloc[0]["fwd_ret_1"])
+                realized_ret = float(row["fwd_ret_1"])
                 if status == "delisted":
                     realized_ret = min(realized_ret, -0.20)
         value = float(weight) * (1.0 + realized_ret)
@@ -316,8 +386,14 @@ def execute_v2_backtest_trajectory(
     prev_holding_days: dict[str, int] = {}
     prev_cash = 1.0
     learning_rows: list[dict[str, float]] = []
+    frame_lookups = _build_backtest_frame_lookups(
+        stock_frames=trajectory.prepared.stock_frames,
+        market_valid=trajectory.prepared.market_valid,
+    )
 
     for step in trajectory.steps:
+        step_stock_rows = frame_lookups.stock_rows_by_symbol_date
+        step_date_key = _date_lookup_key(step.date)
         rank_ics.append(float(step.horizon_metrics["20d"]["rank_ic"]))
         top_decile_returns.append(float(step.horizon_metrics["20d"]["top_decile_return"]))
         top_bottom_spreads.append(float(step.horizon_metrics["20d"]["top_bottom_spread"]))
@@ -346,17 +422,13 @@ def execute_v2_backtest_trajectory(
             ),
             policy_spec=active_policy_spec,
         )
-        gross_ret = float(
-            sum(
-                float(weight) * deps.safe_float(
-                    trajectory.prepared.stock_frames[symbol][trajectory.prepared.stock_frames[symbol]["date"] == step.date].iloc[0]["fwd_ret_1"],
-                    0.0,
-                )
-                for symbol, weight in decision.symbol_target_weights.items()
-                if symbol in trajectory.prepared.stock_frames
-                and not trajectory.prepared.stock_frames[symbol][trajectory.prepared.stock_frames[symbol]["date"] == step.date].empty
-            )
-        )
+        gross_ret = 0.0
+        for symbol, weight in decision.symbol_target_weights.items():
+            row = step_stock_rows.get(symbol, {}).get(step_date_key)
+            if row is None:
+                continue
+            gross_ret += float(weight) * deps.safe_float(row.get("fwd_ret_1"), 0.0)
+        gross_ret = float(gross_ret)
         daily_ret, turnover, cost, fill_ratio, slip_bps, next_weights, next_cash = simulate_execution_day(
             date=step.date,
             next_date=step.next_date,
@@ -367,12 +439,13 @@ def execute_v2_backtest_trajectory(
             stock_frames=trajectory.prepared.stock_frames,
             total_commission_rate=commission_rate,
             base_slippage_rate=slippage_rate,
+            stock_rows_by_symbol_date=step_stock_rows,
             deps=deps,
         )
-        benchmark_row = trajectory.prepared.market_valid[trajectory.prepared.market_valid["date"] == step.date]
+        benchmark_row = frame_lookups.market_valid_by_date.get(step_date_key)
         benchmark_ret = 0.0
-        if not benchmark_row.empty:
-            benchmark_ret = deps.safe_float(benchmark_row.iloc[0].get("mkt_fwd_ret_1", 0.0), 0.0)
+        if benchmark_row is not None:
+            benchmark_ret = deps.safe_float(benchmark_row.get("mkt_fwd_ret_1", 0.0), 0.0)
         returns.append(float(daily_ret))
         benchmark_returns.append(float(benchmark_ret))
         gross_returns.append(float(gross_ret))

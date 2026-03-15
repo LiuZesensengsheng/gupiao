@@ -579,6 +579,69 @@ def test_simulate_execution_day_charges_more_slippage_on_adverse_gap_open() -> N
     assert adverse[4] > flat[4]
 
 
+def test_simulate_execution_day_preindexed_lookup_matches_legacy_filtering() -> None:
+    date = pd.Timestamp("2024-01-02")
+    next_date = pd.Timestamp("2024-01-03")
+    decision = PolicyDecision(
+        target_exposure=0.25,
+        target_position_count=1,
+        rebalance_now=True,
+        rebalance_intensity=0.12,
+        intraday_t_allowed=False,
+        turnover_cap=0.25,
+        sector_budgets={"鏈夎壊": 0.25},
+        symbol_target_weights={"AAA": 0.25},
+    )
+    stock_states = [
+        StockForecastState("AAA", "鏈夎壊", 0.58, 0.61, 0.65, 0.57, 0.0, 0.90),
+    ]
+    stock_frames = {
+        "AAA": pd.DataFrame(
+            {
+                "date": [date, date, pd.Timestamp("2024-01-04")],
+                "open": [10.1, 14.0, 10.2],
+                "close": [10.0, 14.0, 10.3],
+                "low": [9.9, 14.0, 10.1],
+                "high": [10.2, 14.0, 10.4],
+                "ret_1": [0.0, 0.40, 0.01],
+                "fwd_ret_1": [0.02, 0.90, 0.01],
+            }
+        )
+    }
+
+    legacy_result = _simulate_execution_day(
+        date=date,
+        next_date=next_date,
+        decision=decision,
+        current_weights={},
+        current_cash=1.0,
+        stock_states=stock_states,
+        stock_frames=stock_frames,
+        total_commission_rate=0.001,
+        base_slippage_rate=0.0005,
+    )
+    lookups = v2_backtest_runtime._build_backtest_frame_lookups(
+        stock_frames=stock_frames,
+        market_valid=None,
+    )
+    indexed_result = v2_backtest_runtime.simulate_execution_day(
+        date=date,
+        next_date=next_date,
+        decision=decision,
+        current_weights={},
+        current_cash=1.0,
+        stock_states=stock_states,
+        stock_frames=stock_frames,
+        total_commission_rate=0.001,
+        base_slippage_rate=0.0005,
+        stock_rows_by_symbol_date=lookups.stock_rows_by_symbol_date,
+        deps=legacy_services._backtest_execution_dependencies(),
+    )
+
+    assert indexed_result == legacy_result
+    assert indexed_result[0] < 0.02
+
+
 def test_simulate_execution_day_blocks_buy_when_limit_up_pinned() -> None:
     date = pd.Timestamp("2024-01-02")
     next_date = pd.Timestamp("2024-01-03")
