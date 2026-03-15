@@ -2,273 +2,34 @@ from __future__ import annotations
 
 import argparse
 import json
-from pathlib import Path
+import sys
 from typing import Any
 
-from src.application.config import DailyConfig, DiscoverConfig, ForecastConfig
 from src.application.use_cases import generate_daily_fusion, generate_discovery, generate_forecast
 from src.application.watchlist import load_watchlist
-from src.domain.symbols import SymbolError, normalize_symbol
+from src.domain.symbols import normalize_symbol
 from src.infrastructure.data_sync import sync_market_data
 from src.infrastructure.discovery import build_candidate_universe
 from src.infrastructure.discovery import _load_universe_file as _load_discovery_universe_file
 from src.infrastructure.margin_sync import sync_margin_data
 from src.infrastructure.market_data import DataError, set_tushare_token
+from src.interfaces.cli import legacy_cli_tasks as _legacy_cli_tasks
+from src.interfaces.cli.legacy_cli_options import (
+    DEFAULT_COMMON,
+    DEFAULT_TASK,
+    _coalesce,
+    _masked_settings,
+    _parse_bool,
+    _parse_float_list,
+    _parse_int_list,
+    _parse_symbol_list,
+    _parse_years,
+    _read_config_section,
+    _read_json_config,
+    _resolve_settings,
+)
 from src.interfaces.presenters.html_dashboard import write_daily_dashboard
 from src.interfaces.presenters.markdown_reports import write_daily_report, write_discovery_report, write_forecast_report
-
-DEFAULT_COMMON: dict[str, Any] = {
-    "source": "auto",
-    "tushare_token": "",
-    "watchlist": "config/watchlist.json",
-    "data_dir": "data",
-    "start": "2018-01-01",
-    "end": "2099-12-31",
-    "min_train_days": 240,
-    "step_days": 20,
-    "l2": 0.8,
-    "max_positions": 5,
-    "use_margin_features": True,
-    "margin_market_file": "input/margin_market.csv",
-    "margin_stock_file": "input/margin_stock.csv",
-    "use_us_index_context": False,
-    "us_index_source": "akshare",
-}
-
-DEFAULT_TASK: dict[str, dict[str, Any]] = {
-    "forecast": {
-        "report": "reports/latest_report.md",
-    },
-    "discover": {
-        "universe_file": "",
-        "candidate_limit": 120,
-        "top_k": 20,
-        "exclude_watchlist": False,
-        "report": "reports/discovery_report.md",
-    },
-    "sync-data": {
-        "universe_size": 500,
-        "universe_file": "",
-        "universe_min_amount": 50000000.0,
-        "universe_exclude_st": True,
-        "include_indices": True,
-        "force_refresh": False,
-        "sleep_ms": 80,
-        "parallel_workers": 1,
-        "max_failures": 100,
-        "write_universe_file": "config/universe_auto.json",
-    },
-    "sync-margin": {
-        "symbols": "",
-        "universe_file": "",
-        "universe_limit": 0,
-        "sleep_ms": 80,
-    },
-    "daily": {
-        "universe_file": "config/universe_auto_longtrain.json",
-        "universe_limit": 500,
-        "positions_file": "",
-        "portfolio_nav": 0.0,
-        "trade_lot_size": 100,
-        "news_file": "input/news_parts",
-        "news_lookback_days": 45,
-        "learned_news_lookback_days": 720,
-        "news_half_life_days": 10.0,
-        "market_news_strength": 0.9,
-        "stock_news_strength": 1.1,
-        "use_learned_news_fusion": True,
-        "learned_news_min_samples": 80,
-        "learned_holdout_ratio": 0.2,
-        "learned_news_l2": 0.8,
-        "learned_fusion_l2": 0.6,
-        "report_date": "",
-        "report": "reports/daily_report.md",
-        "dashboard": "reports/daily_dashboard.html",
-        "backtest_years": [3, 5],
-        "backtest_retrain_days": 20,
-        "backtest_weight_threshold": 0.50,
-        "backtest_time_budget_minutes": 0.0,
-        "commission_bps": 1.5,
-        "slippage_bps": 2.0,
-        "use_turnover_control": True,
-        "max_trades_per_stock_per_day": 1,
-        "max_trades_per_stock_per_week": 3,
-        "min_weight_change_to_trade": 0.03,
-        "range_t_sell_ret_1_min": 0.015,
-        "range_t_sell_price_pos_20_min": 0.75,
-        "range_t_buy_ret_1_max": -0.015,
-        "range_t_buy_price_pos_20_max": 0.30,
-        "use_tradeability_guard": True,
-        "tradeability_limit_tolerance": 0.002,
-        "tradeability_min_volume": 0.0,
-        "limit_rule_file": "",
-        "use_index_constituent_guard": False,
-        "index_constituent_file": "",
-        "index_constituent_symbol": "000300.SH",
-        "enable_acceptance_checks": True,
-        "acceptance_target_years": 3,
-        "use_strategy_optimizer": True,
-        "optimizer_retrain_days": [20, 40],
-        "optimizer_weight_thresholds": [0.50, 0.60],
-        "optimizer_max_positions": [3, 5],
-        "optimizer_market_news_strengths": [0.8, 1.0],
-        "optimizer_stock_news_strengths": [1.0, 1.2],
-        "optimizer_turnover_penalty": 0.0015,
-        "optimizer_drawdown_penalty": 0.20,
-        "optimizer_target_years": 3,
-        "optimizer_top_trials": 12,
-        "optimizer_time_budget_minutes": 0.0,
-    },
-}
-
-
-def _read_json_config(path: str) -> dict[str, Any]:
-    config_path = Path(path)
-    if not config_path.exists():
-        return {}
-    with config_path.open("r", encoding="utf-8") as f:
-        payload = json.load(f)
-    if not isinstance(payload, dict):
-        raise ValueError(f"Config root must be an object: {config_path}")
-    return payload
-
-
-def _read_config_section(payload: dict[str, Any], section_name: str) -> dict[str, Any]:
-    section = payload.get(section_name, {})
-    if section is None:
-        return {}
-    if not isinstance(section, dict):
-        raise ValueError(f"Config section `{section_name}` must be an object")
-    return section
-
-
-def _coalesce(*values: Any) -> Any:
-    for value in values:
-        if value is not None:
-            return value
-    return None
-
-
-def _parse_years(value: Any) -> tuple[int, ...]:
-    if value is None:
-        return (3, 5)
-    if isinstance(value, (list, tuple)):
-        parsed = [int(v) for v in value if int(v) > 0]
-        return tuple(sorted(set(parsed))) if parsed else (3, 5)
-    text = str(value).strip()
-    if not text:
-        return (3, 5)
-    parts = [p.strip() for p in text.split(",") if p.strip()]
-    parsed = [int(p) for p in parts if int(p) > 0]
-    return tuple(sorted(set(parsed))) if parsed else (3, 5)
-
-
-def _parse_int_list(value: Any, *, min_value: int = 1) -> tuple[int, ...]:
-    if value is None:
-        return ()
-    raw: list[Any]
-    if isinstance(value, (list, tuple)):
-        raw = list(value)
-    else:
-        text = str(value).strip()
-        if not text:
-            return ()
-        raw = [p.strip() for p in text.split(",") if str(p).strip()]
-
-    out: list[int] = []
-    for item in raw:
-        try:
-            v = int(item)
-        except (TypeError, ValueError):
-            continue
-        if v >= int(min_value):
-            out.append(v)
-    return tuple(sorted(set(out)))
-
-
-def _parse_float_list(value: Any, *, min_value: float | None = None) -> tuple[float, ...]:
-    if value is None:
-        return ()
-    raw: list[Any]
-    if isinstance(value, (list, tuple)):
-        raw = list(value)
-    else:
-        text = str(value).strip()
-        if not text:
-            return ()
-        raw = [p.strip() for p in text.split(",") if str(p).strip()]
-
-    out: list[float] = []
-    for item in raw:
-        try:
-            v = float(item)
-        except (TypeError, ValueError):
-            continue
-        if min_value is None or v >= float(min_value):
-            out.append(v)
-    uniq = sorted({round(x, 6) for x in out})
-    return tuple(float(x) for x in uniq)
-
-
-def _parse_bool(value: Any) -> bool:
-    if isinstance(value, bool):
-        return value
-    text = str(value).strip().lower()
-    if text in {"1", "true", "yes", "y", "on"}:
-        return True
-    if text in {"0", "false", "no", "n", "off"}:
-        return False
-    raise ValueError(f"Invalid boolean value: {value}")
-
-
-def _parse_symbol_list(value: Any) -> list[str]:
-    if value is None:
-        return []
-    text = str(value).strip()
-    if not text:
-        return []
-    out: list[str] = []
-    for token in text.replace("\n", ",").replace(";", ",").split(","):
-        code = token.strip()
-        if not code:
-            continue
-        try:
-            out.append(normalize_symbol(code).symbol)
-        except SymbolError:
-            continue
-    return sorted(set(out))
-
-
-def _resolve_settings(args: argparse.Namespace, payload: dict[str, Any]) -> dict[str, Any]:
-    common_cfg = _read_config_section(payload, "common")
-    task_cfg = _read_config_section(payload, args.task)
-    defaults = DEFAULT_TASK[args.task]
-    resolved: dict[str, Any] = {}
-
-    for key, default in DEFAULT_COMMON.items():
-        resolved[key] = _coalesce(
-            getattr(args, key, None),
-            task_cfg.get(key),
-            common_cfg.get(key),
-            default,
-        )
-
-    for key, default in defaults.items():
-        resolved[key] = _coalesce(
-            getattr(args, key, None),
-            task_cfg.get(key),
-            common_cfg.get(key),
-            default,
-        )
-
-    return resolved
-
-
-def _masked_settings(settings: dict[str, Any]) -> dict[str, Any]:
-    out = dict(settings)
-    if "tushare_token" in out and str(out["tushare_token"]).strip():
-        out["tushare_token"] = "***"
-    return out
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -748,236 +509,39 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
+
+def _task_dependencies() -> Any:
+    return sys.modules[__name__]
+
+
 def run_daily(settings: dict[str, Any]) -> int:
-    set_tushare_token(settings.get("tushare_token", ""))
-    market_security, stocks, sector_map = load_watchlist(settings["watchlist"])
-    current_holdings = list(stocks)
-    universe_file = str(settings.get("universe_file", "")).strip()
-    if not universe_file:
-        raise ValueError(
-            "Daily requires `--universe-file` (large pool). "
-            "The 5-stock watchlist fallback has been disabled."
-        )
-    universe = build_candidate_universe(
-        source=settings["source"],
-        data_dir=settings["data_dir"],
-        universe_file=universe_file,
-        candidate_limit=max(5, int(settings.get("universe_limit", 500))),
-        exclude_symbols=[market_security.symbol],
-    )
-    if not universe.rows:
-        raise ValueError(f"Daily universe is empty: {universe_file}")
-    stocks = universe.rows
-    sector_map = {normalize_symbol(s.symbol).symbol: (s.sector or "其他") for s in stocks}
-    print(f"[OK] Daily universe source: {universe.source_label}")
-    print(f"[OK] Daily universe size: {len(stocks)}")
-    for warning in universe.warnings:
-        print(f"[WARN] {warning}")
-
-    config = DailyConfig(
-        source=settings["source"],
-        data_dir=settings["data_dir"],
-        start=settings["start"],
-        end=settings["end"],
-        min_train_days=settings["min_train_days"],
-        step_days=settings["step_days"],
-        l2=settings["l2"],
-        max_positions=int(settings["max_positions"]),
-        use_margin_features=_parse_bool(settings["use_margin_features"]),
-        margin_market_file=settings["margin_market_file"],
-        margin_stock_file=settings["margin_stock_file"],
-        use_us_index_context=_parse_bool(settings["use_us_index_context"]),
-        us_index_source=str(settings["us_index_source"]),
-        positions_file=str(settings["positions_file"]).strip(),
-        portfolio_nav=max(0.0, float(settings["portfolio_nav"])),
-        trade_lot_size=max(1, int(settings["trade_lot_size"])),
-        news_file=settings["news_file"],
-        news_lookback_days=settings["news_lookback_days"],
-        learned_news_lookback_days=int(settings["learned_news_lookback_days"]),
-        news_half_life_days=settings["news_half_life_days"],
-        market_news_strength=settings["market_news_strength"],
-        stock_news_strength=settings["stock_news_strength"],
-        use_learned_news_fusion=_parse_bool(settings["use_learned_news_fusion"]),
-        learned_news_min_samples=int(settings["learned_news_min_samples"]),
-        learned_holdout_ratio=float(settings["learned_holdout_ratio"]),
-        learned_news_l2=float(settings["learned_news_l2"]),
-        learned_fusion_l2=float(settings["learned_fusion_l2"]),
-        backtest_years=_parse_years(settings["backtest_years"]),
-        backtest_retrain_days=int(settings["backtest_retrain_days"]),
-        backtest_weight_threshold=float(settings["backtest_weight_threshold"]),
-        backtest_time_budget_minutes=float(settings["backtest_time_budget_minutes"]),
-        commission_bps=float(settings["commission_bps"]),
-        slippage_bps=float(settings["slippage_bps"]),
-        use_turnover_control=_parse_bool(settings["use_turnover_control"]),
-        max_trades_per_stock_per_day=max(1, int(settings["max_trades_per_stock_per_day"])),
-        max_trades_per_stock_per_week=max(1, int(settings["max_trades_per_stock_per_week"])),
-        min_weight_change_to_trade=max(0.0, float(settings["min_weight_change_to_trade"])),
-        range_t_sell_ret_1_min=float(settings["range_t_sell_ret_1_min"]),
-        range_t_sell_price_pos_20_min=float(settings["range_t_sell_price_pos_20_min"]),
-        range_t_buy_ret_1_max=float(settings["range_t_buy_ret_1_max"]),
-        range_t_buy_price_pos_20_max=float(settings["range_t_buy_price_pos_20_max"]),
-        use_tradeability_guard=_parse_bool(settings["use_tradeability_guard"]),
-        tradeability_limit_tolerance=max(0.0, float(settings["tradeability_limit_tolerance"])),
-        tradeability_min_volume=max(0.0, float(settings["tradeability_min_volume"])),
-        limit_rule_file=str(settings["limit_rule_file"]).strip(),
-        use_index_constituent_guard=_parse_bool(settings["use_index_constituent_guard"]),
-        index_constituent_file=str(settings["index_constituent_file"]).strip(),
-        index_constituent_symbol=str(settings["index_constituent_symbol"]).strip() or "000300.SH",
-        enable_acceptance_checks=_parse_bool(settings["enable_acceptance_checks"]),
-        acceptance_target_years=max(1, int(settings["acceptance_target_years"])),
-        use_strategy_optimizer=_parse_bool(settings["use_strategy_optimizer"]),
-        optimizer_retrain_days=_parse_int_list(settings["optimizer_retrain_days"], min_value=1) or (20, 40),
-        optimizer_weight_thresholds=_parse_float_list(settings["optimizer_weight_thresholds"], min_value=0.0) or (0.50, 0.60),
-        optimizer_max_positions=_parse_int_list(settings["optimizer_max_positions"], min_value=1) or (3, 5),
-        optimizer_market_news_strengths=_parse_float_list(settings["optimizer_market_news_strengths"], min_value=0.0) or (0.8, 1.0),
-        optimizer_stock_news_strengths=_parse_float_list(settings["optimizer_stock_news_strengths"], min_value=0.0) or (1.0, 1.2),
-        optimizer_turnover_penalty=float(settings["optimizer_turnover_penalty"]),
-        optimizer_drawdown_penalty=float(settings["optimizer_drawdown_penalty"]),
-        optimizer_target_years=max(1, int(settings["optimizer_target_years"])),
-        optimizer_top_trials=max(1, int(settings["optimizer_top_trials"])),
-        optimizer_time_budget_minutes=float(settings["optimizer_time_budget_minutes"]),
-        report_date=settings["report_date"],
-    )
-
-    result = generate_daily_fusion(
-        config=config,
-        market_security=market_security,
-        stocks=stocks,
-        sector_map=sector_map,
-        current_holdings=current_holdings,
-    )
-    report_path = write_daily_report(settings["report"], result)
-    print(f"[OK] Daily report generated: {report_path.resolve()}")
-
-    if settings["dashboard"].strip():
-        dashboard_path = write_daily_dashboard(settings["dashboard"], result)
-        print(f"[OK] Daily dashboard generated: {dashboard_path.resolve()}")
-    return 0
+    return _legacy_cli_tasks.run_daily(settings, dependencies=_task_dependencies())
 
 
 def run_forecast(settings: dict[str, Any]) -> int:
-    set_tushare_token(settings.get("tushare_token", ""))
-    market_security, stocks, _ = load_watchlist(settings["watchlist"])
-    config = ForecastConfig(
-        source=settings["source"],
-        data_dir=settings["data_dir"],
-        start=settings["start"],
-        end=settings["end"],
-        min_train_days=settings["min_train_days"],
-        step_days=settings["step_days"],
-        l2=settings["l2"],
-        max_positions=int(settings["max_positions"]),
-        use_margin_features=_parse_bool(settings["use_margin_features"]),
-        margin_market_file=settings["margin_market_file"],
-        margin_stock_file=settings["margin_stock_file"],
-        use_us_index_context=_parse_bool(settings["use_us_index_context"]),
-        us_index_source=str(settings["us_index_source"]),
-    )
-    result = generate_forecast(config=config, market_security=market_security, stocks=stocks)
-    path = write_forecast_report(settings["report"], result.market_forecast, result.stock_rows)
-    print(f"[OK] Report generated: {path.resolve()}")
-    return 0
+    return _legacy_cli_tasks.run_forecast(settings, dependencies=_task_dependencies())
 
 
 def run_discover(settings: dict[str, Any]) -> int:
-    set_tushare_token(settings.get("tushare_token", ""))
-    market_security, stocks, _ = load_watchlist(settings["watchlist"])
-    config = DiscoverConfig(
-        source=settings["source"],
-        data_dir=settings["data_dir"],
-        start=settings["start"],
-        end=settings["end"],
-        min_train_days=settings["min_train_days"],
-        step_days=settings["step_days"],
-        l2=settings["l2"],
-        max_positions=int(settings["max_positions"]),
-        use_margin_features=_parse_bool(settings["use_margin_features"]),
-        margin_market_file=settings["margin_market_file"],
-        margin_stock_file=settings["margin_stock_file"],
-        use_us_index_context=_parse_bool(settings["use_us_index_context"]),
-        us_index_source=str(settings["us_index_source"]),
-        universe_file=settings["universe_file"],
-        candidate_limit=int(settings["candidate_limit"]),
-        top_k=int(settings["top_k"]),
-        exclude_watchlist=_parse_bool(settings["exclude_watchlist"]),
-    )
-    result = generate_discovery(config=config, market_security=market_security, watchlist_stocks=stocks)
-    path = write_discovery_report(settings["report"], result)
-    print(f"[OK] Discovery report generated: {path.resolve()}")
-    return 0
+    return _legacy_cli_tasks.run_discover(settings, dependencies=_task_dependencies())
 
 
 def run_sync_data(settings: dict[str, Any]) -> int:
-    set_tushare_token(settings.get("tushare_token", ""))
-    result = sync_market_data(
-        source=settings["source"],
-        data_dir=settings["data_dir"],
-        start=settings["start"],
-        end=settings["end"],
-        universe_size=int(settings["universe_size"]),
-        universe_file=settings["universe_file"],
-        include_indices=_parse_bool(settings["include_indices"]),
-        force_refresh=_parse_bool(settings["force_refresh"]),
-        sleep_ms=int(settings["sleep_ms"]),
-        parallel_workers=max(1, int(settings.get("parallel_workers", 1) or 1)),
-        max_failures=int(settings["max_failures"]),
-        write_universe_file=settings["write_universe_file"],
-        universe_min_amount=max(0.0, float(settings["universe_min_amount"])),
-        universe_exclude_st=_parse_bool(settings["universe_exclude_st"]),
-    )
-    if result.resumed:
-        print(f"[OK] Resumed from checkpoint: {result.resume_completed} symbols already completed")
-    print(f"[OK] Universe source: {result.universe_source}")
-    print(f"[OK] Universe size: {result.universe_size} (requested {result.requested_universe_size})")
-    print(f"[OK] Downloaded: {result.downloaded}, skipped: {result.skipped}, failed: {result.failed}, attempted: {result.attempted}")
-    if result.checkpoint_file:
-        print(f"[OK] Resume checkpoint saved: {Path(result.checkpoint_file).resolve()}")
-    if result.universe_file:
-        print(f"[OK] Universe file written: {Path(result.universe_file).resolve()}")
-    if result.failed_symbols:
-        print(f"[WARN] Failed symbols (first 20): {', '.join(result.failed_symbols)}")
-    if result.downloaded <= 0 and result.skipped <= 0:
-        print("[ERROR] No symbols were synced.")
-        return 2
-    return 0
+    return _legacy_cli_tasks.run_sync_data(settings, dependencies=_task_dependencies())
 
 
 def run_sync_margin(settings: dict[str, Any]) -> int:
-    set_tushare_token(settings.get("tushare_token", ""))
-    symbols = _parse_symbol_list(settings.get("symbols", ""))
-    if not symbols:
-        universe_file = str(settings.get("universe_file", "")).strip()
-        if universe_file:
-            rows = _load_discovery_universe_file(universe_file, enrich_metadata=False)
-            limit = int(settings.get("universe_limit", 0) or 0)
-            if limit > 0:
-                rows = rows[:limit]
-            symbols = [normalize_symbol(sec.symbol).symbol for sec in rows]
-    if not symbols:
-        _, stocks, _ = load_watchlist(settings["watchlist"])
-        symbols = [normalize_symbol(sec.symbol).symbol for sec in stocks]
-    if not symbols:
-        print("[ERROR] No valid symbols for margin sync. Set --symbols, --universe-file, or check watchlist.")
-        return 2
+    return _legacy_cli_tasks.run_sync_margin(settings, dependencies=_task_dependencies())
 
-    result = sync_margin_data(
-        source=settings["source"],
-        symbols=symbols,
-        start=settings["start"],
-        end=settings["end"],
-        market_out=settings["margin_market_file"],
-        stock_out=settings["margin_stock_file"],
-        tushare_token=str(settings.get("tushare_token", "")),
-        sleep_ms=int(settings["sleep_ms"]),
-    )
-    print(f"[OK] Margin source used: {result.source_used}")
-    print(f"[OK] Symbols: {len(symbols)}")
-    print(f"[OK] Market rows: {result.market_rows} -> {Path(result.market_path).resolve()}")
-    print(f"[OK] Stock rows: {result.stock_rows} -> {Path(result.stock_path).resolve()}")
-    if result.notes:
-        for note in result.notes:
-            print(f"[WARN] {note}")
-    return 0
+
+def _task_handlers() -> dict[str, Any]:
+    return {
+        "daily": run_daily,
+        "forecast": run_forecast,
+        "discover": run_discover,
+        "sync-data": run_sync_data,
+        "sync-margin": run_sync_margin,
+    }
 
 
 def main() -> int:
@@ -990,18 +554,11 @@ def main() -> int:
             print(json.dumps({"task": args.task, "settings": _masked_settings(settings)}, indent=2, ensure_ascii=False))
             return 0
         if args.task in {"daily", "forecast"}:
-            print("[V1] 提示: `daily` / `forecast` 仍为兼容入口；已被 V2 逐步覆盖，优先使用 `python3 run_v2.py daily-run` 或 `python3 run_v2.py research-run`。")
-        if args.task == "daily":
-            return run_daily(settings)
-        if args.task == "forecast":
-            return run_forecast(settings)
-        if args.task == "discover":
-            return run_discover(settings)
-        if args.task == "sync-data":
-            return run_sync_data(settings)
-        if args.task == "sync-margin":
-            return run_sync_margin(settings)
-        parser.error(f"Unknown task: {args.task}")
+            print("[V1] Compatibility entrypoint: prefer `python3 run_v2.py daily-run` or `python3 run_v2.py research-run`.")
+        handler = _task_handlers().get(args.task)
+        if handler is None:
+            parser.error(f"Unknown task: {args.task}")
+        return int(handler(settings))
     except (OSError, json.JSONDecodeError, ValueError) as exc:
         print(f"[ERROR] Config failure: {exc}")
         return 4
