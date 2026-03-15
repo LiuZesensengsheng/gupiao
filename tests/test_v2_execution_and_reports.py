@@ -6,6 +6,8 @@ from pathlib import Path
 import pandas as pd
 import pytest
 
+import src.application.v2_services as legacy_services
+from src.application import v2_backtest_runtime
 from src.application.v2_contracts import (
     CapitalFlowState,
     CandidateSelectionState,
@@ -26,7 +28,6 @@ from src.application.v2_contracts import (
     V2CalibrationResult,
     V2PolicyLearningResult,
 )
-from src.application.v2_services import _simulate_execution_day
 from src.domain.entities import TradeAction
 from src.interfaces.presenters.html_dashboard import (
     write_v2_daily_dashboard,
@@ -41,6 +42,13 @@ from src.interfaces.presenters.markdown_reports import (
     write_v2_research_report_from_view_model,
 )
 from src.reporting.view_models import build_daily_report_view_model, build_research_report_view_model
+
+
+def _simulate_execution_day(**kwargs: object):
+    return v2_backtest_runtime.simulate_execution_day(
+        deps=legacy_services._backtest_execution_dependencies(),
+        **kwargs,
+    )
 
 
 def _make_daily_result() -> DailyRunResult:

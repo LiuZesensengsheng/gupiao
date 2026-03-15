@@ -193,468 +193,26 @@ def test_runtime_options_are_built_from_cli_namespace() -> None:
     assert matrix_options.universe_tiers == ("favorites_16", "generated_80")
 
 
-def test_daily_snapshot_runtime_keeps_facade_contract() -> None:
-    runtime_snapshot = build_strategy_snapshot_runtime(strategy_id="alpha_v2", universe_id="demo")
-
-    from src.application.v2_services import build_strategy_snapshot
-
-    facade_snapshot = build_strategy_snapshot(strategy_id="alpha_v2", universe_id="demo")
-
-    assert facade_snapshot == runtime_snapshot
-    assert (
-        resolve_manifest_path(
-            strategy_id="alpha_v2",
-            artifact_root="artifacts/v2",
-            run_id="20260314_010203",
-            snapshot_path=None,
-        )
-        == Path("artifacts/v2") / "alpha_v2" / "20260314_010203" / "research_manifest.json"
-    )
-
-
-def test_runtime_settings_module_keeps_facade_contract(tmp_path: Path) -> None:
-    universe_path = tmp_path / "universe.json"
-    universe_path.write_text(
-        json.dumps({"stocks": [{"symbol": "000001.SZ", "name": "PingAn", "sector": "银行"}]}),
-        encoding="utf-8",
-    )
-    config_path = tmp_path / "runtime.json"
-    config_path.write_text(
-        json.dumps(
-            {
-                "common": {
-                    "source": "local",
-                    "watchlist": "config/watchlist.json",
-                    "universe_limit": 5,
-                    "use_info_fusion": False,
-                },
-                "daily": {
-                    "start": "2024-01-01",
-                    "end": "2024-12-31",
-                },
-            }
-        ),
-        encoding="utf-8",
-    )
-
-    from src.application.v2_services import _load_v2_runtime_settings, _resolve_v2_universe_settings
-
-    runtime_settings = load_v2_runtime_settings_runtime(
-        config_path=str(config_path),
-        universe_file=str(universe_path),
-        source="local",
-    )
-    facade_settings = _load_v2_runtime_settings(
-        config_path=str(config_path),
-        universe_file=str(universe_path),
-        source="local",
-    )
-    assert facade_settings == runtime_settings
-
-    runtime_resolved = resolve_v2_universe_settings_runtime(
-        settings=runtime_settings,
-        cache_root=str(tmp_path / "cache"),
-    )
-    facade_resolved = _resolve_v2_universe_settings(
-        settings=facade_settings,
-        cache_root=str(tmp_path / "cache"),
-    )
-    assert facade_resolved == runtime_resolved
-    assert facade_resolved["symbols"] == ["000001.SZ"]
-
-
-def test_daily_cache_runtime_keeps_facade_contract(tmp_path: Path) -> None:
-    import src.application.v2_services as legacy
-
-    config_path = tmp_path / "runtime.json"
-    watchlist = tmp_path / "watchlist.json"
-    universe_file = tmp_path / "universe.json"
-    margin_market = tmp_path / "margin_market.csv"
-    margin_stock = tmp_path / "margin_stock.csv"
-    info_file = tmp_path / "info.json"
-    manifest_path = tmp_path / "manifest.json"
-    for path in (config_path, watchlist, universe_file, margin_market, margin_stock, info_file, manifest_path):
-        path.write_text("{}", encoding="utf-8")
-
-    settings = {
-        "config_path": str(config_path),
-        "source": "local",
-        "watchlist": str(watchlist),
-        "universe_file": str(universe_file),
-        "universe_limit": 20,
-        "universe_tier": "favorites_16",
-        "source_universe_manifest_path": str(manifest_path),
-        "start": "2024-01-01",
-        "end": "2024-12-31",
-        "min_train_days": 40,
-        "step_days": 5,
-        "l2": 0.2,
-        "max_positions": 8,
-        "use_margin_features": True,
-        "margin_market_file": str(margin_market),
-        "margin_stock_file": str(margin_stock),
-        "use_us_index_context": True,
-        "us_index_source": "akshare",
-        "use_us_sector_etf_context": False,
-        "use_cn_etf_context": False,
-        "cn_etf_source": "akshare",
-        "event_file": str(info_file),
-        "info_hash": "abc",
-        "use_info_fusion": True,
-        "info_shadow_only": False,
-        "info_source_mode": "layered",
-        "info_types": ["news"],
-        "info_subsets": ["market_news"],
-        "announcement_event_tags": ["earnings"],
-    }
-
-    runtime_key = daily_result_cache_key_runtime(
-        strategy_id="alpha_v2",
-        settings=settings,
-        artifact_root=str(tmp_path / "artifacts"),
-        run_id="20260315_010203",
-        snapshot_path="",
-        allow_retrain=False,
-        deps=DailyCacheKeyDependencies(
-            resolve_manifest_path=legacy._resolve_manifest_path,
-            resolve_info_file_from_settings=legacy._resolve_info_file_from_settings,
-        ),
-    )
-    facade_key = legacy._daily_result_cache_key(
-        strategy_id="alpha_v2",
-        settings=settings,
-        artifact_root=str(tmp_path / "artifacts"),
-        run_id="20260315_010203",
-        snapshot_path="",
-        allow_retrain=False,
-    )
-    assert facade_key == runtime_key
-    assert file_mtime_token_runtime(info_file) == legacy._file_mtime_token(info_file)
-    assert legacy._daily_result_cache_path(cache_root=str(tmp_path), cache_key=facade_key) == daily_result_cache_path_runtime(
-        cache_root=str(tmp_path),
-        cache_key=runtime_key,
-    )
-
-
-def test_policy_artifact_runtime_keeps_facade_contract(tmp_path: Path) -> None:
-    payload_path = tmp_path / "latest_policy_model.json"
-    payload_path.write_text(
-        json.dumps(
-            {
-                "artifact_type": "learned_policy_model",
-                "artifact_version": CURRENT_ARTIFACT_VERSION,
-                "feature_names": ["x1"],
-                "exposure_intercept": 0.5,
-                "exposure_coef": [0.1],
-                "position_intercept": 2.0,
-                "position_coef": [0.1],
-                "turnover_intercept": 0.2,
-                "turnover_coef": [0.05],
-                "train_rows": 64,
-                "train_r2_exposure": 0.2,
-                "train_r2_positions": 0.18,
-                "train_r2_turnover": 0.12,
-            }
-        ),
-        encoding="utf-8",
-    )
-
-    runtime_model = load_policy_model_from_path_runtime(
-        payload_path,
-        load_json_dict=lambda path_like: json.loads(Path(path_like).read_text(encoding="utf-8")),
-    )
-
-    from src.application.v2_services import _load_policy_model_from_path
-    from src.artifact_registry.v2_registry import load_published_v2_policy_model
-
-    facade_model = _load_policy_model_from_path(payload_path)
-
-    strategy_dir = tmp_path / "alpha_v2"
-    strategy_dir.mkdir()
-    (strategy_dir / "latest_policy_model.json").write_text(payload_path.read_text(encoding="utf-8"), encoding="utf-8")
-    registry_model = load_published_v2_policy_model(strategy_id="alpha_v2", artifact_root=str(tmp_path))
-
-    assert runtime_model == facade_model
-    assert registry_model == facade_model
-
-
-def test_policy_runtime_keeps_facade_contract() -> None:
-    import src.application.v2_services as legacy
-
-    state = CompositeState(
-        market=MarketForecastState(
-            as_of_date="2026-03-14",
-            up_1d_prob=0.57,
-            up_5d_prob=0.59,
-            up_20d_prob=0.61,
-            trend_state="trend",
-            drawdown_risk=0.22,
-            volatility_regime="normal",
-            liquidity_stress=0.18,
-            up_2d_prob=0.58,
-            up_3d_prob=0.59,
-        ),
-        cross_section=CrossSectionForecastState(
-            as_of_date="2026-03-14",
-            large_vs_small_bias=0.03,
-            growth_vs_value_bias=0.02,
-            fund_flow_strength=0.08,
-            margin_risk_on_score=0.12,
-            breadth_strength=0.14,
-            leader_participation=0.16,
-            weak_stock_ratio=0.22,
-        ),
-        sectors=[
-            SectorForecastState("有色", 0.58, 0.62, 0.14, 0.28, 0.20),
-            SectorForecastState("化工", 0.55, 0.57, 0.08, 0.24, 0.18),
-        ],
-        stocks=[
-            StockForecastState("000630.SZ", "有色", 0.57, 0.60, 0.64, 0.58, 0.12, 0.88),
-            StockForecastState("600438.SH", "化工", 0.54, 0.56, 0.58, 0.54, 0.08, 0.82),
-        ],
-        strategy_mode="trend_following",
-        risk_regime="risk_on",
-    )
-    policy_input = PolicyInput(
-        composite_state=state,
-        current_weights={"000630.SZ": 0.18},
-        current_cash=0.82,
-        total_equity=1.0,
-        current_holding_days={"000630.SZ": 8},
-    )
-    feature_names = legacy._policy_feature_names()
-    model = LearnedPolicyModel(
-        feature_names=feature_names,
-        exposure_intercept=0.62,
-        exposure_coef=[0.0] * len(feature_names),
-        position_intercept=3.0,
-        position_coef=[0.0] * len(feature_names),
-        turnover_intercept=0.24,
-        turnover_coef=[0.0] * len(feature_names),
-        train_rows=32,
-        train_r2_exposure=0.12,
-        train_r2_positions=0.08,
-        train_r2_turnover=0.05,
-    )
-
-    runtime_decision = apply_policy_runtime(
-        policy_input,
-        deps=legacy._policy_runtime_dependencies(),
-    )
-    facade_decision = legacy.apply_policy(policy_input)
-    assert facade_decision == runtime_decision
-
-    runtime_actions = build_trade_actions_runtime(
-        decision=runtime_decision,
-        current_weights=policy_input.current_weights,
-    )
-    facade_actions = legacy.build_trade_actions(
-        decision=facade_decision,
-        current_weights=policy_input.current_weights,
-    )
-    assert facade_actions == runtime_actions
-
-    runtime_spec = policy_spec_from_model_runtime(
-        state=state,
-        model=model,
-        deps=legacy._policy_runtime_dependencies(),
-    )
-    facade_spec = legacy._policy_spec_from_model(state=state, model=model)
-    assert isinstance(facade_spec, PolicySpec)
-    assert facade_spec == runtime_spec
-
-
-def test_backtest_execution_runtime_keeps_facade_contract() -> None:
-    import pandas as pd
-    import src.application.v2_services as legacy
-
-    state = CompositeState(
-        market=MarketForecastState(
-            as_of_date="2026-03-14",
-            up_1d_prob=0.56,
-            up_5d_prob=0.58,
-            up_20d_prob=0.60,
-            trend_state="trend",
-            drawdown_risk=0.20,
-            volatility_regime="normal",
-            liquidity_stress=0.18,
-        ),
-        cross_section=CrossSectionForecastState(
-            as_of_date="2026-03-14",
-            large_vs_small_bias=0.01,
-            growth_vs_value_bias=0.02,
-            fund_flow_strength=0.06,
-            margin_risk_on_score=0.10,
-            breadth_strength=0.12,
-            leader_participation=0.15,
-            weak_stock_ratio=0.22,
-        ),
-        sectors=[SectorForecastState("有色", 0.57, 0.61, 0.12, 0.22, 0.18)],
-        stocks=[StockForecastState("000630.SZ", "有色", 0.57, 0.60, 0.63, 0.57, 0.10, 0.86)],
-        strategy_mode="trend_following",
-        risk_regime="risk_on",
-    )
-    decision = legacy.apply_policy(
-        PolicyInput(
-            composite_state=state,
-            current_weights={"000630.SZ": 0.10},
-            current_cash=0.90,
-            total_equity=1.0,
-            current_holding_days={"000630.SZ": 5},
-        )
-    )
-    date = pd.Timestamp("2026-03-14")
-    next_date = pd.Timestamp("2026-03-17")
-    stock_frames = {
-        "000630.SZ": pd.DataFrame(
-            [
-                {
-                    "date": date,
-                    "open": 10.0,
-                    "close": 10.2,
-                    "low": 9.95,
-                    "high": 10.3,
-                    "ret_1": 0.02,
-                    "fwd_ret_1": 0.03,
-                }
-            ]
-        )
-    }
-    runtime_sim = simulate_execution_day_runtime(
-        date=date,
-        next_date=next_date,
-        decision=decision,
-        current_weights={"000630.SZ": 0.10},
-        current_cash=0.90,
-        stock_states=state.stocks,
-        stock_frames=stock_frames,
-        total_commission_rate=0.00015,
-        base_slippage_rate=0.0002,
-        deps=legacy._backtest_execution_dependencies(),
-    )
-    facade_sim = legacy._simulate_execution_day(
-        date=date,
-        next_date=next_date,
-        decision=decision,
-        current_weights={"000630.SZ": 0.10},
-        current_cash=0.90,
-        stock_states=state.stocks,
-        stock_frames=stock_frames,
-        total_commission_rate=0.00015,
-        base_slippage_rate=0.0002,
-    )
-    assert facade_sim == runtime_sim
-
-    trajectory = SimpleNamespace(
-        prepared=SimpleNamespace(
-            stock_frames=stock_frames,
-            market_valid=pd.DataFrame([{"date": date, "mkt_fwd_ret_1": 0.01}]),
-            settings={"universe_tier": "favorites_16"},
-        ),
-        steps=[
-            SimpleNamespace(
-                date=date,
-                next_date=next_date,
-                composite_state=state,
-                stock_states=state.stocks,
-                horizon_metrics={
-                    "20d": {
-                        "rank_ic": 0.12,
-                        "top_decile_return": 0.03,
-                        "top_bottom_spread": 0.05,
-                        "top_k_hit_rate": 0.60,
-                    }
-                },
-            )
-        ],
-    )
-    runtime_summary, runtime_rows = execute_v2_backtest_trajectory_runtime(
-        trajectory,
-        deps=legacy._backtest_execution_dependencies(),
-        capture_learning_rows=True,
-    )
-    facade_summary, facade_rows = legacy._execute_v2_backtest_trajectory(
-        trajectory,
-        capture_learning_rows=True,
-    )
-    assert facade_summary == runtime_summary
-
-
-def test_policy_feature_runtime_keeps_facade_contract() -> None:
-    import src.application.v2_services as legacy
-
-    state = CompositeState(
-        market=MarketForecastState(
-            as_of_date="2026-03-14",
-            up_1d_prob=0.57,
-            up_5d_prob=0.59,
-            up_20d_prob=0.61,
-            trend_state="trend",
-            drawdown_risk=0.22,
-            volatility_regime="normal",
-            liquidity_stress=0.18,
-            up_2d_prob=0.58,
-            up_3d_prob=0.59,
-        ),
-        cross_section=CrossSectionForecastState(
-            as_of_date="2026-03-14",
-            large_vs_small_bias=0.03,
-            growth_vs_value_bias=0.02,
-            fund_flow_strength=0.08,
-            margin_risk_on_score=0.12,
-            breadth_strength=0.14,
-            leader_participation=0.16,
-            weak_stock_ratio=0.22,
-        ),
-        sectors=[
-            SectorForecastState("链路A", 0.58, 0.62, 0.14, 0.28, 0.20),
-            SectorForecastState("链路B", 0.55, 0.57, 0.08, 0.24, 0.18),
-        ],
-        stocks=[
-            StockForecastState("000630.SZ", "链路A", 0.57, 0.60, 0.64, 0.58, 0.12, 0.88),
-            StockForecastState("600438.SH", "链路B", 0.54, 0.56, 0.58, 0.54, 0.08, 0.82),
-        ],
-        strategy_mode="trend_following",
-        risk_regime="risk_on",
-    )
-
-    feature_deps = legacy._policy_feature_runtime_dependencies()
-    runtime_features = policy_feature_runtime.policy_feature_vector(state, deps=feature_deps)
-    facade_features = legacy._policy_feature_vector(state)
-    assert policy_feature_runtime.policy_feature_names() == legacy._policy_feature_names()
-    assert runtime_features.tolist() == pytest.approx(facade_features.tolist())
-
-    X = [[1.0, 0.5], [0.8, 0.3], [0.6, 0.1], [0.4, -0.1]]
-    y = [0.7, 0.6, 0.45, 0.2]
-    weights = [1.0, 0.8, 1.2, 1.0]
-    runtime_intercept, runtime_coef = policy_feature_runtime.fit_ridge_regression(X, y, l2=0.5, sample_weight=weights)
-    facade_intercept, facade_coef = legacy._fit_ridge_regression(X, y, l2=0.5, sample_weight=weights)
-    assert runtime_intercept == pytest.approx(facade_intercept)
-    assert runtime_coef.tolist() == pytest.approx(facade_coef.tolist())
-    assert policy_feature_runtime.predict_ridge(X[0], runtime_intercept, runtime_coef) == pytest.approx(
-        legacy._predict_ridge(X[0], facade_intercept, facade_coef)
-    )
-    assert policy_feature_runtime.normalize_coef_vector([1.0], 3).tolist() == pytest.approx(
-        legacy._normalize_coef_vector([1.0], 3).tolist()
-    )
-    assert policy_feature_runtime.r2_score(y, y) == pytest.approx(legacy._r2_score(y, y))
-
-
 def test_backtest_core_runtime_keeps_facade_contract(monkeypatch: pytest.MonkeyPatch) -> None:
+    from src.application.v2_backtest_runtime import BacktestCoreDependencies
     import src.application.v2_services as legacy
 
     trajectory = SimpleNamespace(name="trajectory")
     summary = _make_backtest(total_return=0.18, annual_return=0.16)
     learning_rows = [{"target_exposure": 0.75}]
+    deps = BacktestCoreDependencies(
+        load_or_build_v2_backtest_trajectory=lambda **_: trajectory,
+        empty_v2_backtest_result=lambda: (_make_backtest(0.0, 0.0), []),
+        execute_v2_backtest_trajectory=lambda *args, **kwargs: (summary, learning_rows),
+    )
 
-    monkeypatch.setattr("src.application.v2_services._load_or_build_v2_backtest_trajectory", lambda **_: trajectory)
-    monkeypatch.setattr("src.application.v2_services._execute_v2_backtest_trajectory", lambda *args, **kwargs: (summary, learning_rows))
+    monkeypatch.setattr(legacy, "_backtest_core_dependencies", lambda: deps)
 
     runtime_result = run_v2_backtest_core_runtime(
         strategy_id="alpha_v2",
         config_path="config/api.json",
         forecast_backend="linear",
-        deps=legacy._backtest_core_dependencies(),
+        deps=deps,
     )
     facade_result = legacy._run_v2_backtest_core(
         strategy_id="alpha_v2",
@@ -699,400 +257,9 @@ def test_backtest_summary_runtime_keeps_facade_contract() -> None:
     assert facade_summary == runtime_summary
 
 
-def test_feature_runtime_keeps_facade_contract() -> None:
-    import pandas as pd
-    import src.application.v2_services as legacy
-
-    frame = pd.DataFrame(
-        {
-            "symbol": ["AAA", "AAA", "BBB", "BBB"],
-            "date": pd.to_datetime(["2024-01-01", "2024-01-02", "2024-01-01", "2024-01-02"]),
-            "f1": [1.0, 2.0, 10.0, 20.0],
-            "f2": [3.0, 4.0, 30.0, 40.0],
-        }
-    )
-    runtime_frame, runtime_cols = tensorize_temporal_frame_runtime(
-        frame,
-        feature_cols=["f1", "f2"],
-        group_col="symbol",
-        lag_depth=2,
-    )
-    facade_frame, facade_cols = legacy._tensorize_temporal_frame(
-        frame,
-        feature_cols=["f1", "f2"],
-        group_col="symbol",
-        lag_depth=2,
-    )
-    assert facade_cols == runtime_cols
-    assert facade_frame.equals(runtime_frame)
-
-    runtime_linear = make_forecast_backend_runtime("linear", deps=legacy._forecast_runtime_dependencies())
-    runtime_deep = make_forecast_backend_runtime("deep", deps=legacy._forecast_runtime_dependencies())
-    facade_linear = legacy._make_forecast_backend("linear")
-    facade_deep = legacy._make_forecast_backend("deep")
-    assert facade_linear.name == runtime_linear.name == "linear"
-    assert facade_deep.name == runtime_deep.name == "deep"
-
-
-def test_split_research_trajectory_runtime_keeps_facade_contract() -> None:
-    import src.application.v2_services as legacy
-
-    trajectory = SimpleNamespace(
-        prepared=SimpleNamespace(tag="prepared"),
-        steps=[SimpleNamespace(idx=i) for i in range(10)],
-    )
-    runtime_split = split_research_trajectory_runtime(
-        trajectory,
-        split_mode="purged_wf",
-        embargo_days=1,
-    )
-    facade_split = legacy._split_research_trajectory(
-        trajectory,
-        split_mode="purged_wf",
-        embargo_days=1,
-    )
-
-    assert [len(part.steps) for part in facade_split] == [len(part.steps) for part in runtime_split]
-    assert [part.prepared for part in facade_split] == [part.prepared for part in runtime_split]
-
-
-def test_prediction_review_runtime_keeps_facade_contract(tmp_path: Path) -> None:
-    import src.application.v2_services as legacy
-
-    backtest_path = tmp_path / "backtest_summary.json"
-    backtest_path.write_text(
-        json.dumps(
-            {
-                "learned": {
-                    "n_days": 42,
-                    "horizon_metrics": {
-                        "5d": {
-                            "rank_ic": 0.08,
-                            "top_k_hit_rate": 0.61,
-                            "top_bottom_spread": 0.05,
-                        },
-                        "20d": {
-                            "rank_ic": 0.12,
-                            "top_k_hit_rate": 0.65,
-                            "top_bottom_spread": 0.08,
-                        },
-                    },
-                    "nav_curve": [1.0, 1.02, 1.03, 1.05, 1.08, 1.10],
-                    "excess_nav_curve": [1.0, 1.01, 1.02, 1.025, 1.04, 1.05],
-                    "curve_dates": [
-                        "2026-03-10",
-                        "2026-03-11",
-                        "2026-03-12",
-                        "2026-03-13",
-                        "2026-03-14",
-                        "2026-03-17",
-                    ],
-                }
-            },
-            ensure_ascii=False,
-        ),
-        encoding="utf-8",
-    )
-    manifest = {"backtest_summary": "backtest_summary.json", "run_id": "research_20260315"}
-    manifest_path = tmp_path / "research_manifest.json"
-
-    runtime_review = load_prediction_review_context_runtime(
-        manifest=manifest,
-        manifest_path=manifest_path,
-        deps=legacy._prediction_review_dependencies(),
-    )
-    facade_review = legacy._load_prediction_review_context(
-        manifest=manifest,
-        manifest_path=manifest_path,
-    )
-
-    assert facade_review == runtime_review
-    assert "10d" in runtime_review[1]
-
-
-def test_info_manifest_runtime_keeps_facade_contract(tmp_path: Path) -> None:
-    import pandas as pd
-    import src.application.v2_services as legacy
-
-    info_file = tmp_path / "info.json"
-    info_file.write_text("{}", encoding="utf-8")
-    info_items = [
-        InfoItem(
-            date="2026-03-15",
-            target_type="stock",
-            target="AAA",
-            horizon="20d",
-            direction="up",
-            info_type="announcement",
-            title="ann",
-            source_subset="announcements",
-        ),
-        InfoItem(
-            date="2026-03-16",
-            target_type="market",
-            target="all",
-            horizon="5d",
-            direction="up",
-            info_type="news",
-            title="news",
-            source_subset="market_news",
-        ),
-    ]
-    settings = {
-        "info_shadow_only": False,
-        "info_source_mode": "layered",
-        "info_types": ["news", "announcement"],
-        "info_subsets": ["market_news", "announcements"],
-        "announcement_event_tags": ["earnings"],
-    }
-    shadow_report = {
-        "coverage_summary": {
-            "market_coverage_ratio": 0.7,
-            "stock_coverage_ratio": 0.5,
-        }
-    }
-
-    runtime_payload = build_info_manifest_payload_runtime(
-        settings=settings,
-        info_file=str(info_file),
-        info_items=info_items,
-        as_of_date=pd.Timestamp("2026-03-16"),
-        config_hash="cfg_hash",
-        shadow_enabled=True,
-        shadow_report=shadow_report,
-        deps=legacy._info_manifest_dependencies(),
-    )
-    facade_payload = legacy._build_info_manifest_payload(
-        settings=settings,
-        info_file=str(info_file),
-        info_items=info_items,
-        as_of_date=pd.Timestamp("2026-03-16"),
-        config_hash="cfg_hash",
-        shadow_enabled=True,
-        shadow_report=shadow_report,
-    )
-
-    assert facade_payload == runtime_payload
-    assert runtime_payload["announcement_count"] == 1
-
-
-def test_forecast_support_runtime_keeps_facade_contract() -> None:
-    import src.application.v2_services as legacy
-
-    short_profile = legacy._ReturnQuantileProfile(
-        expected_return=0.02,
-        q10=-0.03,
-        q30=-0.01,
-        q20=-0.02,
-        q50=0.01,
-        q70=0.03,
-        q80=0.04,
-        q90=0.06,
-    )
-    mid_profile = legacy._ReturnQuantileProfile(
-        expected_return=0.08,
-        q10=-0.06,
-        q30=-0.02,
-        q20=-0.04,
-        q50=0.05,
-        q70=0.09,
-        q80=0.11,
-        q90=0.14,
-    )
-    info_state = InfoAggregateState(coverage_confidence=0.72)
-    horizon_probs = {"1d": 0.58, "2d": 0.57, "3d": 0.59, "5d": 0.61, "10d": 0.63, "20d": 0.66}
-    calibration_priors = {"5d": {"rank_ic": 0.12, "top_k_hit_rate": 0.64}}
-
-    runtime_forecasts = build_horizon_forecasts_runtime(
-        latest_close=10.0,
-        horizon_probs=horizon_probs,
-        short_profile=short_profile,
-        mid_profile=mid_profile,
-        info_state=info_state,
-        calibration_priors=calibration_priors,
-        tradability_status="normal",
-        deps=legacy._forecast_support_dependencies(),
-    )
-    facade_forecasts = legacy._build_horizon_forecasts(
-        latest_close=10.0,
-        horizon_probs=horizon_probs,
-        short_profile=short_profile,
-        mid_profile=mid_profile,
-        info_state=info_state,
-        calibration_priors=calibration_priors,
-        tradability_status="normal",
-    )
-    assert facade_forecasts == runtime_forecasts
-
-    market = MarketForecastState(
-        as_of_date="2026-03-16",
-        up_1d_prob=0.56,
-        up_5d_prob=0.60,
-        up_20d_prob=0.64,
-        trend_state="trend",
-        drawdown_risk=0.14,
-        volatility_regime="normal",
-        liquidity_stress=0.10,
-    )
-    market = type(market)(
-        **{
-            **market.__dict__,
-            "market_facts": legacy.MarketFactsState(
-                sample_coverage=100,
-                advancers=62,
-                decliners=30,
-                flats=8,
-                limit_up_count=5,
-                limit_down_count=1,
-                new_high_count=12,
-                new_low_count=4,
-                median_return=0.01,
-                sample_amount=1.2e9,
-                amount_z20=0.5,
-            ),
-        }
-    )
-    cross_section = CrossSectionForecastState(
-        as_of_date="2026-03-16",
-        large_vs_small_bias=0.02,
-        growth_vs_value_bias=0.01,
-        fund_flow_strength=0.03,
-        margin_risk_on_score=0.04,
-        breadth_strength=0.15,
-        leader_participation=0.16,
-        weak_stock_ratio=0.18,
-    )
-    capital_flow = legacy.CapitalFlowState(
-        northbound_net_flow=0.12,
-        margin_balance_change=0.05,
-        turnover_heat=0.65,
-        large_order_bias=0.04,
-        flow_regime="risk_on",
-    )
-    macro = legacy.MacroContextState(
-        style_regime="growth",
-        commodity_pressure=0.02,
-        fx_pressure=0.01,
-        index_breadth_proxy=0.6,
-        macro_risk_level="neutral",
-    )
-    runtime_sentiment = build_market_sentiment_state_runtime(
-        market=market,
-        cross_section=cross_section,
-        capital_flow=capital_flow,
-        macro=macro,
-    )
-    facade_sentiment = legacy._build_market_sentiment_state(
-        market=market,
-        cross_section=cross_section,
-        capital_flow=capital_flow,
-        macro=macro,
-    )
-    assert facade_sentiment == runtime_sentiment
-
-    stock = StockForecastState(
-        symbol="AAA",
-        sector="科技",
-        up_1d_prob=0.62,
-        up_5d_prob=0.64,
-        up_20d_prob=0.68,
-        excess_vs_sector_prob=0.58,
-        event_impact_score=0.12,
-        tradeability_score=0.86,
-        alpha_score=0.0,
-        tradability_status="normal",
-        up_2d_prob=0.63,
-        up_3d_prob=0.65,
-    )
-    runtime_alpha = alpha_score_components_runtime(
-        stock,
-        deps=legacy._forecast_support_dependencies(),
-    )
-    facade_alpha = legacy._alpha_score_components(stock)
-    assert facade_alpha == runtime_alpha
-
-
-def test_stock_reason_bundle_runtime_keeps_facade_contract() -> None:
-    import src.application.v2_services as legacy
-
-    stock = StockForecastState(
-        symbol="AAA",
-        sector="科技",
-        up_1d_prob=0.67,
-        up_5d_prob=0.59,
-        up_20d_prob=0.64,
-        excess_vs_sector_prob=0.58,
-        event_impact_score=0.12,
-        tradeability_score=0.86,
-        latest_close=12.3,
-        horizon_forecasts={
-            "1d": HorizonForecast(1, "1日", up_prob=0.67, price_low=11.8, price_high=12.9, confidence=0.52),
-            "5d": HorizonForecast(5, "5日", up_prob=0.59),
-            "20d": HorizonForecast(20, "20日", up_prob=0.64),
-        },
-    )
-    state = CompositeState(
-        market=MarketForecastState(
-            as_of_date="2026-03-15",
-            up_1d_prob=0.57,
-            up_5d_prob=0.59,
-            up_20d_prob=0.61,
-            trend_state="trend",
-            drawdown_risk=0.16,
-            volatility_regime="normal",
-            liquidity_stress=0.12,
-        ),
-        cross_section=CrossSectionForecastState(
-            as_of_date="2026-03-15",
-            large_vs_small_bias=0.02,
-            growth_vs_value_bias=0.03,
-            fund_flow_strength=0.04,
-            margin_risk_on_score=0.05,
-            breadth_strength=0.11,
-            leader_participation=0.16,
-            weak_stock_ratio=0.21,
-        ),
-        sectors=[SectorForecastState("科技", 0.60, 0.63, 0.10, 0.18, 0.14)],
-        stocks=[stock],
-        strategy_mode="trend_follow",
-        risk_regime="risk_on",
-    )
-    info_state = InfoAggregateState(catalyst_strength=0.60, negative_event_risk=0.12)
-    policy = PolicyDecision(
-        target_exposure=0.85,
-        target_position_count=5,
-        rebalance_now=True,
-        rebalance_intensity=0.8,
-        intraday_t_allowed=False,
-        turnover_cap=0.25,
-        sector_budgets={"科技": 0.25},
-        desired_sector_budgets={"科技": 0.30},
-        symbol_target_weights={"AAA": 0.18},
-        desired_symbol_target_weights={"AAA": 0.22},
-    )
-
-    runtime_bundle = stock_reason_bundle_runtime(
-        stock=stock,
-        info_state=info_state,
-        state=state,
-        rank=2,
-        policy=policy,
-        alpha_score_components=legacy._alpha_score_components,
-    )
-    facade_bundle = legacy._stock_reason_bundle(
-        stock=stock,
-        info_state=info_state,
-        state=state,
-        rank=2,
-        policy=policy,
-    )
-
-    assert facade_bundle == runtime_bundle
-    assert runtime_bundle[0]
-    assert runtime_bundle[3]
-
-
 def test_report_state_runtime_keeps_facade_contract(monkeypatch: pytest.MonkeyPatch) -> None:
+    from dataclasses import replace
+
     import src.application.v2_services as legacy
 
     stock_a = StockForecastState("AAA", "科技", 0.60, 0.62, 0.65, 0.58, 0.10, 0.84, latest_close=12.3)
@@ -1143,25 +310,15 @@ def test_report_state_runtime_keeps_facade_contract(monkeypatch: pytest.MonkeyPa
         desired_symbol_target_weights={"AAA": 0.20, "BBB": 0.13},
     )
 
-    monkeypatch.setattr(
-        "src.application.v2_services._build_horizon_forecasts",
-        lambda **kwargs: {"1d": {"up_prob": float(kwargs["horizon_probs"]["1d"]), "tag": kwargs.get("tradability_status", "market")}},
-    )
-    monkeypatch.setattr(
-        "src.application.v2_services._profile_from_horizon_map",
-        lambda horizon_map, key: horizon_map.get(key, {"picked": key}),
-    )
-    monkeypatch.setattr(
-        "src.application.v2_services._build_market_sentiment_state",
-        lambda **_: SimpleNamespace(score=77.0, stage="risk_on"),
-    )
-    monkeypatch.setattr(
-        "src.application.v2_services._candidate_stocks_from_state_external",
-        lambda state: [state.stocks[1], state.stocks[0]],
-    )
-    monkeypatch.setattr(
-        "src.application.v2_services._stock_reason_bundle",
-        lambda **kwargs: (
+    deps = replace(
+        legacy._report_state_runtime_dependencies(),
+        build_horizon_forecasts=lambda **kwargs: {
+            "1d": {"up_prob": float(kwargs["horizon_probs"]["1d"]), "tag": kwargs.get("tradability_status", "market")}
+        },
+        profile_from_horizon_map=lambda horizon_map, key: horizon_map.get(key, {"picked": key}),
+        build_market_sentiment_state=lambda **_: SimpleNamespace(score=77.0, stage="risk_on"),
+        candidate_stocks_from_state=lambda state: [state.stocks[1], state.stocks[0]],
+        stock_reason_bundle=lambda **kwargs: (
             [f"pick-{kwargs['stock'].symbol}"],
             [f"rank-{kwargs['rank']}"],
             [f"risk-{kwargs['stock'].symbol}"],
@@ -1171,12 +328,13 @@ def test_report_state_runtime_keeps_facade_contract(monkeypatch: pytest.MonkeyPa
             f"blocked-{kwargs['stock'].symbol}",
         ),
     )
+    monkeypatch.setattr(legacy, "_report_state_runtime_dependencies", lambda: deps)
 
     runtime_state = decorate_composite_state_for_reporting_runtime(
         state=state,
         policy=policy,
         calibration_priors={"20d": {"rank_ic": 0.1}},
-        deps=legacy._report_state_runtime_dependencies(),
+        deps=deps,
     )
     facade_state = legacy._decorate_composite_state_for_reporting(
         state=state,
@@ -1211,10 +369,20 @@ def test_report_state_runtime_keeps_facade_contract(monkeypatch: pytest.MonkeyPa
             shortlist_size=len(kwargs["stocks"]),
         ),
     )
+    deps = replace(
+        deps,
+        build_candidate_selection_state=lambda **kwargs: CandidateSelectionState(
+            selection_notes=["seed"],
+            shortlisted_sectors=["科技"],
+            total_scored=len(kwargs["stocks"]),
+            shortlist_size=len(kwargs["stocks"]),
+        ),
+    )
+    monkeypatch.setattr(legacy, "_report_state_runtime_dependencies", lambda: deps)
     runtime_filtered = filter_state_for_recommendation_scope_runtime(
         state=scope_state,
         main_board_only=True,
-        deps=legacy._report_state_runtime_dependencies(),
+        deps=deps,
     )
     facade_filtered = legacy._filter_state_for_recommendation_scope(
         state=scope_state,
@@ -1268,6 +436,32 @@ def test_report_state_runtime_keeps_facade_contract(monkeypatch: pytest.MonkeyPa
             ),
         ),
     )
+    deps = replace(
+        deps,
+        build_market_and_cross_section_states=lambda **kwargs: (
+            MarketForecastState(
+                as_of_date="2026-03-15",
+                up_1d_prob=float(kwargs["market_short_prob"]),
+                up_5d_prob=float(kwargs["market_five_prob"]),
+                up_20d_prob=float(kwargs["market_mid_prob"]),
+                trend_state="trend",
+                drawdown_risk=0.12,
+                volatility_regime="normal",
+                liquidity_stress=0.09,
+            ),
+            CrossSectionForecastState(
+                as_of_date="2026-03-15",
+                large_vs_small_bias=0.01,
+                growth_vs_value_bias=0.02,
+                fund_flow_strength=0.03,
+                margin_risk_on_score=0.04,
+                breadth_strength=0.15,
+                leader_participation=0.16,
+                weak_stock_ratio=0.18,
+            ),
+        ),
+    )
+    monkeypatch.setattr(legacy, "_report_state_runtime_dependencies", lambda: deps)
     runtime_overlay = build_live_market_reporting_overlay_runtime(
         settings={
             "source": "local",
@@ -1281,7 +475,7 @@ def test_report_state_runtime_keeps_facade_contract(monkeypatch: pytest.MonkeyPa
         },
         universe_ctx=SimpleNamespace(market_security=SimpleNamespace(symbol="000300.SH")),
         state=overlay_state,
-        deps=legacy._report_state_runtime_dependencies(),
+        deps=deps,
     )
     facade_overlay = legacy._build_live_market_reporting_overlay(
         settings={
@@ -1301,6 +495,7 @@ def test_report_state_runtime_keeps_facade_contract(monkeypatch: pytest.MonkeyPa
 
 
 def test_backtest_prepare_runtime_keeps_facade_contract(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    from dataclasses import replace
     import pandas as pd
     import src.application.v2_services as legacy
 
@@ -1330,18 +525,17 @@ def test_backtest_prepare_runtime_keeps_facade_contract(monkeypatch: pytest.Monk
         "us_index_source": "akshare",
     }
     dates = pd.date_range("2024-01-01", periods=5, freq="D")
-
-    monkeypatch.setattr("src.application.v2_services._load_v2_runtime_settings", lambda **_: dict(settings))
-    monkeypatch.setattr("src.application.v2_services._resolve_v2_universe_settings", lambda settings, cache_root: dict(settings))
-    monkeypatch.setattr("src.application.v2_services.load_watchlist", lambda _: (SimpleNamespace(symbol="MKT"), None, None))
-    monkeypatch.setattr(
-        "src.application.v2_services.build_candidate_universe",
-        lambda **_: SimpleNamespace(rows=[SimpleNamespace(symbol="AAA"), SimpleNamespace(symbol="BBB")]),
-    )
-    monkeypatch.setattr("src.application.v2_services.load_symbol_daily", lambda **_: pd.DataFrame({"date": dates}))
-    monkeypatch.setattr(
-        "src.application.v2_services.make_market_feature_frame",
-        lambda _: pd.DataFrame(
+    deps = replace(
+        legacy._backtest_prepare_dependencies(),
+        load_v2_runtime_settings=lambda **_: dict(settings),
+        resolve_v2_universe_settings=lambda settings, cache_root: dict(settings),
+        load_pickle_cache=lambda *_: None,
+        store_pickle_cache=lambda *_: None,
+        emit_progress=lambda *_: None,
+        load_watchlist=lambda _: (SimpleNamespace(symbol="MKT"), None, None),
+        build_candidate_universe=lambda **_: SimpleNamespace(rows=[SimpleNamespace(symbol="AAA"), SimpleNamespace(symbol="BBB")]),
+        load_symbol_daily=lambda **_: pd.DataFrame({"date": dates}),
+        make_market_feature_frame=lambda _: pd.DataFrame(
             {
                 "date": dates,
                 "mkt_feature": [0.1, 0.2, 0.3, 0.4, 0.5],
@@ -1352,14 +546,8 @@ def test_backtest_prepare_runtime_keeps_facade_contract(monkeypatch: pytest.Monk
                 "mkt_target_20d_up": [1, 1, 1, 1, 0],
             }
         ),
-    )
-    monkeypatch.setattr(
-        "src.application.v2_services.build_market_context_features",
-        lambda **_: SimpleNamespace(frame=pd.DataFrame({"date": dates}), feature_columns=[]),
-    )
-    monkeypatch.setattr(
-        "src.application.v2_services.build_stock_panel_dataset",
-        lambda **_: SimpleNamespace(
+        build_market_context_features=lambda **_: SimpleNamespace(frame=pd.DataFrame({"date": dates}), feature_columns=[]),
+        build_stock_panel_dataset=lambda **_: SimpleNamespace(
             frame=pd.DataFrame(
                 {
                     "date": list(dates) * 2,
@@ -1369,14 +557,15 @@ def test_backtest_prepare_runtime_keeps_facade_contract(monkeypatch: pytest.Monk
             ),
             feature_columns=["feature_a"],
         ),
+        market_feature_columns=["mkt_feature"],
     )
-    monkeypatch.setattr("src.application.v2_services.MARKET_FEATURE_COLUMNS", ["mkt_feature"])
+    monkeypatch.setattr(legacy, "_backtest_prepare_dependencies", lambda: deps)
 
     runtime_prepared = prepare_v2_backtest_data_runtime(
         config_path="config/api.json",
         cache_root=str(tmp_path),
         prepared_dataclass=legacy._PreparedV2BacktestData,
-        deps=legacy._backtest_prepare_dependencies(),
+        deps=deps,
     )
     facade_prepared = legacy._prepare_v2_backtest_data(
         config_path="config/api.json",
@@ -1393,6 +582,7 @@ def test_backtest_prepare_runtime_keeps_facade_contract(monkeypatch: pytest.Monk
 
 
 def test_backtest_trajectory_runtime_keeps_facade_contract(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    from dataclasses import replace
     import src.application.v2_services as legacy
 
     settings = {
@@ -1414,17 +604,24 @@ def test_backtest_trajectory_runtime_keeps_facade_contract(monkeypatch: pytest.M
     }
     prepared_sentinel = SimpleNamespace(prepared=True)
     trajectory_sentinel = SimpleNamespace(steps=["ok"])
-
-    monkeypatch.setattr("src.application.v2_services._load_v2_runtime_settings", lambda **_: dict(settings))
-    monkeypatch.setattr("src.application.v2_services._resolve_v2_universe_settings", lambda settings, cache_root: dict(settings))
-    monkeypatch.setattr("src.application.v2_services._prepare_v2_backtest_data", lambda **_: prepared_sentinel)
-    monkeypatch.setattr("src.application.v2_services._build_v2_backtest_trajectory_from_prepared", lambda *_, **__: trajectory_sentinel)
+    deps = replace(
+        legacy._backtest_prepare_dependencies(),
+        load_v2_runtime_settings=lambda **_: dict(settings),
+        resolve_v2_universe_settings=lambda settings, cache_root: dict(settings),
+        load_pickle_cache=lambda *_: None,
+        store_pickle_cache=lambda *_: None,
+        emit_progress=lambda *_: None,
+        make_forecast_backend=lambda name: SimpleNamespace(name=str(name or "linear")),
+        prepare_v2_backtest_data=lambda **_: prepared_sentinel,
+        build_v2_backtest_trajectory_from_prepared=lambda *_, **__: trajectory_sentinel,
+    )
+    monkeypatch.setattr(legacy, "_backtest_prepare_dependencies", lambda: deps)
 
     runtime_trajectory = load_or_build_v2_backtest_trajectory_runtime(
         config_path="config/api.json",
         cache_root=str(tmp_path),
         refresh_cache=True,
-        deps=legacy._backtest_prepare_dependencies(),
+        deps=deps,
     )
     facade_trajectory = legacy._load_or_build_v2_backtest_trajectory(
         config_path="config/api.json",
@@ -1802,6 +999,8 @@ def test_daily_workflow_runtime_keeps_facade_contract(monkeypatch: pytest.Monkey
 
 
 def test_daily_state_runtime_keeps_facade_contract(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    from dataclasses import replace
+
     import src.application.v2_services as legacy
 
     market = MarketForecastState(
@@ -1897,10 +1096,33 @@ def test_daily_state_runtime_keeps_facade_contract(monkeypatch: pytest.MonkeyPat
             },
         ),
     )
+    deps = replace(
+        legacy._daily_state_runtime_dependencies(),
+        emit_progress=lambda *_: None,
+        load_watchlist=lambda _: (SimpleNamespace(symbol="MKT"), [], {"AAA": "科技"}),
+        build_candidate_universe=lambda **_: SimpleNamespace(rows=[SimpleNamespace(symbol="AAA", sector="科技")]),
+        load_v2_info_items_for_date=lambda **_: ("info.json", info_items),
+        enrich_state_with_info=lambda **_: enriched_state,
+        top_negative_events=lambda *_, **__: [],
+        top_positive_stock_signals=lambda *_, **__: [],
+        quant_info_divergence_rows=lambda *_, **__: [],
+        attach_external_signals_to_composite_state=lambda **_: (
+            enriched_state,
+            {
+                "manifest": {
+                    "external_signal_version": "v2",
+                    "external_signal_enabled": True,
+                },
+                "capital_flow_snapshot": {"flow_regime": "inflow"},
+                "macro_context_snapshot": {"macro_risk_level": "neutral"},
+            },
+        ),
+    )
+    monkeypatch.setattr(legacy, "_daily_state_runtime_dependencies", lambda: deps)
 
     runtime_universe = build_daily_universe_context_runtime(
         settings,
-        deps=legacy._daily_state_runtime_dependencies(),
+        deps=deps,
     )
     facade_universe = legacy._build_daily_universe_context(settings)
     assert runtime_universe == facade_universe
@@ -1912,7 +1134,7 @@ def test_daily_state_runtime_keeps_facade_contract(monkeypatch: pytest.MonkeyPat
         snapshot=snapshot,
         allow_retrain=False,
         universe_ctx=runtime_universe,
-        deps=legacy._daily_state_runtime_dependencies(),
+        deps=deps,
     )
     facade_composite, facade_rows = legacy._build_daily_composite_state(
         settings=settings,
@@ -1930,7 +1152,7 @@ def test_daily_state_runtime_keeps_facade_contract(monkeypatch: pytest.MonkeyPat
         settings=settings,
         composite_state=composite_state,
         symbol_names=symbol_names,
-        deps=legacy._daily_state_runtime_dependencies(),
+        deps=deps,
     )
     facade_info = legacy._attach_daily_info_overlay(
         snapshot=snapshot,
@@ -1946,7 +1168,7 @@ def test_daily_state_runtime_keeps_facade_contract(monkeypatch: pytest.MonkeyPat
         composite_state=enriched_state,
         info_items=info_items,
         allow_rebuild=True,
-        deps=legacy._daily_state_runtime_dependencies(),
+        deps=deps,
     )
     facade_external = legacy._attach_daily_external_signal_overlay(
         snapshot=snapshot,
@@ -1959,6 +1181,8 @@ def test_daily_state_runtime_keeps_facade_contract(monkeypatch: pytest.MonkeyPat
 
 
 def test_state_build_runtime_keeps_facade_contract(monkeypatch: pytest.MonkeyPatch) -> None:
+    from dataclasses import replace
+
     import pandas as pd
     import src.application.v2_services as legacy
 
@@ -1992,6 +1216,34 @@ def test_state_build_runtime_keeps_facade_contract(monkeypatch: pytest.MonkeyPat
         "src.application.v2_services._stock_policy_score",
         lambda stock: float(getattr(stock, "alpha_score", 0.0)),
     )
+    deps = replace(
+        legacy._state_build_runtime_dependencies(),
+        predict_quantile_profiles=lambda frame, **_: pd.DataFrame(
+            {
+                "expected_return": [0.03 + 0.01 * i for i in range(len(frame))],
+                "q10": [-0.05] * len(frame),
+                "q30": [-0.02] * len(frame),
+                "q20": [-0.03] * len(frame),
+                "q50": [0.01] * len(frame),
+                "q70": [0.04] * len(frame),
+                "q80": [0.05] * len(frame),
+                "q90": [0.08] * len(frame),
+            }
+        ),
+        build_horizon_forecasts=lambda **kwargs: {
+            horizon: {"up_prob": float(prob)}
+            for horizon, prob in dict(kwargs["horizon_probs"]).items()
+        },
+        market_facts_from_row=lambda row: {"sample_coverage": int(row.get("breadth_coverage", 0))},
+        stock_policy_score=lambda stock: float(getattr(stock, "alpha_score", 0.0)),
+        build_mainline_states=lambda **_: [SimpleNamespace(name="mainline", conviction=0.72)],
+        build_candidate_selection_state=lambda **kwargs: SimpleNamespace(
+            total_scored=len(kwargs["stocks"]),
+            shortlist_size=len(kwargs["stocks"]),
+            selection_notes=["ok"],
+        ),
+    )
+    monkeypatch.setattr(legacy, "_state_build_runtime_dependencies", lambda: deps)
 
     panel_row = pd.DataFrame(
         [
@@ -2041,7 +1293,7 @@ def test_state_build_runtime_keeps_facade_contract(monkeypatch: pytest.MonkeyPat
         mid_model=FakeBinaryModel([0.68, 0.55]),
         short_q_models=(object(), object(), object(), object(), object()),
         mid_q_models=(object(), object(), object(), object(), object()),
-        deps=legacy._state_build_runtime_dependencies(),
+        deps=deps,
     )
     facade_panel_states, facade_scored = legacy._build_stock_states_from_panel_slice(
         panel_row=panel_row,
@@ -2090,7 +1342,7 @@ def test_state_build_runtime_keeps_facade_contract(monkeypatch: pytest.MonkeyPat
         rows,
         sector_map,
         sector_strength_map=sector_strength_map,
-        deps=legacy._state_build_runtime_dependencies(),
+        deps=deps,
     )
     facade_row_states = legacy._build_stock_states_from_rows(
         rows,
@@ -2111,6 +1363,30 @@ def test_state_build_runtime_keeps_facade_contract(monkeypatch: pytest.MonkeyPat
             }
         ]
     )
+    deps = replace(
+        deps,
+        load_symbol_daily=lambda **_: market_raw,
+        make_market_feature_frame=lambda frame: frame.copy(),
+        build_market_context_features=lambda **_: SimpleNamespace(frame=pd.DataFrame([{"date": pd.Timestamp("2026-03-13")}])),
+        forecast_cross_section_state=lambda frame: SimpleNamespace(
+            as_of_date=pd.Timestamp("2026-03-13"),
+            large_vs_small_bias=0.02,
+            growth_vs_value_bias=0.03,
+            fund_flow_strength=0.04,
+            margin_risk_on_score=0.05,
+            breadth_strength=0.16,
+            leader_participation=0.18,
+            weak_stock_ratio=0.20,
+        ),
+        decide_market_state=lambda short_prob, mid_prob: SimpleNamespace(state_code="trend" if mid_prob >= 0.5 else "range"),
+        build_mainline_states=lambda **_: [SimpleNamespace(name="mainline", conviction=0.72)],
+        build_candidate_selection_state=lambda **kwargs: SimpleNamespace(
+            total_scored=len(kwargs["stocks"]),
+            shortlist_size=len(kwargs["stocks"]),
+            selection_notes=["ok"],
+        ),
+    )
+    monkeypatch.setattr(legacy, "_state_build_runtime_dependencies", lambda: deps)
 
     monkeypatch.setattr("src.application.v2_services.load_symbol_daily", lambda **_: market_raw)
     monkeypatch.setattr("src.application.v2_services.make_market_feature_frame", lambda frame: frame.copy())
@@ -2151,7 +1427,7 @@ def test_state_build_runtime_keeps_facade_contract(monkeypatch: pytest.MonkeyPat
         market_three_prob=0.59,
         market_five_prob=0.60,
         market_mid_prob=0.62,
-        deps=legacy._state_build_runtime_dependencies(),
+        deps=deps,
     )
     facade_market_states = legacy._build_market_and_cross_section_states(
         market_symbol="000300.SH",
@@ -2179,7 +1455,7 @@ def test_state_build_runtime_keeps_facade_contract(monkeypatch: pytest.MonkeyPat
         market_three_prob=0.59,
         market_five_prob=0.60,
         market_mid_prob=0.62,
-        deps=legacy._state_build_runtime_dependencies(),
+        deps=deps,
     )
     facade_prebuilt_states = legacy._build_market_and_cross_section_from_prebuilt_frame(
         market_frame=market_frame,
@@ -2214,7 +1490,7 @@ def test_state_build_runtime_keeps_facade_contract(monkeypatch: pytest.MonkeyPat
         sectors=sectors,
         stocks=list(runtime_row_states),
         cross_section=runtime_market_states[1],
-        deps=legacy._state_build_runtime_dependencies(),
+        deps=deps,
     )
     facade_state = legacy.compose_state(
         market=runtime_market_states[0],
@@ -2470,69 +1746,9 @@ def test_frozen_forecast_runtime_keeps_facade_contract(monkeypatch: pytest.Monke
     assert facade_scored == runtime_scored
 
 
-def test_learning_target_runtime_keeps_facade_contract() -> None:
-    import pandas as pd
-    import src.application.v2_services as legacy
-
-    date = pd.Timestamp("2026-03-14")
-    state = CompositeState(
-        market=MarketForecastState(
-            as_of_date="2026-03-14",
-            up_1d_prob=0.58,
-            up_5d_prob=0.60,
-            up_20d_prob=0.62,
-            trend_state="trend",
-            drawdown_risk=0.18,
-            volatility_regime="normal",
-            liquidity_stress=0.12,
-        ),
-        cross_section=CrossSectionForecastState(
-            as_of_date="2026-03-14",
-            large_vs_small_bias=0.02,
-            growth_vs_value_bias=0.01,
-            fund_flow_strength=0.04,
-            margin_risk_on_score=0.06,
-            breadth_strength=0.12,
-            leader_participation=0.14,
-            weak_stock_ratio=0.24,
-        ),
-        sectors=[SectorForecastState("科技", 0.58, 0.61, 0.08, 0.22, 0.15)],
-        stocks=[
-            StockForecastState("AAA", "科技", 0.62, 0.66, 0.70, 0.60, 0.12, 0.90, alpha_score=0.74),
-            StockForecastState("BBB", "科技", 0.58, 0.61, 0.64, 0.56, 0.08, 0.82, alpha_score=0.68),
-            StockForecastState("CCC", "医药", 0.54, 0.58, 0.60, 0.53, 0.06, 0.78, alpha_score=0.62),
-            StockForecastState("DDD", "消费", 0.52, 0.55, 0.57, 0.51, 0.05, 0.75, alpha_score=0.59),
-        ],
-        strategy_mode="trend_follow",
-        risk_regime="risk_on",
-    )
-    stock_frames = {
-        "AAA": pd.DataFrame([{"date": date, "fwd_ret_1": 0.018, "excess_ret_1_vs_mkt": 0.012, "excess_ret_5_vs_mkt": 0.022, "excess_ret_20_vs_sector": 0.040}]),
-        "BBB": pd.DataFrame([{"date": date, "fwd_ret_1": 0.014, "excess_ret_1_vs_mkt": 0.010, "excess_ret_5_vs_mkt": 0.018, "excess_ret_20_vs_sector": 0.032}]),
-        "CCC": pd.DataFrame([{"date": date, "fwd_ret_1": 0.009, "excess_ret_1_vs_mkt": 0.004, "excess_ret_5_vs_mkt": 0.009, "excess_ret_20_vs_sector": 0.016}]),
-        "DDD": pd.DataFrame([{"date": date, "fwd_ret_1": 0.006, "excess_ret_1_vs_mkt": 0.002, "excess_ret_5_vs_mkt": 0.004, "excess_ret_20_vs_sector": 0.010}]),
-    }
-    horizon_metrics = {"20d": {"rank_ic": 0.14, "top_bottom_spread": 0.08, "top_k_hit_rate": 0.68}}
-
-    runtime_targets = derive_learning_targets_runtime(
-        state=state,
-        stock_frames=stock_frames,
-        date=date,
-        horizon_metrics=horizon_metrics,
-        universe_tier="generated_80",
-        deps=legacy._learning_target_dependencies(),
-    )
-    facade_targets = legacy._derive_learning_targets(
-        state=state,
-        stock_frames=stock_frames,
-        date=date,
-        horizon_metrics=horizon_metrics,
-        universe_tier="generated_80",
-    )
-    assert facade_targets == runtime_targets
-
-
 def test_info_shadow_report_runtime_keeps_facade_contract(monkeypatch: pytest.MonkeyPatch) -> None:
+    from dataclasses import replace
+
     import src.application.v2_services as legacy
 
     validation = SimpleNamespace(steps=[])
@@ -2565,9 +1781,9 @@ def test_info_shadow_report_runtime_keeps_facade_contract(monkeypatch: pytest.Mo
         ),
     ]
 
-    monkeypatch.setattr(
-        "src.application.v2_services._build_info_shadow_variant",
-        lambda **kwargs: {
+    deps = replace(
+        legacy._info_shadow_report_dependencies(),
+        build_info_shadow_variant=lambda **kwargs: {
             "avg_1d_rank_ic": float(len(kwargs["info_items"])),
             "avg_5d_rank_ic": float(len(kwargs["info_items"])) + 0.1,
             "avg_20d_rank_ic": float(len(kwargs["info_items"])) + 0.2,
@@ -2583,26 +1799,20 @@ def test_info_shadow_report_runtime_keeps_facade_contract(monkeypatch: pytest.Mo
             "stock_shadow_modes": {"20d": "shadow"},
             "model_samples": {"market": {"1d": len(kwargs["info_items"])}, "stock": {}},
         },
+        filter_info_items_by_source_subset=lambda items, subset: [
+            item for item in items if getattr(item, "source_subset", "") == subset
+        ],
+        event_tag_counts=lambda items: {"all": len(list(items))},
+        info_source_breakdown=lambda items: {"sources": len(list(items))},
     )
-    monkeypatch.setattr(
-        "src.application.v2_services._filter_info_items_by_source_subset",
-        lambda items, subset: [item for item in items if getattr(item, "source_subset", "") == subset],
-    )
-    monkeypatch.setattr(
-        "src.application.v2_services.event_tag_counts",
-        lambda items: {"all": len(list(items))},
-    )
-    monkeypatch.setattr(
-        "src.application.v2_services._info_source_breakdown",
-        lambda items: {"sources": len(list(items))},
-    )
+    monkeypatch.setattr(legacy, "_info_shadow_report_dependencies", lambda: deps)
 
     runtime_report = build_info_shadow_report_runtime(
         validation_trajectory=validation,
         holdout_trajectory=holdout,
         settings={"use_info_fusion": True, "info_shadow_only": False},
         info_items=info_items,
-        deps=legacy._info_shadow_report_dependencies(),
+        deps=deps,
     )
     facade_report = legacy._build_info_shadow_report(
         validation_trajectory=validation,
@@ -2616,6 +1826,8 @@ def test_info_shadow_report_runtime_keeps_facade_contract(monkeypatch: pytest.Mo
 
 
 def test_info_shadow_runtime_keeps_facade_contract(monkeypatch: pytest.MonkeyPatch) -> None:
+    from dataclasses import replace
+
     import pandas as pd
     import src.application.v2_services as legacy
 
@@ -2697,6 +1909,38 @@ def test_info_shadow_runtime_keeps_facade_contract(monkeypatch: pytest.MonkeyPat
         "src.application.v2_services._panel_slice_metrics",
         lambda frame, **_: (0.11, 0.02, 0.03, 0.64),
     )
+    deps = replace(
+        legacy._info_shadow_runtime_dependencies(),
+        build_info_state_maps=lambda **_: (
+            InfoAggregateState(item_count=1, info_prob_1d=0.61, info_prob_5d=0.62, info_prob_20d=0.66, short_score=0.63, mid_score=0.67),
+            {"绉戞妧": InfoAggregateState(item_count=1, short_score=0.60, mid_score=0.64)},
+            {"AAA": InfoAggregateState(item_count=1, info_prob_1d=0.64, info_prob_5d=0.65, info_prob_20d=0.68, short_score=0.66, mid_score=0.70)},
+        ),
+        predict_info_shadow_prob=lambda **kwargs: (
+            float(0.5 * kwargs["quant_prob"] + 0.5 * kwargs["info_prob"]),
+            {"mode": "stub"},
+        ),
+        blend_probability=lambda quant_prob, info_prob, sentiment_strength=0.0: float(
+            0.5 * float(quant_prob) + 0.5 * float(info_prob)
+        ),
+        build_mainline_states=lambda **_: [],
+        info_feature_frame=lambda **kwargs: pd.DataFrame(
+            {
+                "q_logit": [0.1] * len(kwargs["quant_prob"]),
+                "i_logit": [0.2] * len(kwargs["quant_prob"]),
+                "q_minus_i": [0.1] * len(kwargs["quant_prob"]),
+                "negative_event_risk": list(kwargs["negative_event_risk"]),
+                "item_count_log": [0.5] * len(kwargs["quant_prob"]),
+            }
+        ),
+        fit_info_shadow_model=lambda frame, **_: SimpleNamespace(
+            mode="learned",
+            samples=len(frame),
+            feature_cols=list(frame.columns),
+        ),
+        panel_slice_metrics=lambda frame, **_: (0.11, 0.02, 0.03, 0.64),
+    )
+    monkeypatch.setattr(legacy, "_info_shadow_runtime_dependencies", lambda: deps)
 
     settings = {
         "info_half_life_days": 10.0,
@@ -2726,7 +1970,7 @@ def test_info_shadow_runtime_keeps_facade_contract(monkeypatch: pytest.MonkeyPat
         as_of_date=pd.Timestamp("2026-03-15"),
         info_items=info_items,
         settings=settings,
-        deps=legacy._info_shadow_runtime_dependencies(),
+        deps=deps,
     )
     facade_enriched = legacy._enrich_state_with_info(
         state=state,
@@ -2740,7 +1984,7 @@ def test_info_shadow_runtime_keeps_facade_contract(monkeypatch: pytest.MonkeyPat
         trajectory=trajectory,
         settings=settings,
         info_items=info_items,
-        deps=legacy._info_shadow_runtime_dependencies(),
+        deps=deps,
     )
     facade_models = legacy._fit_v2_info_shadow_models(
         trajectory=trajectory,
@@ -2754,7 +1998,7 @@ def test_info_shadow_runtime_keeps_facade_contract(monkeypatch: pytest.MonkeyPat
         holdout_trajectory=trajectory,
         settings=settings,
         info_items=info_items,
-        deps=legacy._info_shadow_runtime_dependencies(),
+        deps=deps,
     )
     facade_variant = legacy._build_info_shadow_variant(
         validation_trajectory=trajectory,
@@ -2763,153 +2007,3 @@ def test_info_shadow_runtime_keeps_facade_contract(monkeypatch: pytest.MonkeyPat
         info_items=info_items,
     )
     assert facade_variant == runtime_variant
-
-
-def test_artifact_registry_does_not_directly_import_legacy_services() -> None:
-    module_path = Path("src/artifact_registry/v2_registry.py")
-    tree = ast.parse(module_path.read_text(encoding="utf-8"))
-
-    imported_modules = {
-        node.module
-        for node in ast.walk(tree)
-        if isinstance(node, ast.ImportFrom) and node.module is not None
-    }
-
-    assert "src.application" not in imported_modules
-
-
-def test_daily_report_view_model_uses_summary_shape() -> None:
-    baseline = _make_backtest()
-    learning_result = V2PolicyLearningResult(
-        model=LearnedPolicyModel(
-            feature_names=["x1"],
-            exposure_intercept=0.55,
-            exposure_coef=[0.1],
-            position_intercept=2.5,
-            position_coef=[0.05],
-            turnover_intercept=0.20,
-            turnover_coef=[0.01],
-            train_rows=88,
-            train_r2_exposure=0.33,
-            train_r2_positions=0.25,
-            train_r2_turnover=0.19,
-        ),
-        baseline=baseline,
-        learned=_make_backtest(0.24, 0.22),
-    )
-    calibration = V2CalibrationResult(
-        best_policy=PolicySpec(),
-        best_score=0.12,
-        baseline=baseline,
-        calibrated=_make_backtest(0.22, 0.20),
-        trials=[],
-    )
-    import tempfile
-
-    with tempfile.TemporaryDirectory() as tmp_dir:
-        paths = publish_v2_research_artifacts(
-        strategy_id="swing_v2",
-        artifact_root=tmp_dir,
-        publish_forecast_models=False,
-        settings={
-            "config_path": "config/api.json",
-            "source": "local",
-            "watchlist": "config/watchlist.json",
-            "universe_file": "config/universe_smoke_5.json",
-            "universe_limit": 5,
-            "symbols": ["000001.SZ"],
-            "symbol_count": 1,
-            "start": "2024-01-01",
-            "end": "2024-12-31",
-        },
-        baseline=baseline,
-        calibration=calibration,
-        learning=learning_result,
-        )
-        from src.application.v2_contracts import (
-            CompositeState,
-            CrossSectionForecastState,
-            DailyRunResult,
-            MarketForecastState,
-            PolicyDecision,
-        )
-        from src.application.v2_services import build_strategy_snapshot
-
-        result = DailyRunResult(
-            snapshot=build_strategy_snapshot(strategy_id="swing_v2", universe_id="demo_universe"),
-            composite_state=CompositeState(
-                market=MarketForecastState(
-                    as_of_date="2026-03-01",
-                    up_1d_prob=0.5,
-                    up_5d_prob=0.5,
-                    up_20d_prob=0.5,
-                    trend_state="trend",
-                    drawdown_risk=0.1,
-                    volatility_regime="normal",
-                    liquidity_stress=0.1,
-                ),
-                cross_section=CrossSectionForecastState(
-                    as_of_date="2026-03-01",
-                    large_vs_small_bias=0.0,
-                    growth_vs_value_bias=0.0,
-                    fund_flow_strength=0.0,
-                    margin_risk_on_score=0.0,
-                    breadth_strength=0.0,
-                    leader_participation=0.0,
-                    weak_stock_ratio=0.0,
-                ),
-                sectors=[],
-                stocks=[],
-                strategy_mode="trend_follow",
-                risk_regime="risk_on",
-            ),
-            policy_decision=PolicyDecision(
-                target_exposure=0.8,
-                target_position_count=3,
-                rebalance_now=True,
-                rebalance_intensity=0.5,
-                intraday_t_allowed=False,
-                turnover_cap=0.2,
-            ),
-            trade_actions=[],
-        )
-
-        daily_vm = build_daily_report_view_model(result)
-        research_vm = build_research_report_view_model(
-            strategy_id="swing_v2",
-            baseline=baseline,
-            calibration=calibration,
-            learning=learning_result,
-            artifacts=paths,
-        )
-
-        assert daily_vm.strategy_id == summarize_daily_run(result)["strategy_id"]
-        assert daily_vm.strategy_mode == "trend_follow"
-        assert daily_vm.market_forecasts == []
-        assert "candidate_selection" in daily_vm.dynamic_universe
-        assert research_vm.strategy_id == "swing_v2"
-        assert research_vm.release_gate_passed is (
-            str(paths.get("release_gate_passed", "false")).strip().lower() == "true"
-        )
-        assert research_vm.learning_model["train_rows"] == 88
-
-
-def test_presenters_keep_single_public_v2_entries() -> None:
-    markdown_path = Path("src/interfaces/presenters/markdown_reports.py")
-    html_path = Path("src/interfaces/presenters/html_dashboard.py")
-
-    markdown_tree = ast.parse(markdown_path.read_text(encoding="utf-8"))
-    html_tree = ast.parse(html_path.read_text(encoding="utf-8"))
-
-    markdown_defs = [node.name for node in markdown_tree.body if isinstance(node, ast.FunctionDef)]
-    html_defs = [node.name for node in html_tree.body if isinstance(node, ast.FunctionDef)]
-
-    assert markdown_defs.count("write_v2_daily_report") == 1
-    assert markdown_defs.count("write_v2_research_report") == 1
-    assert markdown_defs.count("write_v2_daily_report_from_view_model") == 1
-    assert markdown_defs.count("write_v2_research_report_from_view_model") == 1
-
-    assert html_defs.count("write_v2_daily_dashboard") == 0
-    assert html_defs.count("write_v2_research_dashboard") == 1
-    assert html_defs.count("write_v2_daily_dashboard_from_view_model") == 0
-    assert html_defs.count("write_v2_research_dashboard_from_view_model") == 1

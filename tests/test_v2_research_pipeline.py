@@ -9,6 +9,8 @@ import pandas as pd
 import pytest
 
 import src.application.v2_services as legacy_services
+from src.application import v2_policy_runtime as policy_runtime
+from src.application import v2_learning_target_runtime as learning_target_runtime
 from src.application import v2_policy_learning_runtime as policy_learning_runtime
 from src.application.v2_contracts import (
     CapitalFlowState,
@@ -37,21 +39,21 @@ from src.application.v2_facade_support_runtime import (
     sha256_file as _sha256_file,
 )
 from src.application.v2_feature_runtime import (
+    make_forecast_backend as _make_forecast_backend,
     tensorize_temporal_frame as _tensorize_temporal_frame,
 )
 from src.application.v2_forecast_model_runtime import predict_quantile_profiles as _predict_quantile_profiles
 from src.application.v2_runtime_primitives import is_main_board_symbol as _is_main_board_symbol
+from src.reporting import report_state_runtime
+from src.application.v2_runtime_settings import (
+    load_v2_runtime_settings as _load_v2_runtime_settings,
+    resolve_v2_universe_settings as _resolve_v2_universe_settings,
+)
 from src.application.v2_services import (
     _build_daily_snapshot_context,
-    _derive_learning_targets,
-    _filter_state_for_recommendation_scope,
     _prepare_v2_backtest_data,
-    _load_v2_runtime_settings,
     calibrate_v2_policy,
     _load_or_build_v2_backtest_trajectory,
-    _resolve_v2_universe_settings,
-    _make_forecast_backend,
-    _policy_spec_from_model,
     load_published_v2_policy_model,
     publish_v2_research_artifacts,
     run_daily_v2_live,
@@ -177,7 +179,11 @@ def test_policy_model_projects_state_into_valid_policy_spec() -> None:
         train_r2_turnover=0.18,
     )
 
-    spec = _policy_spec_from_model(state=state, model=model)
+    spec = policy_runtime.policy_spec_from_model(
+        state=state,
+        model=model,
+        deps=legacy_services._policy_runtime_dependencies(),
+    )
 
     assert isinstance(spec, PolicySpec)
     assert 0.20 <= spec.risk_on_exposure <= 0.95
@@ -296,7 +302,11 @@ def test_filter_state_for_recommendation_scope_keeps_only_main_board() -> None:
         ],
     )
 
-    filtered = _filter_state_for_recommendation_scope(state=state, main_board_only=True)
+    filtered = report_state_runtime.filter_state_for_recommendation_scope(
+        state=state,
+        main_board_only=True,
+        deps=legacy_services._report_state_runtime_dependencies(),
+    )
 
     assert [stock.symbol for stock in filtered.stocks] == ["600000.SH"]
     assert filtered.candidate_selection.shortlisted_symbols == ["600000.SH"]
@@ -380,8 +390,6 @@ def test_explicit_universe_file_overrides_generated_base_for_dynamic_generated_t
             ),
         )
 
-    monkeypatch.setattr("src.application.v2_services.generate_dynamic_universe", fake_generate_dynamic_universe)
-
     resolved = _resolve_v2_universe_settings(
         settings={
             "universe_tier": "generated_300",
@@ -394,6 +402,7 @@ def test_explicit_universe_file_overrides_generated_base_for_dynamic_generated_t
             "end": "2026-03-13",
         },
         cache_root=str(tmp_path / "cache"),
+        generate_dynamic_universe_fn=fake_generate_dynamic_universe,
     )
 
     assert captured["universe_file"] == "config/universe_all_a_tushare_live_20260313.json"
@@ -427,8 +436,6 @@ def test_resolve_v2_universe_settings_passes_main_board_only_flag(
             ),
         )
 
-    monkeypatch.setattr("src.application.v2_services.generate_dynamic_universe", fake_generate_dynamic_universe)
-
     _resolve_v2_universe_settings(
         settings={
             "universe_tier": "generated_300",
@@ -441,6 +448,7 @@ def test_resolve_v2_universe_settings_passes_main_board_only_flag(
             "main_board_only_universe": True,
         },
         cache_root=str(tmp_path / "cache"),
+        generate_dynamic_universe_fn=fake_generate_dynamic_universe,
     )
 
     assert captured["main_board_only"] is True
@@ -516,19 +524,21 @@ def test_generated_80_learning_targets_prefer_realizable_alpha_and_ranking() -> 
         "D1": pd.DataFrame([{"date": date, "fwd_ret_1": 0.026, "excess_ret_1_vs_mkt": -0.005, "excess_ret_5_vs_mkt": -0.007, "excess_ret_20_vs_sector": -0.010}]),
         "D2": pd.DataFrame([{"date": date, "fwd_ret_1": 0.024, "excess_ret_1_vs_mkt": -0.006, "excess_ret_5_vs_mkt": -0.008, "excess_ret_20_vs_sector": -0.012}]),
     }
-    strong_targets = _derive_learning_targets(
+    strong_targets = learning_target_runtime.derive_learning_targets(
         state=strong_state,
         stock_frames=strong_frames,
         date=date,
         horizon_metrics={"20d": {"rank_ic": 0.16, "top_bottom_spread": 0.09, "top_k_hit_rate": 0.72}},
         universe_tier="generated_80",
+        deps=legacy_services._learning_target_dependencies(),
     )
-    weak_targets = _derive_learning_targets(
+    weak_targets = learning_target_runtime.derive_learning_targets(
         state=weak_state,
         stock_frames=weak_frames,
         date=date,
         horizon_metrics={"20d": {"rank_ic": -0.03, "top_bottom_spread": -0.01, "top_k_hit_rate": 0.48}},
         universe_tier="generated_80",
+        deps=legacy_services._learning_target_dependencies(),
     )
 
     assert strong_targets[0] > weak_targets[0]
@@ -2324,8 +2334,8 @@ def test_build_date_slice_index_returns_contiguous_bounds() -> None:
 
 
 def test_make_forecast_backend_accepts_linear_and_deep() -> None:
-    linear_backend = _make_forecast_backend("linear")
-    deep_backend = _make_forecast_backend("deep")
+    linear_backend = _make_forecast_backend("linear", deps=legacy_services._forecast_runtime_dependencies())
+    deep_backend = _make_forecast_backend("deep", deps=legacy_services._forecast_runtime_dependencies())
 
     assert linear_backend.name == "linear"
     assert deep_backend.name == "deep"

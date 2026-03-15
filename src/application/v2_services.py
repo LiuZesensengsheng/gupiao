@@ -4,6 +4,7 @@ import pickle
 import sys
 from dataclasses import asdict
 from datetime import datetime
+from functools import wraps
 from pathlib import Path
 from typing import Iterable
 
@@ -224,24 +225,28 @@ _compose_shadow_stock_score = _v2_facade_support_runtime.compose_shadow_stock_sc
 _build_sector_map_from_state = _v2_facade_support_runtime.build_sector_map_from_state
 
 
-def _enrich_state_with_info(
-    *,
-    state: CompositeState,
-    as_of_date: pd.Timestamp,
-    info_items: list[InfoItem],
-    settings: dict[str, object],
-    stock_models: dict[str, _InfoShadowModel] | None = None,
-    market_models: dict[str, _InfoShadowModel] | None = None,
-) -> CompositeState:
-    return _v2_info_shadow_runtime.enrich_state_with_info(
-        state=state,
-        as_of_date=as_of_date,
-        info_items=info_items,
-        settings=settings,
-        stock_models=stock_models,
-        market_models=market_models,
-        deps=_info_shadow_runtime_dependencies(),
-    )
+def _with_deps(delegate: object, deps_factory: object) -> object:
+    @wraps(delegate)
+    def _wrapped(*args: object, **kwargs: object) -> object:
+        return delegate(*args, deps=deps_factory(), **kwargs)
+
+    return _wrapped
+
+
+def _with_injected_kwargs(delegate: object, kwargs_factory: object) -> object:
+    @wraps(delegate)
+    def _wrapped(*args: object, **kwargs: object) -> object:
+        merged = dict(kwargs)
+        merged.update(kwargs_factory(*args, **kwargs))
+        return delegate(*args, **merged)
+
+    return _wrapped
+
+
+_enrich_state_with_info = _with_deps(
+    _v2_info_shadow_runtime.enrich_state_with_info,
+    lambda: _info_shadow_runtime_dependencies(),
+)
 
 
 def _external_signal_runtime_dependencies() -> _v2_external_signal_runtime.ExternalSignalRuntimeDependencies:
@@ -252,22 +257,10 @@ def _external_signal_runtime_dependencies() -> _v2_external_signal_runtime.Exter
 
 
 _build_external_signal_package_for_date = _v2_external_signal_runtime.build_external_signal_package_for_date
-
-
-def _attach_external_signals_to_composite_state(
-    *,
-    state: CompositeState,
-    settings: dict[str, object],
-    as_of_date: pd.Timestamp,
-    info_items: list[InfoItem],
-) -> tuple[CompositeState, dict[str, object]]:
-    return _v2_external_signal_runtime.attach_external_signals_to_composite_state(
-        state=state,
-        settings=settings,
-        as_of_date=as_of_date,
-        info_items=info_items,
-        deps=_external_signal_runtime_dependencies(),
-    )
+_attach_external_signals_to_composite_state = _with_deps(
+    _v2_external_signal_runtime.attach_external_signals_to_composite_state,
+    _external_signal_runtime_dependencies,
+)
 
 
 _load_json_dict = _v2_registry_runtime.load_json_dict
@@ -284,13 +277,10 @@ _format_elapsed = _v2_facade_support_runtime.format_elapsed
 _policy_feature_names = _v2_policy_feature_runtime.policy_feature_names
 
 
-def _policy_feature_vector(state: CompositeState) -> np.ndarray:
-    return _v2_policy_feature_runtime.policy_feature_vector(
-        state,
-        deps=_policy_feature_runtime_dependencies(),
-    )
-
-
+_policy_feature_vector = _with_deps(
+    _v2_policy_feature_runtime.policy_feature_vector,
+    lambda: _policy_feature_runtime_dependencies(),
+)
 _fit_ridge_regression = _v2_policy_feature_runtime.fit_ridge_regression
 _predict_ridge = _v2_policy_feature_runtime.predict_ridge
 _normalize_coef_vector = _v2_policy_feature_runtime.normalize_coef_vector
@@ -323,26 +313,14 @@ _HORIZON_SCALE = {
 _next_session_label = _v2_runtime_primitives.next_session_label
 
 
-def _blend_quantile_profiles(
-    left: _ReturnQuantileProfile,
-    right: _ReturnQuantileProfile,
-    *,
-    left_weight: float,
-) -> _ReturnQuantileProfile:
-    return _reporting_forecast_support.blend_quantile_profiles(
-        left,
-        right,
-        left_weight=left_weight,
-        deps=_forecast_support_dependencies(),
-    )
-
-
-def _synthetic_quantile_profile(*, prob: float, horizon_key: str) -> _ReturnQuantileProfile:
-    return _reporting_forecast_support.synthetic_quantile_profile(
-        prob=prob,
-        horizon_key=horizon_key,
-        deps=_forecast_support_dependencies(),
-    )
+_blend_quantile_profiles = _with_deps(
+    _reporting_forecast_support.blend_quantile_profiles,
+    lambda: _forecast_support_dependencies(),
+)
+_synthetic_quantile_profile = _with_deps(
+    _reporting_forecast_support.synthetic_quantile_profile,
+    lambda: _forecast_support_dependencies(),
+)
 
 
 def _intrinsic_confidence(
@@ -362,28 +340,10 @@ def _intrinsic_confidence(
     )
 
 
-def _build_horizon_forecasts(
-    *,
-    latest_close: float,
-    horizon_probs: dict[str, float],
-    short_profile: _ReturnQuantileProfile | None,
-    mid_profile: _ReturnQuantileProfile | None,
-    info_state: InfoAggregateState | None = None,
-    calibration_priors: dict[str, dict[str, float]] | None = None,
-    tradability_status: str = "normal",
-) -> dict[str, HorizonForecast]:
-    return _reporting_forecast_support.build_horizon_forecasts(
-        latest_close=latest_close,
-        horizon_probs=horizon_probs,
-        short_profile=short_profile,
-        mid_profile=mid_profile,
-        info_state=info_state,
-        calibration_priors=calibration_priors,
-        tradability_status=tradability_status,
-        deps=_forecast_support_dependencies(),
-    )
-
-
+_build_horizon_forecasts = _with_deps(
+    _reporting_forecast_support.build_horizon_forecasts,
+    lambda: _forecast_support_dependencies(),
+)
 _sentiment_stage = _reporting_forecast_support.sentiment_stage
 _pct_text = _reporting_forecast_support.pct_text
 _num_text = _reporting_forecast_support.num_text
@@ -400,48 +360,18 @@ _distributional_score = _v2_backtest_metrics_runtime.distributional_score
 _status_score_penalty = _reporting_forecast_support.status_score_penalty
 
 
-def _alpha_score_components(stock: StockForecastState) -> dict[str, float]:
-    return _reporting_forecast_support.alpha_score_components(
-        stock,
-        deps=_forecast_support_dependencies(),
-    )
-
-
+_alpha_score_components = _with_deps(
+    _reporting_forecast_support.alpha_score_components,
+    lambda: _forecast_support_dependencies(),
+)
 _is_actionable_status = _v2_runtime_primitives.is_actionable_status
 _status_tradeability_limit = _v2_runtime_primitives.status_tradeability_limit
 
 
-def _build_stock_states_from_panel_slice(
-    *,
-    panel_row: pd.DataFrame,
-    feature_cols: list[str],
-    short_model: LogisticBinaryModel | MLPBinaryModel,
-    two_model: LogisticBinaryModel | MLPBinaryModel,
-    three_model: LogisticBinaryModel | MLPBinaryModel,
-    five_model: LogisticBinaryModel | MLPBinaryModel,
-    mid_model: LogisticBinaryModel | MLPBinaryModel,
-    short_q_models: tuple[
-        QuantileLinearModel | MLPQuantileModel,
-        QuantileLinearModel | MLPQuantileModel,
-        QuantileLinearModel | MLPQuantileModel,
-        QuantileLinearModel | MLPQuantileModel,
-        QuantileLinearModel | MLPQuantileModel,
-    ],
-    mid_q_models: tuple[
-        QuantileLinearModel | MLPQuantileModel,
-        QuantileLinearModel | MLPQuantileModel,
-        QuantileLinearModel | MLPQuantileModel,
-        QuantileLinearModel | MLPQuantileModel,
-        QuantileLinearModel | MLPQuantileModel,
-    ],
-) -> tuple[list[StockForecastState], pd.DataFrame]:
-    params = locals().copy()
-    return _v2_state_build_runtime.build_stock_states_from_panel_slice(
-        deps=_state_build_runtime_dependencies(),
-        **params,
-    )
-
-
+_build_stock_states_from_panel_slice = _with_deps(
+    _v2_state_build_runtime.build_stock_states_from_panel_slice,
+    lambda: _state_build_runtime_dependencies(),
+)
 _panel_slice_metrics = _v2_backtest_metrics_runtime.panel_slice_metrics
 _panel_horizon_metrics = _v2_backtest_metrics_runtime.panel_horizon_metrics
 
@@ -468,27 +398,18 @@ def _resolve_v2_universe_settings(
     )
 
 
-def _build_market_and_cross_section_states(**kwargs: object) -> tuple[MarketForecastState, CrossSectionForecastState]:
-    return _v2_state_build_runtime.build_market_and_cross_section_states(
-        deps=_state_build_runtime_dependencies(),
-        **kwargs,
-    )
-
-
-
-def _build_stock_states_from_rows(*args: object, **kwargs: object) -> list[StockForecastState]:
-    return _v2_state_build_runtime.build_stock_states_from_rows(
-        *args,
-        deps=_state_build_runtime_dependencies(),
-        **kwargs,
-    )
-
-
-def compose_state(**kwargs: object) -> CompositeState:
-    return _v2_state_build_runtime.compose_state(
-        deps=_state_build_runtime_dependencies(),
-        **kwargs,
-    )
+_build_market_and_cross_section_states = _with_deps(
+    _v2_state_build_runtime.build_market_and_cross_section_states,
+    lambda: _state_build_runtime_dependencies(),
+)
+_build_stock_states_from_rows = _with_deps(
+    _v2_state_build_runtime.build_stock_states_from_rows,
+    lambda: _state_build_runtime_dependencies(),
+)
+compose_state = _with_deps(
+    _v2_state_build_runtime.compose_state,
+    lambda: _state_build_runtime_dependencies(),
+)
 
 
 def _profile_from_horizon_map(
@@ -502,18 +423,10 @@ def _profile_from_horizon_map(
     )
 
 
-def _load_prediction_review_context(
-    *,
-    manifest: dict[str, object],
-    manifest_path: Path | None,
-) -> tuple[PredictionReviewState, dict[str, dict[str, float]]]:
-    return _prediction_review.load_prediction_review_context(
-        manifest=manifest,
-        manifest_path=manifest_path,
-        deps=_prediction_review_dependencies(),
-    )
-
-
+_load_prediction_review_context = _with_deps(
+    _prediction_review.load_prediction_review_context,
+    lambda: _prediction_review_dependencies(),
+)
 def _stock_reason_bundle(**kwargs: object) -> tuple[list[str], list[str], list[str], str, str, str, str]:
     return _reporting_reason_bundles.stock_reason_bundle(
         alpha_score_components=_alpha_score_components,
@@ -521,37 +434,18 @@ def _stock_reason_bundle(**kwargs: object) -> tuple[list[str], list[str], list[s
     )
 
 
-def _decorate_composite_state_for_reporting(**kwargs: object) -> CompositeState:
-    return _report_state_runtime.decorate_composite_state_for_reporting(
-        deps=_report_state_runtime_dependencies(),
-        **kwargs,
-    )
-
-
-def _filter_state_for_recommendation_scope(
-    *,
-    state: CompositeState,
-    main_board_only: bool,
-) -> CompositeState:
-    return _report_state_runtime.filter_state_for_recommendation_scope(
-        state=state,
-        main_board_only=main_board_only,
-        deps=_report_state_runtime_dependencies(),
-    )
-
-
-def _build_live_market_reporting_overlay(
-    *,
-    settings: dict[str, object],
-    universe_ctx: _DailyUniverseContext,
-    state: CompositeState,
-) -> tuple[MarketForecastState | None, CrossSectionForecastState | None]:
-    return _report_state_runtime.build_live_market_reporting_overlay(
-        settings=settings,
-        universe_ctx=universe_ctx,
-        state=state,
-        deps=_report_state_runtime_dependencies(),
-    )
+_decorate_composite_state_for_reporting = _with_deps(
+    _report_state_runtime.decorate_composite_state_for_reporting,
+    lambda: _report_state_runtime_dependencies(),
+)
+_filter_state_for_recommendation_scope = _with_deps(
+    _report_state_runtime.filter_state_for_recommendation_scope,
+    lambda: _report_state_runtime_dependencies(),
+)
+_build_live_market_reporting_overlay = _with_deps(
+    _report_state_runtime.build_live_market_reporting_overlay,
+    lambda: _report_state_runtime_dependencies(),
+)
 
 
 def _policy_runtime_dependencies() -> _v2_policy_runtime.PolicyRuntimeDependencies:
@@ -633,75 +527,45 @@ def _ranked_sector_budgets(sectors: Iterable[SectorForecastState], *, target_exp
     )
 
 
-def _alpha_opportunity_metrics(stocks: Iterable[StockForecastState]) -> dict[str, float]:
-    return _v2_policy_runtime.alpha_opportunity_metrics(
-        stocks,
-        deps=_policy_runtime_dependencies(),
-    )
-
-
-def _mainline_preference_maps(
-    mainlines: Iterable[MainlineState],
-    *,
-    risk_cutoff: float,
-) -> tuple[dict[str, float], dict[str, float], list[MainlineState]]:
-    return _v2_policy_runtime.mainline_preference_maps(
-        mainlines,
-        risk_cutoff=risk_cutoff,
-        deps=_policy_runtime_dependencies(),
-    )
-
-
-def _ranked_sector_budgets_with_alpha(**kwargs: object) -> dict[str, float]:
-    return _v2_policy_runtime.ranked_sector_budgets_with_alpha(
-        deps=_policy_runtime_dependencies(),
-        **kwargs,
-    )
-
-
-def _cap_sector_budgets(**kwargs: object) -> tuple[dict[str, float], list[str]]:
-    return _v2_policy_runtime.cap_sector_budgets(
-        deps=_policy_runtime_dependencies(),
-        **kwargs,
-    )
-
-
-def _stock_policy_score(stock: StockForecastState) -> float:
-    return _v2_policy_runtime.stock_policy_score(
-        stock,
-        deps=_policy_runtime_dependencies(),
-    )
-
-
+_alpha_opportunity_metrics = _with_deps(
+    _v2_policy_runtime.alpha_opportunity_metrics,
+    _policy_runtime_dependencies,
+)
+_mainline_preference_maps = _with_deps(
+    _v2_policy_runtime.mainline_preference_maps,
+    _policy_runtime_dependencies,
+)
+_ranked_sector_budgets_with_alpha = _with_deps(
+    _v2_policy_runtime.ranked_sector_budgets_with_alpha,
+    _policy_runtime_dependencies,
+)
+_cap_sector_budgets = _with_deps(
+    _v2_policy_runtime.cap_sector_budgets,
+    _policy_runtime_dependencies,
+)
+_stock_policy_score = _with_deps(
+    _v2_policy_runtime.stock_policy_score,
+    _policy_runtime_dependencies,
+)
 _policy_objective_score = _v2_facade_support_runtime.policy_objective_score
 
 
-def _allocate_sector_slots(**kwargs: object) -> dict[str, int]:
-    return _v2_policy_runtime.allocate_sector_slots(
-        deps=_policy_runtime_dependencies(),
-        **kwargs,
-    )
-
-
-def _allocate_with_sector_budgets(**kwargs: object) -> dict[str, float]:
-    return _v2_policy_runtime.allocate_with_sector_budgets(
-        deps=_policy_runtime_dependencies(),
-        **kwargs,
-    )
-
-
-def _finalize_target_weights(**kwargs: object) -> tuple[dict[str, float], list[str]]:
-    return _v2_policy_runtime.finalize_target_weights(
-        deps=_policy_runtime_dependencies(),
-        **kwargs,
-    )
-
-
-def _apply_external_signal_weight_tilts(**kwargs: object) -> tuple[dict[str, float], list[str]]:
-    return _v2_policy_runtime.apply_external_signal_weight_tilts(
-        deps=_policy_runtime_dependencies(),
-        **kwargs,
-    )
+_allocate_sector_slots = _with_deps(
+    _v2_policy_runtime.allocate_sector_slots,
+    _policy_runtime_dependencies,
+)
+_allocate_with_sector_budgets = _with_deps(
+    _v2_policy_runtime.allocate_with_sector_budgets,
+    _policy_runtime_dependencies,
+)
+_finalize_target_weights = _with_deps(
+    _v2_policy_runtime.finalize_target_weights,
+    _policy_runtime_dependencies,
+)
+_apply_external_signal_weight_tilts = _with_deps(
+    _v2_policy_runtime.apply_external_signal_weight_tilts,
+    _policy_runtime_dependencies,
+)
 
 
 def _enforce_single_name_cap(
@@ -739,16 +603,10 @@ def _advance_holding_days(
     )
 
 
-def apply_policy(
-    policy_input: PolicyInput,
-    *,
-    policy_spec: PolicySpec | None = None,
-) -> PolicyDecision:
-    return _v2_policy_runtime.apply_policy(
-        policy_input,
-        policy_spec=policy_spec,
-        deps=_policy_runtime_dependencies(),
-    )
+apply_policy = _with_deps(
+    _v2_policy_runtime.apply_policy,
+    _policy_runtime_dependencies,
+)
 
 
 def build_trade_actions(
@@ -762,44 +620,31 @@ def build_trade_actions(
     )
 
 
-def _policy_spec_from_model(
-    *,
-    state: CompositeState,
-    model: LearnedPolicyModel,
-) -> PolicySpec:
-    return _v2_policy_runtime.policy_spec_from_model(
-        state=state,
-        model=model,
-        deps=_policy_runtime_dependencies(),
-    )
-
-
-def _simulate_execution_day(**kwargs: object) -> tuple[float, float, float, float, float, dict[str, float], float]:
-    return _v2_backtest_runtime.simulate_execution_day(
-        deps=_backtest_execution_dependencies(),
-        **kwargs,
-    )
+_policy_spec_from_model = _with_deps(
+    _v2_policy_runtime.policy_spec_from_model,
+    _policy_runtime_dependencies,
+)
+_simulate_execution_day = _with_deps(
+    _v2_backtest_runtime.simulate_execution_day,
+    _backtest_execution_dependencies,
+)
 
 
 def _to_v2_backtest_summary(**kwargs: object) -> V2BacktestSummary:
     return _v2_backtest_runtime.to_v2_backtest_summary(**kwargs)
 
 
-def _build_market_and_cross_section_from_prebuilt_frame(
-    **kwargs: object,
-) -> tuple[MarketForecastState, CrossSectionForecastState]:
-    return _v2_state_build_runtime.build_market_and_cross_section_from_prebuilt_frame(
-        deps=_state_build_runtime_dependencies(),
-        **kwargs,
-    )
+_build_market_and_cross_section_from_prebuilt_frame = _with_deps(
+    _v2_state_build_runtime.build_market_and_cross_section_from_prebuilt_frame,
+    _state_build_runtime_dependencies,
+)
 
 
 
-def _derive_learning_targets(**kwargs: object) -> tuple[float, float, float, float]:
-    return _v2_learning_target_runtime.derive_learning_targets(
-        deps=_learning_target_dependencies(),
-        **kwargs,
-    )
+_derive_learning_targets = _with_deps(
+    _v2_learning_target_runtime.derive_learning_targets,
+    _learning_target_dependencies,
+)
 
 
 _PreparedV2BacktestData = _v2_backtest_prepare_runtime.PreparedV2BacktestData
@@ -1099,30 +944,18 @@ _decode_composite_state = _decode_composite_state_external
 _serialize_composite_state = _serialize_composite_state_external
 
 
-def _build_frozen_daily_state_payload(
-    *,
-    trajectory: _BacktestTrajectory | None,
-    split_mode: str,
-    embargo_days: int,
-) -> dict[str, object]:
-    return _build_frozen_daily_state_payload_external(
-        trajectory=trajectory,
-        split_mode=split_mode,
-        embargo_days=embargo_days,
-        split_trajectory=_split_research_trajectory,
-    )
-
-
-def _pass_release_gate(
-    *,
-    baseline: V2BacktestSummary,
-    candidate: V2BacktestSummary,
-) -> tuple[bool, list[str]]:
-    return _pass_release_gate_external(
-        baseline=baseline,
-        candidate=candidate,
-        threshold=_RELEASE_GATE_THRESHOLD,
-    )
+_build_frozen_daily_state_payload = _with_injected_kwargs(
+    _build_frozen_daily_state_payload_external,
+    lambda *args, **kwargs: {
+        "split_trajectory": _split_research_trajectory,
+    },
+)
+_pass_release_gate = _with_injected_kwargs(
+    _pass_release_gate_external,
+    lambda *args, **kwargs: {
+        "threshold": _RELEASE_GATE_THRESHOLD,
+    },
+)
 
 
 _tier_latest_manifest_path = _tier_latest_manifest_path_external
@@ -1130,39 +963,25 @@ _tier_latest_policy_path = _tier_latest_policy_path_external
 _summary_from_payload = _summary_from_payload_external
 
 
-def _load_backtest_payload_from_manifest(manifest_payload: dict[str, object], manifest_path: Path) -> dict[str, object]:
-    return _load_backtest_payload_from_manifest_external(
-        manifest_payload,
-        manifest_path,
-        path_from_manifest_entry=lambda entry: _path_from_manifest_entry(entry, run_dir=manifest_path.parent),
-        load_json_dict=_load_json_dict,
-    )
-
-
-def _load_backtest_payload_for_run(
-    *,
-    artifact_root: str,
-    strategy_id: str,
-    run_id: str,
-) -> dict[str, object]:
-    return _load_backtest_payload_for_run_external(
-        artifact_root=artifact_root,
-        strategy_id=strategy_id,
-        run_id=run_id,
-        load_json_dict=_load_json_dict,
-    )
-
-
-def _pass_default_switch_gate(
-    *,
-    baseline_reference: V2BacktestSummary,
-    candidate: V2BacktestSummary,
-) -> tuple[bool, list[str], dict[str, float]]:
-    return _pass_default_switch_gate_external(
-        baseline_reference=baseline_reference,
-        candidate=candidate,
-        threshold=_DEFAULT_SWITCH_GATE_THRESHOLD,
-    )
+_load_backtest_payload_from_manifest = _with_injected_kwargs(
+    _load_backtest_payload_from_manifest_external,
+    lambda manifest_payload, manifest_path, **kwargs: {
+        "path_from_manifest_entry": lambda entry: _path_from_manifest_entry(entry, run_dir=manifest_path.parent),
+        "load_json_dict": _load_json_dict,
+    },
+)
+_load_backtest_payload_for_run = _with_injected_kwargs(
+    _load_backtest_payload_for_run_external,
+    lambda *args, **kwargs: {
+        "load_json_dict": _load_json_dict,
+    },
+)
+_pass_default_switch_gate = _with_injected_kwargs(
+    _pass_default_switch_gate_external,
+    lambda *args, **kwargs: {
+        "threshold": _DEFAULT_SWITCH_GATE_THRESHOLD,
+    },
+)
 
 
 def _research_publish_dependencies() -> _ResearchPublishDependenciesExternal:
@@ -1173,41 +992,23 @@ def _research_workflow_dependencies():
     return _v2_facade_dependency_builders.build_research_workflow_dependencies(sys.modules[__name__])
 
 
-def _load_research_manifest_for_daily(
-    *,
-    strategy_id: str,
-    artifact_root: str,
-    run_id: str | None,
-    snapshot_path: str | None,
-) -> tuple[dict[str, object], Path]:
-    return _load_research_manifest_for_daily_runtime_external(
-        strategy_id=strategy_id,
-        artifact_root=artifact_root,
-        run_id=run_id,
-        snapshot_path=snapshot_path,
-        resolve_manifest_path_fn=_resolve_manifest_path,
-        load_json_dict=_load_json_dict,
-    )
-
-
-def _build_snapshot_from_manifest(
-    *,
-    strategy_id: str,
-    settings: dict[str, object],
-    manifest: dict[str, object],
-    manifest_path: Path,
-) -> StrategySnapshot:
-    return _build_snapshot_from_manifest_external(
-        strategy_id=strategy_id,
-        settings=settings,
-        manifest=manifest,
-        manifest_path=manifest_path,
-        path_from_manifest_entry=_path_from_manifest_entry,
-        load_json_dict=_load_json_dict,
-        parse_boolish=_parse_boolish,
-        stable_json_hash=_stable_json_hash,
-        compose_run_snapshot_hash=_compose_run_snapshot_hash,
-    )
+_load_research_manifest_for_daily = _with_injected_kwargs(
+    _load_research_manifest_for_daily_runtime_external,
+    lambda *args, **kwargs: {
+        "resolve_manifest_path_fn": _resolve_manifest_path,
+        "load_json_dict": _load_json_dict,
+    },
+)
+_build_snapshot_from_manifest = _with_injected_kwargs(
+    _build_snapshot_from_manifest_external,
+    lambda *args, **kwargs: {
+        "path_from_manifest_entry": _path_from_manifest_entry,
+        "load_json_dict": _load_json_dict,
+        "parse_boolish": _parse_boolish,
+        "stable_json_hash": _stable_json_hash,
+        "compose_run_snapshot_hash": _compose_run_snapshot_hash,
+    },
+)
 
 
 def _publish_v2_research_artifacts_impl(**kwargs: object) -> dict[str, str]:
@@ -1222,84 +1023,49 @@ _DailySnapshotContext = _DailySnapshotContextExternal
 _DailyUniverseContext = _v2_daily_state_runtime.DailyUniverseContext
 
 
-def _load_daily_cached_result(
-    *,
-    cache_path: Path,
-    refresh_cache: bool,
-    memory_root: Path,
-) -> DailyRunResult | None:
-    params = locals().copy()
-    return _load_daily_cached_result_external(
-        **params,
-        emit_progress=_emit_progress,
-    )
-
-
-def _hydrate_daily_settings_from_dataset_manifest(
-    *,
-    settings: dict[str, object],
-    manifest: dict[str, object],
-    manifest_path: Path,
-    universe_tier: str | None,
-    universe_file: str | None,
-) -> dict[str, object]:
-    params = locals().copy()
-    return _hydrate_daily_settings_from_dataset_manifest_external(
-        **params,
-        path_from_manifest_entry=_path_from_manifest_entry,
-        load_json_dict=_load_json_dict,
-        parse_boolish=_parse_boolish,
-    )
+_load_daily_cached_result = _with_injected_kwargs(
+    _load_daily_cached_result_external,
+    lambda *args, **kwargs: {
+        "emit_progress": _emit_progress,
+    },
+)
+_hydrate_daily_settings_from_dataset_manifest = _with_injected_kwargs(
+    _hydrate_daily_settings_from_dataset_manifest_external,
+    lambda *args, **kwargs: {
+        "path_from_manifest_entry": _path_from_manifest_entry,
+        "load_json_dict": _load_json_dict,
+        "parse_boolish": _parse_boolish,
+    },
+)
 
 
 _is_daily_universe_override_mismatch = _is_daily_universe_override_mismatch_external
 
 
-def _build_daily_snapshot_context(**kwargs: object) -> _DailySnapshotContext:
-    runtime_kwargs = dict(kwargs)
-    runtime_kwargs.update(
-        {
-            "load_v2_runtime_settings": _load_v2_runtime_settings,
-            "resolve_v2_universe_settings": _resolve_v2_universe_settings,
-            "load_research_manifest_for_daily_fn": _load_research_manifest_for_daily,
-            "hydrate_daily_settings_from_dataset_manifest_fn": _hydrate_daily_settings_from_dataset_manifest,
-            "build_snapshot_from_manifest_fn": _build_snapshot_from_manifest,
-            "parse_boolish": _parse_boolish,
-            "stable_json_hash": _stable_json_hash,
-            "sha256_file": _sha256_file,
-            "emit_progress": _emit_progress,
-        }
-    )
-    return _build_daily_snapshot_context_external(
-        **runtime_kwargs,
-    )
+_build_daily_snapshot_context = _with_injected_kwargs(
+    _build_daily_snapshot_context_external,
+    lambda *args, **kwargs: {
+        "load_v2_runtime_settings": _load_v2_runtime_settings,
+        "resolve_v2_universe_settings": _resolve_v2_universe_settings,
+        "load_research_manifest_for_daily_fn": _load_research_manifest_for_daily,
+        "hydrate_daily_settings_from_dataset_manifest_fn": _hydrate_daily_settings_from_dataset_manifest,
+        "build_snapshot_from_manifest_fn": _build_snapshot_from_manifest,
+        "parse_boolish": _parse_boolish,
+        "stable_json_hash": _stable_json_hash,
+        "sha256_file": _sha256_file,
+        "emit_progress": _emit_progress,
+    },
+)
 
 
-def _build_daily_universe_context(settings: dict[str, object]) -> _DailyUniverseContext:
-    return _v2_daily_state_runtime.build_daily_universe_context(
-        settings,
-        deps=_daily_state_runtime_dependencies(),
-    )
-
-
-def _build_daily_composite_state(
-    *,
-    settings: dict[str, object],
-    manifest: dict[str, object],
-    manifest_path: Path | None,
-    snapshot: StrategySnapshot,
-    allow_retrain: bool,
-    universe_ctx: _DailyUniverseContext,
-) -> tuple[CompositeState, list[object]]:
-    return _v2_daily_state_runtime.build_daily_composite_state(
-        settings=settings,
-        manifest=manifest,
-        manifest_path=manifest_path,
-        snapshot=snapshot,
-        allow_retrain=allow_retrain,
-        universe_ctx=universe_ctx,
-        deps=_daily_state_runtime_dependencies(),
-    )
+_build_daily_universe_context = _with_deps(
+    _v2_daily_state_runtime.build_daily_universe_context,
+    _daily_state_runtime_dependencies,
+)
+_build_daily_composite_state = _with_deps(
+    _v2_daily_state_runtime.build_daily_composite_state,
+    _daily_state_runtime_dependencies,
+)
 
 
 def _build_daily_symbol_names(
@@ -1317,66 +1083,24 @@ def _build_daily_symbol_names(
     )
 
 
-def _attach_daily_info_overlay(
-    *,
-    snapshot: StrategySnapshot,
-    settings: dict[str, object],
-    composite_state: CompositeState,
-    symbol_names: dict[str, str],
-) -> tuple[
-    CompositeState,
-    str,
-    str,
-    bool,
-    int,
-    list[InfoSignalRecord],
-    list[InfoSignalRecord],
-    list[InfoDivergenceRecord],
-    list[InfoItem],
-]:
-    return _v2_daily_state_runtime.attach_daily_info_overlay(
-        snapshot=snapshot,
-        settings=settings,
-        composite_state=composite_state,
-        symbol_names=symbol_names,
-        deps=_daily_state_runtime_dependencies(),
-    )
+_attach_daily_info_overlay = _with_deps(
+    _v2_daily_state_runtime.attach_daily_info_overlay,
+    _daily_state_runtime_dependencies,
+)
+_attach_daily_external_signal_overlay = _with_deps(
+    _v2_daily_state_runtime.attach_daily_external_signal_overlay,
+    _daily_state_runtime_dependencies,
+)
 
 
-def _attach_daily_external_signal_overlay(
-    *,
-    snapshot: StrategySnapshot,
-    settings: dict[str, object],
-    composite_state: CompositeState,
-    info_items: list[InfoItem],
-    allow_rebuild: bool,
-) -> tuple[CompositeState, str, str, bool, dict[str, object], dict[str, object]]:
-    return _v2_daily_state_runtime.attach_daily_external_signal_overlay(
-        snapshot=snapshot,
-        settings=settings,
-        composite_state=composite_state,
-        info_items=info_items,
-        allow_rebuild=allow_rebuild,
-        deps=_daily_state_runtime_dependencies(),
-    )
-
-
-def _resolve_daily_policy_model(
-    *,
-    strategy_id: str,
-    artifact_root: str,
-    manifest: dict[str, object],
-    manifest_path: Path | None,
-) -> LearnedPolicyModel | None:
-    return _resolve_daily_policy_model_external(
-        strategy_id=strategy_id,
-        artifact_root=artifact_root,
-        manifest=manifest,
-        manifest_path=manifest_path,
-        path_from_manifest_entry=_path_from_manifest_entry,
-        load_policy_model_from_path_fn=_load_policy_model_from_path,
-        load_published_v2_policy_model_fn=_load_published_v2_policy_model_impl,
-    )
+_resolve_daily_policy_model = _with_injected_kwargs(
+    _resolve_daily_policy_model_external,
+    lambda *args, **kwargs: {
+        "path_from_manifest_entry": _path_from_manifest_entry,
+        "load_policy_model_from_path_fn": _load_policy_model_from_path,
+        "load_published_v2_policy_model_fn": _load_published_v2_policy_model_impl,
+    },
+)
 
 
 def _daily_workflow_dependencies():
