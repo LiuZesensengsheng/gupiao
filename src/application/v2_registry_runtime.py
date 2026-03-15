@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 from pathlib import Path
 
@@ -7,7 +8,7 @@ from src.application.v2_artifact_runtime import load_policy_model_from_path as _
 from src.application.v2_research_publish_runtime import ResearchPublishDependencies
 
 
-def _load_json_dict(path_like: object) -> dict[str, object]:
+def load_json_dict(path_like: object) -> dict[str, object]:
     path = Path(str(path_like))
     if not path.exists():
         return {}
@@ -21,8 +22,29 @@ def _load_json_dict(path_like: object) -> dict[str, object]:
 def load_policy_model_from_path(model_path: Path):
     return _load_policy_model_from_path_external(
         model_path,
-        load_json_dict=_load_json_dict,
+        load_json_dict=load_json_dict,
     )
+
+
+def compose_run_snapshot_hash(
+    *,
+    run_id: str,
+    strategy_id: str,
+    config_hash: str,
+    policy_hash: str,
+    universe_hash: str,
+    model_hashes: dict[str, str],
+) -> str:
+    payload = {
+        "run_id": str(run_id),
+        "strategy_id": str(strategy_id),
+        "config_hash": str(config_hash),
+        "policy_hash": str(policy_hash),
+        "universe_hash": str(universe_hash),
+        "model_hashes": {str(k): str(v) for k, v in sorted(model_hashes.items())},
+    }
+    raw = json.dumps(payload, sort_keys=True, ensure_ascii=False, separators=(",", ":"))
+    return hashlib.sha256(raw.encode("utf-8")).hexdigest()
 
 
 def build_research_publish_dependencies() -> ResearchPublishDependencies:

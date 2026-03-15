@@ -8,6 +8,8 @@ from types import SimpleNamespace
 import pandas as pd
 import pytest
 
+import src.application.v2_services as legacy_services
+from src.application import v2_policy_learning_runtime as policy_learning_runtime
 from src.application.v2_contracts import (
     CapitalFlowState,
     CompositeState,
@@ -24,31 +26,37 @@ from src.application.v2_contracts import (
     V2CalibrationResult,
     V2PolicyLearningResult,
 )
+from src.application.v2_backtest_metrics_runtime import build_date_slice_index as _build_date_slice_index
+from src.application.v2_backtest_prepare_runtime import (
+    BacktestTrajectory as _BacktestTrajectory,
+    TrajectoryStep as _TrajectoryStep,
+    split_research_trajectory as _split_research_trajectory,
+)
+from src.application.v2_facade_support_runtime import (
+    policy_objective_score as _policy_objective_score,
+    sha256_file as _sha256_file,
+)
+from src.application.v2_feature_runtime import (
+    tensorize_temporal_frame as _tensorize_temporal_frame,
+)
+from src.application.v2_forecast_model_runtime import predict_quantile_profiles as _predict_quantile_profiles
+from src.application.v2_runtime_primitives import is_main_board_symbol as _is_main_board_symbol
 from src.application.v2_services import (
-    _BacktestTrajectory,
-    _TrajectoryStep,
     _build_daily_snapshot_context,
-    _build_date_slice_index,
     _derive_learning_targets,
     _filter_state_for_recommendation_scope,
-    _is_main_board_symbol,
     _prepare_v2_backtest_data,
     _load_v2_runtime_settings,
-    _sha256_file,
     calibrate_v2_policy,
     _load_or_build_v2_backtest_trajectory,
     _resolve_v2_universe_settings,
     _make_forecast_backend,
-    _policy_objective_score,
     _policy_spec_from_model,
-    _predict_quantile_profiles,
-    _split_research_trajectory,
-    _tensorize_temporal_frame,
     load_published_v2_policy_model,
     publish_v2_research_artifacts,
     run_daily_v2_live,
-    run_v2_research_workflow,
 )
+from src.workflows.research_workflow import run_v2_research_workflow_impl as _run_v2_research_workflow_runtime
 from src.infrastructure import market_data
 from src.interfaces.cli.run_v2_cli import build_parser
 
@@ -128,6 +136,14 @@ def _make_backtest(total_return: float, annual_return: float) -> V2BacktestSumma
         nav_curve=[1.0, 1.05, 1.10],
         curve_dates=["2024-01-01", "2024-06-01", "2024-12-31"],
     )
+
+
+def _research_workflow_dependencies(**overrides: object):
+    return replace(legacy_services._research_workflow_dependencies(), **overrides)
+
+
+def _policy_learning_dependencies(**overrides: object):
+    return replace(legacy_services._policy_learning_dependencies(), **overrides)
 
 
 def test_policy_model_projects_state_into_valid_policy_spec() -> None:
@@ -1780,7 +1796,7 @@ def test_calibrate_v2_policy_runs_expanded_validation_grid(monkeypatch: pytest.M
     assert result.best_score >= max(float(item["score"]) for item in result.trials)
 
 
-def test_calibrate_v2_policy_emits_progress_updates(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+def test_calibrate_v2_policy_emits_progress_updates(tmp_path: Path) -> None:
     baseline = _make_backtest(0.18, 0.16)
     progress: list[tuple[str, str]] = []
 
@@ -1802,21 +1818,24 @@ def test_calibrate_v2_policy_emits_progress_updates(monkeypatch: pytest.MonkeyPa
             information_ratio=0.50,
         )
 
-    monkeypatch.setattr("src.application.v2_services.run_v2_backtest_live", fake_backtest)
-    monkeypatch.setattr("src.application.v2_services._emit_progress", lambda stage, message: progress.append((stage, message)))
+    deps = _policy_learning_dependencies(
+        run_v2_backtest_live=fake_backtest,
+        emit_progress=lambda stage, message: progress.append((stage, message)),
+    )
 
-    calibrate_v2_policy(
+    policy_learning_runtime.calibrate_v2_policy(
         strategy_id="swing_v2",
         baseline=baseline,
         trajectory=object(),
         cache_root=str(tmp_path),
+        deps=deps,
     )
 
     assert any(stage == "calibration" and "开始参数搜索" in message for stage, message in progress)
     assert any(stage == "calibration" and "评估候选" in message for stage, message in progress)
 
 
-def test_research_workflow_light_mode_skips_heavy_stages(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+def test_research_workflow_light_mode_skips_heavy_stages(tmp_path: Path) -> None:
     baseline = _make_backtest(0.18, 0.16)
     trajectory_sentinel = object()
     train_sentinel = object()
@@ -1841,13 +1860,16 @@ def test_research_workflow_light_mode_skips_heavy_stages(monkeypatch: pytest.Mon
     def fail_learning(**_: object) -> V2PolicyLearningResult:
         raise AssertionError("light mode should skip learning")
 
-    monkeypatch.setattr("src.application.v2_services._load_or_build_v2_backtest_trajectory", fake_load)
-    monkeypatch.setattr("src.application.v2_services._split_research_trajectory", fake_split)
-    monkeypatch.setattr("src.application.v2_services.run_v2_backtest_live", fake_baseline)
-    monkeypatch.setattr("src.application.v2_services.calibrate_v2_policy", fail_calibration)
-    monkeypatch.setattr("src.application.v2_services.learn_v2_policy_model", fail_learning)
+    deps = _research_workflow_dependencies(
+        load_or_build_v2_backtest_trajectory_fn=fake_load,
+        split_research_trajectory_fn=fake_split,
+        run_v2_backtest_live_fn=fake_baseline,
+        calibrate_v2_policy_fn=fail_calibration,
+        learn_v2_policy_model_fn=fail_learning,
+    )
 
-    got_baseline, calibration, learning = run_v2_research_workflow(
+    got_baseline, calibration, learning = _run_v2_research_workflow_runtime(
+        dependencies=deps,
         strategy_id="swing_v2",
         skip_calibration=True,
         skip_learning=True,
@@ -1862,7 +1884,7 @@ def test_research_workflow_light_mode_skips_heavy_stages(monkeypatch: pytest.Mon
     assert learning.model.train_rows == 0
 
 
-def test_research_workflow_emits_stage_progress(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+def test_research_workflow_emits_stage_progress(tmp_path: Path) -> None:
     baseline = _make_backtest(0.18, 0.16)
     trajectory_sentinel = object()
     train_sentinel = object()
@@ -1870,15 +1892,19 @@ def test_research_workflow_emits_stage_progress(monkeypatch: pytest.MonkeyPatch,
     holdout_sentinel = object()
     progress: list[tuple[str, str]] = []
 
-    monkeypatch.setattr("src.application.v2_services._emit_progress", lambda stage, message: progress.append((stage, message)))
-    monkeypatch.setattr("src.application.v2_services._load_or_build_v2_backtest_trajectory", lambda **_: trajectory_sentinel)
-    monkeypatch.setattr(
-        "src.application.v2_services._split_research_trajectory",
-        lambda trajectory, *args, **kwargs: (train_sentinel, validation_sentinel, holdout_sentinel),
+    deps = _research_workflow_dependencies(
+        emit_progress_fn=lambda stage, message: progress.append((stage, message)),
+        load_or_build_v2_backtest_trajectory_fn=lambda **_: trajectory_sentinel,
+        split_research_trajectory_fn=lambda trajectory, *args, **kwargs: (
+            train_sentinel,
+            validation_sentinel,
+            holdout_sentinel,
+        ),
+        run_v2_backtest_live_fn=lambda **_: baseline,
     )
-    monkeypatch.setattr("src.application.v2_services.run_v2_backtest_live", lambda **_: baseline)
 
-    run_v2_research_workflow(
+    _run_v2_research_workflow_runtime(
+        dependencies=deps,
         strategy_id="swing_v2",
         skip_calibration=True,
         skip_learning=True,
@@ -1891,7 +1917,7 @@ def test_research_workflow_emits_stage_progress(monkeypatch: pytest.MonkeyPatch,
     assert any(stage == "research" and "已跳过学习型策略" in message for stage, message in progress)
 
 
-def test_research_workflow_reuses_single_trajectory_for_all_stages(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+def test_research_workflow_reuses_single_trajectory_for_all_stages(tmp_path: Path) -> None:
     baseline = _make_backtest(0.18, 0.16)
     calibrated = _make_backtest(0.20, 0.18)
     learned = _make_backtest(0.19, 0.17)
@@ -1951,13 +1977,16 @@ def test_research_workflow_reuses_single_trajectory_for_all_stages(monkeypatch: 
             learned=learned,
         )
 
-    monkeypatch.setattr("src.application.v2_services._load_or_build_v2_backtest_trajectory", fake_load)
-    monkeypatch.setattr("src.application.v2_services._split_research_trajectory", fake_split)
-    monkeypatch.setattr("src.application.v2_services.run_v2_backtest_live", fake_baseline)
-    monkeypatch.setattr("src.application.v2_services.calibrate_v2_policy", fake_calibration)
-    monkeypatch.setattr("src.application.v2_services.learn_v2_policy_model", fake_learning)
+    deps = _research_workflow_dependencies(
+        load_or_build_v2_backtest_trajectory_fn=fake_load,
+        split_research_trajectory_fn=fake_split,
+        run_v2_backtest_live_fn=fake_baseline,
+        calibrate_v2_policy_fn=fake_calibration,
+        learn_v2_policy_model_fn=fake_learning,
+    )
 
-    got_baseline, got_calibration, got_learning = run_v2_research_workflow(
+    got_baseline, got_calibration, got_learning = _run_v2_research_workflow_runtime(
+        dependencies=deps,
         strategy_id="swing_v2",
         cache_root=str(tmp_path),
     )
@@ -1974,7 +2003,7 @@ def test_research_workflow_reuses_single_trajectory_for_all_stages(monkeypatch: 
     assert seen["learning_baseline"] == baseline
 
 
-def test_research_workflow_passes_deep_backend(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+def test_research_workflow_passes_deep_backend(tmp_path: Path) -> None:
     baseline = _make_backtest(0.18, 0.16)
     trajectory_sentinel = object()
     train_sentinel = object()
@@ -1994,11 +2023,14 @@ def test_research_workflow_passes_deep_backend(monkeypatch: pytest.MonkeyPatch, 
         seen["trajectory"] = kwargs.get("trajectory")
         return baseline
 
-    monkeypatch.setattr("src.application.v2_services._load_or_build_v2_backtest_trajectory", fake_load)
-    monkeypatch.setattr("src.application.v2_services._split_research_trajectory", fake_split)
-    monkeypatch.setattr("src.application.v2_services.run_v2_backtest_live", fake_baseline)
+    deps = _research_workflow_dependencies(
+        load_or_build_v2_backtest_trajectory_fn=fake_load,
+        split_research_trajectory_fn=fake_split,
+        run_v2_backtest_live_fn=fake_baseline,
+    )
 
-    got_baseline, _, _ = run_v2_research_workflow(
+    got_baseline, _, _ = _run_v2_research_workflow_runtime(
+        dependencies=deps,
         strategy_id="swing_v2",
         forecast_backend="deep",
         skip_calibration=True,

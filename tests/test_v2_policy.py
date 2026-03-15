@@ -4,16 +4,16 @@ import json
 import pandas as pd
 import pytest
 
+import src.application.v2_services as legacy_services
+from src.application import v2_policy_feature_runtime as policy_feature_runtime
+from src.application import v2_policy_runtime as policy_runtime
 from src.application.v2_contracts import DailyRunResult, StrategySnapshot
 from src.application.v2_contracts import PolicyInput
 from src.application.v2_sector_support import build_sector_states
 from src.application.v2_candidate_selection import build_candidate_selection_state
 from src.application.v2_services import (
     _decode_composite_state,
-    _allocate_with_sector_budgets,
-    _policy_feature_vector,
     _serialize_composite_state,
-    _stock_policy_score,
     apply_policy,
     build_strategy_snapshot,
     build_trade_actions,
@@ -33,6 +33,20 @@ from src.application.v2_contracts import (
     StockForecastState,
 )
 from src.domain.entities import BinaryMetrics, ForecastRow, MarketForecast, Security
+
+
+def _policy_score(stock: StockForecastState) -> float:
+    return policy_runtime.stock_policy_score(
+        stock,
+        deps=legacy_services._policy_runtime_dependencies(),
+    )
+
+
+def _allocate_sector_budget_weights(**kwargs: object) -> dict[str, float]:
+    return policy_runtime.allocate_with_sector_budgets(
+        deps=legacy_services._policy_runtime_dependencies(),
+        **kwargs,
+    )
 
 
 def _make_demo_state() -> tuple[
@@ -233,7 +247,7 @@ def test_stock_policy_score_improves_when_two_and_three_day_signal_improve() -> 
         up_3d_prob=0.66,
     )
 
-    assert _stock_policy_score(strong) > _stock_policy_score(weak)
+    assert _policy_score(strong) > _policy_score(weak)
 
 
 def test_v2_policy_sector_budgets_are_bounded_by_target_exposure() -> None:
@@ -318,7 +332,7 @@ def test_allocate_with_sector_budgets_filters_marginal_weak_sector_names() -> No
         StockForecastState("W1", "弱", 0.55, 0.57, 0.60, 0.52, 0.08, 0.84, alpha_score=0.55),
     ]
 
-    weights = _allocate_with_sector_budgets(
+    weights = _allocate_sector_budget_weights(
         stocks=stocks,
         sector_budgets={"强": 0.24, "弱": 0.11},
         target_position_count=2,
@@ -335,7 +349,7 @@ def test_allocate_with_sector_budgets_prefers_mainline_representative_symbol() -
         StockForecastState("L2", "光模块", 0.57, 0.62, 0.68, 0.59, 0.12, 0.91, alpha_score=0.64),
     ]
 
-    weights = _allocate_with_sector_budgets(
+    weights = _allocate_sector_budget_weights(
         stocks=stocks,
         sector_budgets={"光模块": 0.22},
         target_position_count=1,
@@ -495,7 +509,10 @@ def test_policy_feature_vector_captures_shortlist_shape() -> None:
         macro_context_state=state.macro_context_state,
     )
 
-    features = _policy_feature_vector(narrowed_state)
+    features = policy_feature_runtime.policy_feature_vector(
+        narrowed_state,
+        deps=legacy_services._policy_feature_runtime_dependencies(),
+    )
 
     assert len(features) == 23
     assert features[19] == pytest.approx(0.25)
@@ -1074,7 +1091,7 @@ def test_stock_policy_score_penalizes_fragile_high_risk_setup() -> None:
         alpha_score=0.78,
     )
 
-    assert _stock_policy_score(steady) > _stock_policy_score(fragile)
+    assert _policy_score(steady) > _policy_score(fragile)
 
 
 def test_v2_policy_trims_exposure_when_cross_sectional_alpha_is_weak() -> None:
@@ -1283,7 +1300,7 @@ def test_stock_policy_score_uses_explicit_five_day_head() -> None:
         0.86,
     )
 
-    assert _stock_policy_score(fast_follow) > _stock_policy_score(slow_burn)
+    assert _policy_score(fast_follow) > _policy_score(slow_burn)
 
 
 def test_compose_state_prefers_stronger_five_day_stock_when_other_signals_close() -> None:
