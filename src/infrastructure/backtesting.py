@@ -194,6 +194,12 @@ def _to_metrics(frame: pd.DataFrame, label: str) -> BacktestMetrics:
 
 def _with_market_forward_return(market_raw: pd.DataFrame) -> pd.DataFrame:
     feat = make_market_feature_frame(market_raw)
+    if "mkt_fwd_ret_1" in feat.columns:
+        out = feat.copy()
+        out["date"] = pd.to_datetime(out["date"], errors="coerce")
+        out = out.sort_values("date").dropna(subset=["date"])
+        out.replace([np.inf, -np.inf], np.nan, inplace=True)
+        return out
     close = market_raw[["date", "close"]].copy()
     close["date"] = pd.to_datetime(close["date"], errors="coerce")
     close = close.sort_values("date").dropna(subset=["date", "close"])

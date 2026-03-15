@@ -2,24 +2,19 @@ from __future__ import annotations
 
 import argparse
 
+import pytest
+
 from src.interfaces.cli import run_api_cli
 
 
-def test_run_daily_delegates_with_module_dependencies(monkeypatch) -> None:
-    captured: dict[str, object] = {}
+def test_parser_only_exposes_sync_tasks() -> None:
+    parser = run_api_cli.build_parser()
 
-    def fake_run_daily(settings, *, dependencies):
-        captured["settings"] = settings
-        captured["dependencies"] = dependencies
-        return 11
+    with pytest.raises(SystemExit):
+        parser.parse_args(["daily"])
 
-    monkeypatch.setattr(run_api_cli._legacy_cli_tasks, "run_daily", fake_run_daily)
-
-    result = run_api_cli.run_daily({"task": "daily"})
-
-    assert result == 11
-    assert captured["settings"] == {"task": "daily"}
-    assert captured["dependencies"] is run_api_cli
+    parsed = parser.parse_args(["sync-data"])
+    assert parsed.task == "sync-data"
 
 
 def test_main_dispatches_through_task_handlers(monkeypatch) -> None:
