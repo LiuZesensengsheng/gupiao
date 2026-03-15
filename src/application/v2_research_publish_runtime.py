@@ -164,63 +164,11 @@ def publish_research_artifacts(
         universe_tier_value=context.universe_tier_value,
     )
 
-    run_id = context.run_id
-    created_at = context.created_at
-    base_dir = context.base_dir
-    symbols = context.symbols
-    universe_tier_value = context.universe_tier_value
-    universe_id = context.universe_id
-    universe_size = context.universe_size
-    universe_generation_rule = context.universe_generation_rule
-    source_universe_manifest_path = context.source_universe_manifest_path
-    active_default_universe_tier = context.active_default_universe_tier
-    candidate_default_universe_tier = context.candidate_default_universe_tier
-    baseline_reference_run_id = context.baseline_reference_run_id
-    config_hash = context.config_hash
-    learning_manifest = context.learning_manifest
-    policy_hash = context.policy_hash
-    universe_hash = context.universe_hash
-    model_hashes = context.model_hashes
-    snapshot_hash = context.snapshot_hash
-    baseline_meta = context.baseline_meta
-    calibrated_meta = context.calibrated_meta
-    learned_meta = context.learned_meta
-
-    trajectory = forecast_artifacts.trajectory
-    frozen_daily_state = forecast_artifacts.frozen_daily_state
-    forecast_models_manifest = forecast_artifacts.forecast_models_manifest
-    frozen_forecast_bundle = forecast_artifacts.frozen_forecast_bundle
-    train_window = forecast_artifacts.train_window
-    validation_window = forecast_artifacts.validation_window
-    holdout_window = forecast_artifacts.holdout_window
-    regime_counts = forecast_artifacts.regime_counts
-
-    dataset_path = paths.dataset_path
-    calibration_path = paths.calibration_path
-    learning_path = paths.learning_path
-    forecast_models_path = paths.forecast_models_path
-    frozen_forecast_bundle_path = paths.frozen_forecast_bundle_path
-    frozen_state_path = paths.frozen_state_path
-    backtest_path = paths.backtest_path
-    consistency_path = paths.consistency_path
-    rolling_oos_path = paths.rolling_oos_path
-    info_manifest_path = paths.info_manifest_path
-    info_shadow_report_path = paths.info_shadow_report_path
-    external_signal_manifest_path = paths.external_signal_manifest_path
-    manifest_path = paths.manifest_path
-    latest_policy_path = paths.latest_policy_path
-    latest_manifest_path = paths.latest_manifest_path
-    tier_latest_policy_path = paths.tier_latest_policy_path
-    tier_latest_manifest_path = paths.tier_latest_manifest_path
-
     info_artifacts = _build_info_publish_artifacts(
         dependencies=dependencies,
         settings=settings,
-        learned_meta=learned_meta,
-        baseline_meta=baseline_meta,
-        trajectory=trajectory,
-        frozen_daily_state=frozen_daily_state,
-        frozen_forecast_bundle=frozen_forecast_bundle,
+        context=context,
+        forecast_artifacts=forecast_artifacts,
         config_path=config_path,
         source=source,
         universe_file=universe_file,
@@ -231,142 +179,72 @@ def publish_research_artifacts(
         publish_forecast_models=publish_forecast_models,
         split_mode=split_mode,
         embargo_days=embargo_days,
-        config_hash=config_hash,
     )
-    info_shadow_enabled = info_artifacts.info_shadow_enabled
-    info_shadow_report = info_artifacts.info_shadow_report
-    info_file_path = info_artifacts.info_file_path
-    info_manifest = info_artifacts.info_manifest
-    info_hash = info_artifacts.info_hash
-    external_signal_package = info_artifacts.external_signal_package
-    external_signal_manifest = info_artifacts.external_signal_manifest
-    frozen_daily_state = info_artifacts.frozen_daily_state
-    frozen_forecast_bundle = info_artifacts.frozen_forecast_bundle
 
     gate_artifacts = _evaluate_publish_gates(
         dependencies=dependencies,
         artifact_root=artifact_root,
         strategy_id=strategy_id,
-        tier_latest_manifest_path=tier_latest_manifest_path,
-        baseline_meta=baseline_meta,
-        learned_meta=learned_meta,
-        baseline_reference_run_id=baseline_reference_run_id,
-        universe_tier_value=universe_tier_value,
-        candidate_default_universe_tier=candidate_default_universe_tier,
+        context=context,
+        paths=paths,
     )
-    release_gate_passed = gate_artifacts.release_gate_passed
-    default_switch_gate_passed = gate_artifacts.default_switch_gate_passed
     manifests = _build_publish_manifests(
         dependencies=dependencies,
         strategy_id=strategy_id,
         settings=settings,
         calibration=calibration,
-        run_id=run_id,
-        created_at=created_at,
-        universe_tier_value=universe_tier_value,
-        universe_id=universe_id,
-        universe_size=universe_size,
-        universe_generation_rule=universe_generation_rule,
-        source_universe_manifest_path=source_universe_manifest_path,
-        active_default_universe_tier=active_default_universe_tier,
-        candidate_default_universe_tier=candidate_default_universe_tier,
-        baseline_reference_run_id=baseline_reference_run_id,
-        config_hash=config_hash,
-        policy_hash=policy_hash,
-        universe_hash=universe_hash,
-        model_hashes=model_hashes,
-        snapshot_hash=snapshot_hash,
-        baseline_meta=baseline_meta,
-        calibrated_meta=calibrated_meta,
-        learned_meta=learned_meta,
-        symbols=symbols,
-        train_window=train_window,
-        validation_window=validation_window,
-        holdout_window=holdout_window,
-        regime_counts=regime_counts,
+        context=context,
+        paths=paths,
+        forecast_artifacts=forecast_artifacts,
         info_artifacts=info_artifacts,
         split_mode=split_mode,
         embargo_days=embargo_days,
         publish_forecast_models=publish_forecast_models,
-        dataset_path=dataset_path,
-        calibration_path=calibration_path,
-        learning_path=learning_path,
-        forecast_models_path=forecast_models_path,
-        frozen_forecast_bundle_path=frozen_forecast_bundle_path,
-        frozen_state_path=frozen_state_path,
-        backtest_path=backtest_path,
-        consistency_path=consistency_path,
-        rolling_oos_path=rolling_oos_path,
-        info_manifest_path=info_manifest_path,
-        info_shadow_report_path=info_shadow_report_path,
-        external_signal_manifest_path=external_signal_manifest_path,
-        latest_policy_path=latest_policy_path,
-        latest_manifest_path=latest_manifest_path,
-        tier_latest_policy_path=tier_latest_policy_path,
-        tier_latest_manifest_path=tier_latest_manifest_path,
         release_gate=gate_artifacts.release_gate,
         default_switch_gate=gate_artifacts.default_switch_gate,
     )
 
     _write_and_publish_artifacts(
         dependencies=dependencies,
-        dataset_path=dataset_path,
-        calibration_path=calibration_path,
-        learning_path=learning_path,
-        forecast_models_path=forecast_models_path,
-        frozen_forecast_bundle_path=frozen_forecast_bundle_path,
-        frozen_state_path=frozen_state_path,
-        backtest_path=backtest_path,
-        consistency_path=consistency_path,
-        rolling_oos_path=rolling_oos_path,
-        info_manifest_path=info_manifest_path,
-        info_shadow_report_path=info_shadow_report_path,
-        external_signal_manifest_path=external_signal_manifest_path,
-        manifest_path=manifest_path,
-        latest_policy_path=latest_policy_path,
-        latest_manifest_path=latest_manifest_path,
-        tier_latest_policy_path=tier_latest_policy_path,
-        tier_latest_manifest_path=tier_latest_manifest_path,
-        learning_manifest=learning_manifest,
-        forecast_models_manifest=forecast_models_manifest,
+        context=context,
+        paths=paths,
+        forecast_artifacts=forecast_artifacts,
         info_artifacts=info_artifacts,
         manifests=manifests,
         gate_artifacts=gate_artifacts,
         publish_forecast_models=publish_forecast_models,
         update_latest=update_latest,
-        universe_tier_value=universe_tier_value,
-        active_default_universe_tier=active_default_universe_tier,
     )
 
     memory_path = dependencies.remember_research_run_fn(
         memory_root=Path(str(artifact_root)) / "memory",
         strategy_id=strategy_id,
-        run_id=run_id,
-        baseline=baseline_meta,
+        run_id=context.run_id,
+        baseline=context.baseline_meta,
         calibration=calibration,
         learning=learning,
-        release_gate_passed=release_gate_passed,
-        universe_id=universe_id,
-        universe_tier=universe_tier_value,
-        universe_size=int(universe_size),
+        release_gate_passed=gate_artifacts.release_gate_passed,
+        universe_id=context.universe_id,
+        universe_tier=context.universe_tier_value,
+        universe_size=int(context.universe_size),
         external_signal_version=str(settings.get("external_signal_version", "v1")),
         external_signal_enabled=bool(settings.get("external_signals", True)),
     )
 
     return {
-        "run_dir": str(base_dir),
-        "run_id": run_id,
-        "baseline_reference_run_id": baseline_reference_run_id,
-        "universe_tier": universe_tier_value,
-        "universe_id": universe_id,
-        "universe_size": str(universe_size),
-        "source_universe_manifest_path": source_universe_manifest_path,
-        "info_manifest": str(info_manifest_path),
-        "info_shadow_report": str(info_shadow_report_path),
-        "info_hash": info_hash,
-        "info_item_count": str(info_manifest.get("info_item_count", 0)),
-        "info_shadow_enabled": "true" if info_shadow_enabled else "false",
-        "external_signal_manifest": str(external_signal_manifest_path),
+        "run_dir": str(context.base_dir),
+        "run_id": context.run_id,
+        "baseline_reference_run_id": context.baseline_reference_run_id,
+        "universe_tier": context.universe_tier_value,
+        "universe_id": context.universe_id,
+        "universe_size": str(context.universe_size),
+        "source_universe_manifest_path": context.source_universe_manifest_path,
+        "info_manifest": str(paths.info_manifest_path),
+        "info_shadow_report": str(paths.info_shadow_report_path),
+        "info_hash": info_artifacts.info_hash,
+        "info_item_count": str(info_artifacts.info_manifest.get("info_item_count", 0)),
+        "info_shadow_enabled": "true" if info_artifacts.info_shadow_enabled else "false",
+        "external_signal_manifest": str(paths.external_signal_manifest_path),
         "external_signal_version": str(settings.get("external_signal_version", "v1")),
         "external_signal_enabled": "true" if bool(settings.get("external_signals", True)) else "false",
         "generator_manifest": str(settings.get("generator_manifest_path", "")),
@@ -377,24 +255,30 @@ def publish_research_artifacts(
         "selected_pool_size": str(settings.get("selected_pool_size", 0)),
         "use_us_index_context": "true" if bool(settings.get("use_us_index_context", False)) else "false",
         "us_index_source": str(settings.get("us_index_source", "akshare")),
-        "dataset_manifest": str(dataset_path),
-        "policy_calibration": str(calibration_path),
-        "learned_policy_model": str(learning_path),
-        "forecast_models_manifest": str(forecast_models_path) if publish_forecast_models else "",
-        "frozen_forecast_bundle": str(frozen_forecast_bundle_path) if publish_forecast_models else "",
-        "frozen_daily_state": str(frozen_state_path) if publish_forecast_models else "",
-        "backtest_summary": str(backtest_path),
-        "consistency_checklist": str(consistency_path),
-        "rolling_oos_report": str(rolling_oos_path),
-        "research_manifest": str(manifest_path),
-        "published_policy_model": str(latest_policy_path),
+        "dataset_manifest": str(paths.dataset_path),
+        "policy_calibration": str(paths.calibration_path),
+        "learned_policy_model": str(paths.learning_path),
+        "forecast_models_manifest": str(paths.forecast_models_path) if publish_forecast_models else "",
+        "frozen_forecast_bundle": str(paths.frozen_forecast_bundle_path) if publish_forecast_models else "",
+        "frozen_daily_state": str(paths.frozen_state_path) if publish_forecast_models else "",
+        "backtest_summary": str(paths.backtest_path),
+        "consistency_checklist": str(paths.consistency_path),
+        "rolling_oos_report": str(paths.rolling_oos_path),
+        "research_manifest": str(paths.manifest_path),
+        "published_policy_model": str(paths.latest_policy_path),
         "strategy_memory": str(memory_path),
-        "capital_flow_snapshot": json.dumps(external_signal_package.get("capital_flow_snapshot", {}), ensure_ascii=False),
-        "macro_context_snapshot": json.dumps(external_signal_package.get("macro_context_snapshot", {}), ensure_ascii=False),
-        "release_gate_passed": "true" if release_gate_passed else "false",
-        "default_switch_gate_passed": "true" if default_switch_gate_passed else "false",
-        "snapshot_hash": snapshot_hash,
-        "config_hash": config_hash,
+        "capital_flow_snapshot": json.dumps(
+            info_artifacts.external_signal_package.get("capital_flow_snapshot", {}),
+            ensure_ascii=False,
+        ),
+        "macro_context_snapshot": json.dumps(
+            info_artifacts.external_signal_package.get("macro_context_snapshot", {}),
+            ensure_ascii=False,
+        ),
+        "release_gate_passed": "true" if gate_artifacts.release_gate_passed else "false",
+        "default_switch_gate_passed": "true" if gate_artifacts.default_switch_gate_passed else "false",
+        "snapshot_hash": context.snapshot_hash,
+        "config_hash": context.config_hash,
     }
 
 
@@ -765,11 +649,8 @@ def _build_info_publish_artifacts(
     *,
     dependencies: ResearchPublishDependencies,
     settings: dict[str, object],
-    learned_meta: V2BacktestSummary,
-    baseline_meta: V2BacktestSummary,
-    trajectory: Any | None,
-    frozen_daily_state: dict[str, object],
-    frozen_forecast_bundle: dict[str, object],
+    context: PublishRuntimeContext,
+    forecast_artifacts: ForecastPublishArtifacts,
     config_path: str,
     source: str | None,
     universe_file: str | None,
@@ -780,15 +661,15 @@ def _build_info_publish_artifacts(
     publish_forecast_models: bool,
     split_mode: str,
     embargo_days: int,
-    config_hash: str,
 ) -> InfoPublishArtifacts:
     info_shadow_enabled = False
     info_shadow_report = _default_info_shadow_report(settings)
     info_file_path = dependencies.resolve_info_file_from_settings_fn(settings)
     info_as_of_date = pd.Timestamp(
-        learned_meta.end_date or baseline_meta.end_date or settings.get("end", "today")
+        context.learned_meta.end_date or context.baseline_meta.end_date or settings.get("end", "today")
     ).normalize()
     info_items: list[InfoItem] = []
+    trajectory = forecast_artifacts.trajectory
     if bool(settings.get("use_info_fusion", False)):
         if trajectory is None:
             trajectory = dependencies.load_or_build_v2_backtest_trajectory_fn(
@@ -839,7 +720,7 @@ def _build_info_publish_artifacts(
         info_file=info_file_path,
         info_items=info_items,
         as_of_date=info_as_of_date,
-        config_hash=config_hash,
+        config_hash=context.config_hash,
         shadow_enabled=info_shadow_enabled,
         shadow_report=info_shadow_report,
     )
@@ -855,8 +736,8 @@ def _build_info_publish_artifacts(
         external_signal_manifest=external_signal_manifest,
     )
 
-    decorated_daily_state = dict(frozen_daily_state)
-    decorated_forecast_bundle = dict(frozen_forecast_bundle)
+    decorated_daily_state = dict(forecast_artifacts.frozen_daily_state)
+    decorated_forecast_bundle = dict(forecast_artifacts.frozen_forecast_bundle)
     if publish_forecast_models and decorated_daily_state:
         frozen_composite = dependencies.decode_composite_state_fn(decorated_daily_state.get("composite_state"))
         if frozen_composite is not None:
@@ -904,27 +785,26 @@ def _evaluate_publish_gates(
     dependencies: ResearchPublishDependencies,
     artifact_root: str,
     strategy_id: str,
-    tier_latest_manifest_path: Path,
-    baseline_meta: V2BacktestSummary,
-    learned_meta: V2BacktestSummary,
-    baseline_reference_run_id: str,
-    universe_tier_value: str,
-    candidate_default_universe_tier: str,
+    context: PublishRuntimeContext,
+    paths: PublishPaths,
 ) -> PublishGateArtifacts:
     gate_ok, gate_reasons = dependencies.pass_release_gate_fn(
-        baseline=baseline_meta,
-        candidate=learned_meta,
+        baseline=context.baseline_meta,
+        candidate=context.learned_meta,
     )
-    previous_manifest = dependencies.load_json_dict_fn(tier_latest_manifest_path)
+    previous_manifest = dependencies.load_json_dict_fn(paths.tier_latest_manifest_path)
     previous_gate_ok = False
     previous_reason = "missing previous same-tier latest manifest"
     if previous_manifest:
-        previous_backtest = dependencies.load_backtest_payload_from_manifest_fn(previous_manifest, tier_latest_manifest_path)
+        previous_backtest = dependencies.load_backtest_payload_from_manifest_fn(
+            previous_manifest,
+            paths.tier_latest_manifest_path,
+        )
         prev_baseline_payload = previous_backtest.get("baseline", {}) if isinstance(previous_backtest, dict) else {}
         prev_learned_payload = previous_backtest.get("learned", {}) if isinstance(previous_backtest, dict) else {}
         if isinstance(prev_baseline_payload, dict) and isinstance(prev_learned_payload, dict):
-            prev_baseline = dependencies.summary_from_payload_fn(baseline_meta, prev_baseline_payload)
-            prev_learned = dependencies.summary_from_payload_fn(learned_meta, prev_learned_payload)
+            prev_baseline = dependencies.summary_from_payload_fn(context.baseline_meta, prev_baseline_payload)
+            prev_learned = dependencies.summary_from_payload_fn(context.learned_meta, prev_learned_payload)
             previous_gate_ok, previous_reasons = dependencies.pass_release_gate_fn(
                 baseline=prev_baseline,
                 candidate=prev_learned,
@@ -943,7 +823,7 @@ def _evaluate_publish_gates(
     baseline_reference_payload = dependencies.load_backtest_payload_for_run_fn(
         artifact_root=artifact_root,
         strategy_id=strategy_id,
-        run_id=baseline_reference_run_id,
+        run_id=context.baseline_reference_run_id,
     )
     baseline_reference_learned_payload = (
         baseline_reference_payload.get("learned", {})
@@ -951,9 +831,9 @@ def _evaluate_publish_gates(
         else {}
     )
     baseline_reference_summary = (
-        dependencies.summary_from_payload_fn(learned_meta, baseline_reference_learned_payload)
+        dependencies.summary_from_payload_fn(context.learned_meta, baseline_reference_learned_payload)
         if isinstance(baseline_reference_learned_payload, dict) and baseline_reference_learned_payload
-        else learned_meta
+        else context.learned_meta
     )
     switch_current_ok = False
     switch_current_reasons = ["switch gate skipped: not candidate default universe tier"]
@@ -964,10 +844,10 @@ def _evaluate_publish_gates(
         "information_ratio_delta": 0.0,
         "max_drawdown_diff": 0.0,
     }
-    if universe_tier_value == candidate_default_universe_tier and baseline_reference_run_id:
+    if context.universe_tier_value == context.candidate_default_universe_tier and context.baseline_reference_run_id:
         switch_current_ok, switch_current_reasons, switch_deltas = dependencies.pass_default_switch_gate_fn(
             baseline_reference=baseline_reference_summary,
-            candidate=learned_meta,
+            candidate=context.learned_meta,
         )
         if previous_manifest:
             previous_switch_gate = previous_manifest.get("default_switch_gate", {})
@@ -976,7 +856,7 @@ def _evaluate_publish_gates(
                 switch_previous_reason = "" if switch_previous_ok else str(previous_switch_gate.get("current_reasons", ""))
     default_switch_gate_passed = bool(release_gate_passed and switch_current_ok and switch_previous_ok)
     default_switch_gate = {
-        "baseline_reference_run_id": baseline_reference_run_id,
+        "baseline_reference_run_id": context.baseline_reference_run_id,
         "current_passed": bool(switch_current_ok),
         "current_reasons": switch_current_reasons,
         "previous_passed": bool(switch_previous_ok),
@@ -1001,57 +881,39 @@ def _write_publish_json(path: Path, payload: dict[str, object]) -> None:
 def _write_and_publish_artifacts(
     *,
     dependencies: ResearchPublishDependencies,
-    dataset_path: Path,
-    calibration_path: Path,
-    learning_path: Path,
-    forecast_models_path: Path,
-    frozen_forecast_bundle_path: Path,
-    frozen_state_path: Path,
-    backtest_path: Path,
-    consistency_path: Path,
-    rolling_oos_path: Path,
-    info_manifest_path: Path,
-    info_shadow_report_path: Path,
-    external_signal_manifest_path: Path,
-    manifest_path: Path,
-    latest_policy_path: Path,
-    latest_manifest_path: Path,
-    tier_latest_policy_path: Path,
-    tier_latest_manifest_path: Path,
-    learning_manifest: dict[str, object],
-    forecast_models_manifest: dict[str, object],
+    context: PublishRuntimeContext,
+    paths: PublishPaths,
+    forecast_artifacts: ForecastPublishArtifacts,
     info_artifacts: InfoPublishArtifacts,
     manifests: PublishManifestArtifacts,
     gate_artifacts: PublishGateArtifacts,
     publish_forecast_models: bool,
     update_latest: bool,
-    universe_tier_value: str,
-    active_default_universe_tier: str,
 ) -> None:
-    latest_policy_path.parent.mkdir(parents=True, exist_ok=True)
-    _write_publish_json(dataset_path, manifests.dataset_manifest)
-    _write_publish_json(calibration_path, manifests.calibration_manifest)
-    _write_publish_json(learning_path, learning_manifest)
+    paths.latest_policy_path.parent.mkdir(parents=True, exist_ok=True)
+    _write_publish_json(paths.dataset_path, manifests.dataset_manifest)
+    _write_publish_json(paths.calibration_path, manifests.calibration_manifest)
+    _write_publish_json(paths.learning_path, context.learning_manifest)
     if publish_forecast_models:
-        _write_publish_json(forecast_models_path, forecast_models_manifest)
-        _write_publish_json(frozen_forecast_bundle_path, info_artifacts.frozen_forecast_bundle)
-        _write_publish_json(frozen_state_path, info_artifacts.frozen_daily_state)
-    _write_publish_json(backtest_path, manifests.backtest_manifest)
-    _write_publish_json(consistency_path, manifests.consistency_manifest)
-    _write_publish_json(rolling_oos_path, manifests.rolling_oos_manifest)
-    _write_publish_json(info_manifest_path, info_artifacts.info_manifest)
-    _write_publish_json(info_shadow_report_path, info_artifacts.info_shadow_report)
-    _write_publish_json(external_signal_manifest_path, info_artifacts.external_signal_manifest)
-    _write_publish_json(manifest_path, manifests.research_manifest)
-    _write_publish_json(tier_latest_manifest_path, manifests.research_manifest)
+        _write_publish_json(paths.forecast_models_path, forecast_artifacts.forecast_models_manifest)
+        _write_publish_json(paths.frozen_forecast_bundle_path, info_artifacts.frozen_forecast_bundle)
+        _write_publish_json(paths.frozen_state_path, info_artifacts.frozen_daily_state)
+    _write_publish_json(paths.backtest_path, manifests.backtest_manifest)
+    _write_publish_json(paths.consistency_path, manifests.consistency_manifest)
+    _write_publish_json(paths.rolling_oos_path, manifests.rolling_oos_manifest)
+    _write_publish_json(paths.info_manifest_path, info_artifacts.info_manifest)
+    _write_publish_json(paths.info_shadow_report_path, info_artifacts.info_shadow_report)
+    _write_publish_json(paths.external_signal_manifest_path, info_artifacts.external_signal_manifest)
+    _write_publish_json(paths.manifest_path, manifests.research_manifest)
+    _write_publish_json(paths.tier_latest_manifest_path, manifests.research_manifest)
     if gate_artifacts.gate_ok:
-        _write_publish_json(tier_latest_policy_path, learning_manifest)
+        _write_publish_json(paths.tier_latest_policy_path, context.learning_manifest)
     allow_default_latest_update = bool(
-        not universe_tier_value or universe_tier_value == active_default_universe_tier
+        not context.universe_tier_value or context.universe_tier_value == context.active_default_universe_tier
     )
     if update_latest and gate_artifacts.release_gate_passed and allow_default_latest_update:
-        _write_publish_json(latest_policy_path, learning_manifest)
-        _write_publish_json(latest_manifest_path, manifests.research_manifest)
+        _write_publish_json(paths.latest_policy_path, context.learning_manifest)
+        _write_publish_json(paths.latest_manifest_path, manifests.research_manifest)
     elif update_latest and gate_artifacts.release_gate_passed and not allow_default_latest_update:
         note = "current universe tier is not the active default tier; updated tier latest only"
         if gate_artifacts.default_switch_gate_passed:
@@ -1067,49 +929,13 @@ def _build_publish_manifests(
     strategy_id: str,
     settings: dict[str, object],
     calibration: V2CalibrationResult,
-    run_id: str,
-    created_at: str,
-    universe_tier_value: str,
-    universe_id: str,
-    universe_size: int,
-    universe_generation_rule: str,
-    source_universe_manifest_path: str,
-    active_default_universe_tier: str,
-    candidate_default_universe_tier: str,
-    baseline_reference_run_id: str,
-    config_hash: str,
-    policy_hash: str,
-    universe_hash: str,
-    model_hashes: dict[str, str],
-    snapshot_hash: str,
-    baseline_meta: V2BacktestSummary,
-    calibrated_meta: V2BacktestSummary,
-    learned_meta: V2BacktestSummary,
-    symbols: list[str],
-    train_window: dict[str, object],
-    validation_window: dict[str, object],
-    holdout_window: dict[str, object],
-    regime_counts: dict[str, int],
+    context: PublishRuntimeContext,
+    paths: PublishPaths,
+    forecast_artifacts: ForecastPublishArtifacts,
     info_artifacts: InfoPublishArtifacts,
     split_mode: str,
     embargo_days: int,
     publish_forecast_models: bool,
-    dataset_path: Path,
-    calibration_path: Path,
-    learning_path: Path,
-    forecast_models_path: Path,
-    frozen_forecast_bundle_path: Path,
-    frozen_state_path: Path,
-    backtest_path: Path,
-    consistency_path: Path,
-    rolling_oos_path: Path,
-    info_manifest_path: Path,
-    info_shadow_report_path: Path,
-    external_signal_manifest_path: Path,
-    latest_policy_path: Path,
-    latest_manifest_path: Path,
-    tier_latest_policy_path: Path,
-    tier_latest_manifest_path: Path,
     release_gate: dict[str, object],
     default_switch_gate: dict[str, object],
 ) -> PublishManifestArtifacts:
@@ -1119,11 +945,11 @@ def _build_publish_manifests(
             "config_path": str(settings.get("config_path", "")),
             "source": str(settings.get("source", "")),
             "watchlist": str(settings.get("watchlist", "")),
-            "universe_tier": universe_tier_value,
-            "universe_id": universe_id,
-            "universe_size": int(universe_size),
-            "universe_generation_rule": universe_generation_rule,
-            "source_universe_manifest_path": source_universe_manifest_path,
+            "universe_tier": context.universe_tier_value,
+            "universe_id": context.universe_id,
+            "universe_size": int(context.universe_size),
+            "universe_generation_rule": context.universe_generation_rule,
+            "source_universe_manifest_path": context.source_universe_manifest_path,
             "universe_file": str(settings.get("universe_file", "")),
             "universe_limit": int(settings.get("universe_limit", 0)),
             "dynamic_universe_enabled": bool(settings.get("dynamic_universe_enabled", False)),
@@ -1141,10 +967,10 @@ def _build_publish_manifests(
             "cn_etf_source": str(settings.get("cn_etf_source", "akshare")),
             "start": str(settings.get("start", "")),
             "end": str(settings.get("end", "")),
-            "symbols": symbols,
-            "symbol_count": int(settings.get("symbol_count", len(symbols))),
-            "universe_hash": universe_hash,
-            "config_hash": config_hash,
+            "symbols": context.symbols,
+            "symbol_count": int(settings.get("symbol_count", len(context.symbols))),
+            "universe_hash": context.universe_hash,
+            "config_hash": context.config_hash,
             "info_file": str(info_artifacts.info_file_path),
             "event_file": str(settings.get("event_file", info_artifacts.info_file_path)),
             "info_hash": info_artifacts.info_hash,
@@ -1156,7 +982,7 @@ def _build_publish_manifests(
             "announcement_event_tags": [str(item) for item in settings.get("announcement_event_tags", [])],
             "capital_flow_file": str(settings.get("capital_flow_file", "")),
             "macro_file": str(settings.get("macro_file", "")),
-            "external_signal_manifest": str(external_signal_manifest_path),
+            "external_signal_manifest": str(paths.external_signal_manifest_path),
             "external_signal_version": str(settings.get("external_signal_version", "v1")),
             "external_signal_enabled": bool(settings.get("external_signals", True)),
             "event_lookback_days": int(settings.get("event_lookback_days", settings.get("info_lookback_days", 45))),
@@ -1167,8 +993,8 @@ def _build_publish_manifests(
             "flow_exposure_cap": float(settings.get("flow_exposure_cap", 0.08)),
             "capital_flow_snapshot": dict(info_artifacts.external_signal_package.get("capital_flow_snapshot", {})),
             "macro_context_snapshot": dict(info_artifacts.external_signal_package.get("macro_context_snapshot", {})),
-            "active_default_universe_tier": active_default_universe_tier,
-            "candidate_default_universe_tier": candidate_default_universe_tier,
+            "active_default_universe_tier": context.active_default_universe_tier,
+            "candidate_default_universe_tier": context.candidate_default_universe_tier,
         },
         artifact_type="dataset_manifest",
     )
@@ -1183,28 +1009,28 @@ def _build_publish_manifests(
     )
     backtest_manifest = add_artifact_metadata(
         {
-            "baseline": asdict(baseline_meta),
-            "calibrated": asdict(calibrated_meta),
-            "learned": asdict(learned_meta),
+            "baseline": asdict(context.baseline_meta),
+            "calibrated": asdict(context.calibrated_meta),
+            "learned": asdict(context.learned_meta),
         },
         artifact_type="backtest_summary",
     )
     consistency_manifest = add_artifact_metadata(
         {
-            "run_id": run_id,
-            "universe_tier": universe_tier_value,
-            "universe_id": universe_id,
-            "universe_size": int(universe_size),
+            "run_id": context.run_id,
+            "universe_tier": context.universe_tier_value,
+            "universe_id": context.universe_id,
+            "universe_size": int(context.universe_size),
             "split_mode": str(split_mode),
             "embargo_days": int(embargo_days),
-            "train_window": train_window,
-            "validation_window": validation_window,
-            "holdout_window": holdout_window,
-            "snapshot_hash": snapshot_hash,
-            "config_hash": config_hash,
-            "policy_hash": policy_hash,
-            "universe_hash": universe_hash,
-            "model_hashes": model_hashes,
+            "train_window": forecast_artifacts.train_window,
+            "validation_window": forecast_artifacts.validation_window,
+            "holdout_window": forecast_artifacts.holdout_window,
+            "snapshot_hash": context.snapshot_hash,
+            "config_hash": context.config_hash,
+            "policy_hash": context.policy_hash,
+            "universe_hash": context.universe_hash,
+            "model_hashes": context.model_hashes,
             "info_hash": info_artifacts.info_hash,
             "info_source_mode": str(settings.get("info_source_mode", "layered")),
             "external_signal_enabled": bool(settings.get("external_signals", True)),
@@ -1216,41 +1042,41 @@ def _build_publish_manifests(
     )
     rolling_oos_manifest = add_artifact_metadata(
         {
-            "run_id": run_id,
-            "universe_tier": universe_tier_value,
+            "run_id": context.run_id,
+            "universe_tier": context.universe_tier_value,
             "windows": [
                 {
                     "name": "window_1",
-                    "start": learned_meta.start_date,
-                    "end": learned_meta.end_date,
-                    "excess_annual_return": float(learned_meta.excess_annual_return),
-                    "information_ratio": float(learned_meta.information_ratio),
-                    "max_drawdown": float(learned_meta.max_drawdown),
+                    "start": context.learned_meta.start_date,
+                    "end": context.learned_meta.end_date,
+                    "excess_annual_return": float(context.learned_meta.excess_annual_return),
+                    "information_ratio": float(context.learned_meta.information_ratio),
+                    "max_drawdown": float(context.learned_meta.max_drawdown),
                 },
                 {
                     "name": "window_2",
-                    "start": calibrated_meta.start_date,
-                    "end": calibrated_meta.end_date,
-                    "excess_annual_return": float(calibrated_meta.excess_annual_return),
-                    "information_ratio": float(calibrated_meta.information_ratio),
-                    "max_drawdown": float(calibrated_meta.max_drawdown),
+                    "start": context.calibrated_meta.start_date,
+                    "end": context.calibrated_meta.end_date,
+                    "excess_annual_return": float(context.calibrated_meta.excess_annual_return),
+                    "information_ratio": float(context.calibrated_meta.information_ratio),
+                    "max_drawdown": float(context.calibrated_meta.max_drawdown),
                 },
             ],
-            "regime_breakdown": regime_counts,
+            "regime_breakdown": forecast_artifacts.regime_counts,
         },
         artifact_type="rolling_oos_report",
     )
     research_manifest = add_artifact_metadata(
         {
-            "run_id": run_id,
+            "run_id": context.run_id,
             "strategy_id": str(strategy_id),
-            "created_at": created_at,
-            "baseline_reference_run_id": baseline_reference_run_id,
-            "universe_tier": universe_tier_value,
-            "universe_id": universe_id,
-            "universe_size": int(universe_size),
-            "universe_generation_rule": universe_generation_rule,
-            "source_universe_manifest_path": source_universe_manifest_path,
+            "created_at": context.created_at,
+            "baseline_reference_run_id": context.baseline_reference_run_id,
+            "universe_tier": context.universe_tier_value,
+            "universe_id": context.universe_id,
+            "universe_size": int(context.universe_size),
+            "universe_generation_rule": context.universe_generation_rule,
+            "source_universe_manifest_path": context.source_universe_manifest_path,
             "info_hash": info_artifacts.info_hash,
             "info_shadow_enabled": bool(info_artifacts.info_shadow_enabled),
             "info_source_mode": str(settings.get("info_source_mode", "layered")),
@@ -1279,29 +1105,29 @@ def _build_publish_manifests(
                 "start": str(settings.get("start", "")),
                 "end": str(settings.get("end", "")),
             },
-            "config_hash": config_hash,
-            "snapshot_hash": snapshot_hash,
-            "policy_hash": policy_hash,
-            "universe_hash": universe_hash,
-            "model_hashes": model_hashes,
+            "config_hash": context.config_hash,
+            "snapshot_hash": context.snapshot_hash,
+            "policy_hash": context.policy_hash,
+            "universe_hash": context.universe_hash,
+            "model_hashes": context.model_hashes,
             "split_mode": str(split_mode),
             "embargo_days": int(embargo_days),
-            "dataset_manifest": str(dataset_path),
-            "policy_calibration": str(calibration_path),
-            "learned_policy_model": str(learning_path),
-            "forecast_models_manifest": str(forecast_models_path) if publish_forecast_models else "",
-            "frozen_forecast_bundle": str(frozen_forecast_bundle_path) if publish_forecast_models else "",
-            "frozen_daily_state": str(frozen_state_path) if publish_forecast_models else "",
-            "backtest_summary": str(backtest_path),
-            "consistency_checklist": str(consistency_path),
-            "rolling_oos_report": str(rolling_oos_path),
-            "info_manifest": str(info_manifest_path),
-            "info_shadow_report": str(info_shadow_report_path),
-            "external_signal_manifest": str(external_signal_manifest_path),
-            "published_policy_model": str(latest_policy_path),
-            "latest_research_manifest": str(latest_manifest_path),
-            "tier_published_policy_model": str(tier_latest_policy_path),
-            "tier_latest_research_manifest": str(tier_latest_manifest_path),
+            "dataset_manifest": str(paths.dataset_path),
+            "policy_calibration": str(paths.calibration_path),
+            "learned_policy_model": str(paths.learning_path),
+            "forecast_models_manifest": str(paths.forecast_models_path) if publish_forecast_models else "",
+            "frozen_forecast_bundle": str(paths.frozen_forecast_bundle_path) if publish_forecast_models else "",
+            "frozen_daily_state": str(paths.frozen_state_path) if publish_forecast_models else "",
+            "backtest_summary": str(paths.backtest_path),
+            "consistency_checklist": str(paths.consistency_path),
+            "rolling_oos_report": str(paths.rolling_oos_path),
+            "info_manifest": str(paths.info_manifest_path),
+            "info_shadow_report": str(paths.info_shadow_report_path),
+            "external_signal_manifest": str(paths.external_signal_manifest_path),
+            "published_policy_model": str(paths.latest_policy_path),
+            "latest_research_manifest": str(paths.latest_manifest_path),
+            "tier_published_policy_model": str(paths.tier_latest_policy_path),
+            "tier_latest_research_manifest": str(paths.tier_latest_manifest_path),
             "release_gate": release_gate,
             "default_switch_gate": default_switch_gate,
         },

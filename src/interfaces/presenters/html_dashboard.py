@@ -3,19 +3,28 @@ from __future__ import annotations
 import json
 from html import escape
 from pathlib import Path
-from typing import Callable
+from typing import TYPE_CHECKING, Callable
 
 import numpy as np
 import pandas as pd
 
 from src.application.use_cases import DailyFusionResult
-from src.application.v2_contracts import (
-    DailyRunResult as V2DailyRunResult,
-    V2BacktestSummary,
-    V2CalibrationResult,
-    V2PolicyLearningResult,
-)
+from src.contracts.reporting import ResearchReportViewModel
 from src.interfaces.presenters.driver_explainer import format_driver_list
+from src.interfaces.presenters.v2_daily_dashboard_modern import (
+    write_v2_daily_dashboard as write_v2_daily_dashboard,
+    write_v2_daily_dashboard_from_view_model as write_v2_daily_dashboard_from_view_model,
+)
+from src.interfaces.presenters.v2_view_model_renderers import render_research_html
+from src.reporting.view_models import build_research_report_view_model
+
+if TYPE_CHECKING:
+    from src.application.v2_contracts import (
+        DailyRunResult as V2DailyRunResult,
+        V2BacktestSummary,
+        V2CalibrationResult,
+        V2PolicyLearningResult,
+    )
 
 
 def _load_json_report(path_value: str | Path | None) -> dict[str, object]:
@@ -1096,13 +1105,7 @@ def write_daily_dashboard(out_path: str | Path, result: DailyFusionResult) -> Pa
     return path
 
 
-from src.interfaces.presenters.v2_daily_dashboard_modern import write_v2_daily_dashboard as write_v2_daily_dashboard
-
-
-from src.interfaces.presenters.v2_daily_dashboard_modern import write_v2_daily_dashboard as write_v2_daily_dashboard
-
-
-def write_v2_daily_dashboard(out_path: str | Path, result: V2DailyRunResult) -> Path:
+def _write_v2_daily_dashboard_legacy_rich(out_path: str | Path, result: V2DailyRunResult) -> Path:
     path = Path(out_path)
     path.parent.mkdir(parents=True, exist_ok=True)
     name_map = dict(result.symbol_names)
@@ -1850,7 +1853,7 @@ def write_v2_daily_dashboard(out_path: str | Path, result: V2DailyRunResult) -> 
     return path
 
 
-def write_v2_daily_dashboard(out_path: str | Path, result: V2DailyRunResult) -> Path:
+def _write_v2_daily_dashboard_legacy_full(out_path: str | Path, result: V2DailyRunResult) -> Path:
     path = Path(out_path)
     path.parent.mkdir(parents=True, exist_ok=True)
     name_map = dict(result.symbol_names)
@@ -2604,7 +2607,7 @@ def write_v2_daily_dashboard(out_path: str | Path, result: V2DailyRunResult) -> 
     return path
 
 
-def write_v2_daily_dashboard(out_path: str | Path, result: V2DailyRunResult) -> Path:
+def _write_v2_daily_dashboard_legacy_sector(out_path: str | Path, result: V2DailyRunResult) -> Path:
     path = Path(out_path)
     path.parent.mkdir(parents=True, exist_ok=True)
     name_map = dict(result.symbol_names)
@@ -2993,10 +2996,7 @@ def write_v2_daily_dashboard(out_path: str | Path, result: V2DailyRunResult) -> 
     return path
 
 
-from src.interfaces.presenters.v2_daily_dashboard_modern import write_v2_daily_dashboard as write_v2_daily_dashboard
-
-
-def write_v2_research_dashboard(
+def _write_v2_research_dashboard_legacy(
     out_path: str | Path,
     *,
     strategy_id: str,
@@ -3366,15 +3366,6 @@ def write_v2_research_dashboard(
 
     path.write_text(html, encoding="utf-8")
     return path
-
-
-from src.contracts.reporting import ResearchReportViewModel
-from src.interfaces.presenters.v2_daily_dashboard_modern import (
-    write_v2_daily_dashboard as write_v2_daily_dashboard,
-    write_v2_daily_dashboard_from_view_model as write_v2_daily_dashboard_from_view_model,
-)
-from src.interfaces.presenters.v2_view_model_renderers import render_research_html
-from src.reporting.view_models import build_research_report_view_model
 
 
 def write_v2_research_dashboard_from_view_model(

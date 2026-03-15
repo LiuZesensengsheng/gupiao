@@ -2,20 +2,25 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import Sequence
+from typing import TYPE_CHECKING, Sequence
 
 import pandas as pd
 
 from src.application.use_cases import DailyFusionResult, DiscoveryResult
-from src.application.v2_contracts import (
-    DailyRunResult as V2DailyRunResult,
-    V2BacktestSummary,
-    V2CalibrationResult,
-    V2PolicyLearningResult,
-)
+from src.contracts.reporting import DailyReportViewModel, ResearchReportViewModel
 from src.domain.entities import BacktestMetrics, BinaryMetrics, DiscoveryRow, ForecastRow, MarketForecast
 from src.domain.policies import market_regime, target_exposure
 from src.interfaces.presenters.driver_explainer import format_driver_list
+from src.interfaces.presenters.v2_view_model_renderers import render_daily_markdown, render_research_markdown
+from src.reporting.view_models import build_daily_report_view_model, build_research_report_view_model
+
+if TYPE_CHECKING:
+    from src.application.v2_contracts import (
+        DailyRunResult as V2DailyRunResult,
+        V2BacktestSummary,
+        V2CalibrationResult,
+        V2PolicyLearningResult,
+    )
 
 
 def _to_percent(v: float) -> str:
@@ -460,7 +465,7 @@ def write_discovery_report(out_path: str | Path, result: DiscoveryResult) -> Pat
     return report_path
 
 
-def write_v2_daily_report(out_path: str | Path, result: V2DailyRunResult) -> Path:
+def _write_v2_daily_report_legacy_overview(out_path: str | Path, result: V2DailyRunResult) -> Path:
     report_path = Path(out_path)
     report_path.parent.mkdir(parents=True, exist_ok=True)
     name_map = dict(result.symbol_names)
@@ -725,7 +730,7 @@ def write_v2_daily_report(out_path: str | Path, result: V2DailyRunResult) -> Pat
     return report_path
 
 
-def write_v2_research_report(
+def _write_v2_research_report_legacy_full(
     out_path: str | Path,
     *,
     strategy_id: str,
@@ -947,7 +952,7 @@ def write_v2_research_report(
     return report_path
 
 
-def write_v2_daily_report(out_path: str | Path, result: V2DailyRunResult) -> Path:
+def _write_v2_daily_report_legacy_market_first(out_path: str | Path, result: V2DailyRunResult) -> Path:
     report_path = Path(out_path)
     report_path.parent.mkdir(parents=True, exist_ok=True)
     name_map = dict(result.symbol_names)
@@ -1191,11 +1196,6 @@ def write_v2_daily_report(out_path: str | Path, result: V2DailyRunResult) -> Pat
 
     report_path.write_text("\n".join(lines), encoding="utf-8")
     return report_path
-
-
-from src.contracts.reporting import DailyReportViewModel, ResearchReportViewModel
-from src.interfaces.presenters.v2_view_model_renderers import render_daily_markdown, render_research_markdown
-from src.reporting.view_models import build_daily_report_view_model, build_research_report_view_model
 
 
 def write_v2_daily_report_from_view_model(out_path: str | Path, view_model: DailyReportViewModel) -> Path:

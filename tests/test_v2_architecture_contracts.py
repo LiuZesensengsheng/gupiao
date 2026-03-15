@@ -2892,3 +2892,24 @@ def test_daily_report_view_model_uses_summary_shape() -> None:
             str(paths.get("release_gate_passed", "false")).strip().lower() == "true"
         )
         assert research_vm.learning_model["train_rows"] == 88
+
+
+def test_presenters_keep_single_public_v2_entries() -> None:
+    markdown_path = Path("src/interfaces/presenters/markdown_reports.py")
+    html_path = Path("src/interfaces/presenters/html_dashboard.py")
+
+    markdown_tree = ast.parse(markdown_path.read_text(encoding="utf-8"))
+    html_tree = ast.parse(html_path.read_text(encoding="utf-8"))
+
+    markdown_defs = [node.name for node in markdown_tree.body if isinstance(node, ast.FunctionDef)]
+    html_defs = [node.name for node in html_tree.body if isinstance(node, ast.FunctionDef)]
+
+    assert markdown_defs.count("write_v2_daily_report") == 1
+    assert markdown_defs.count("write_v2_research_report") == 1
+    assert markdown_defs.count("write_v2_daily_report_from_view_model") == 1
+    assert markdown_defs.count("write_v2_research_report_from_view_model") == 1
+
+    assert html_defs.count("write_v2_daily_dashboard") == 0
+    assert html_defs.count("write_v2_research_dashboard") == 1
+    assert html_defs.count("write_v2_daily_dashboard_from_view_model") == 0
+    assert html_defs.count("write_v2_research_dashboard_from_view_model") == 1
