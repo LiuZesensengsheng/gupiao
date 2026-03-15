@@ -358,6 +358,13 @@ def build_parser() -> argparse.ArgumentParser:
         help="Grid of stock news strengths, e.g. 1.0,1.2",
     )
     daily.add_argument(
+        "--optimizer-force-full-news-strength-grid",
+        dest="optimizer_force_full_news_strength_grid",
+        choices=["true", "false"],
+        default=None,
+        help="Force full market/stock news-strength grid search even when learned news fusion is enabled",
+    )
+    daily.add_argument(
         "--optimizer-turnover-penalty",
         dest="optimizer_turnover_penalty",
         type=float,

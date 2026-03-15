@@ -11,6 +11,7 @@ import pandas as pd
 from src.application.config import DailyConfig
 from src.domain.entities import BacktestMetrics, NewsItem, Security, StrategyTrial
 from src.infrastructure.backtesting import BacktestResult, run_portfolio_backtest
+from src.infrastructure.backtesting_replay import prepare_portfolio_backtest_tape, replay_portfolio_backtest_tape
 
 
 @dataclass(frozen=True)
@@ -124,6 +125,78 @@ def run_daily_backtest(
     )
 
 
+def prepare_daily_backtest_tape(
+    *,
+    config: DailyConfig,
+    market_security: Security,
+    stocks: List[Security],
+    news_items_train: List[NewsItem],
+    retrain_days: int,
+    market_news_strength: float,
+    stock_news_strength: float,
+    use_state_engine: bool = True,
+):
+    return prepare_portfolio_backtest_tape(
+        market_security=market_security,
+        stock_securities=stocks,
+        source=config.source,
+        data_dir=config.data_dir,
+        start=config.start,
+        end=config.end,
+        min_train_days=config.min_train_days,
+        l2=config.l2,
+        retrain_days=int(retrain_days),
+        window_years=config.backtest_years,
+        news_items=news_items_train,
+        apply_news_fusion=True,
+        max_runtime_seconds=max(0.0, float(config.backtest_time_budget_minutes) * 60.0),
+        news_half_life_days=config.news_half_life_days,
+        market_news_strength=float(market_news_strength),
+        stock_news_strength=float(stock_news_strength),
+        use_learned_news_fusion=config.use_learned_news_fusion,
+        learned_news_min_samples=config.learned_news_min_samples,
+        learned_news_l2=config.learned_news_l2,
+        learned_fusion_l2=config.learned_fusion_l2,
+        use_margin_features=config.use_margin_features,
+        margin_market_file=config.margin_market_file,
+        margin_stock_file=config.margin_stock_file,
+        use_us_index_context=False,
+        us_index_source="akshare",
+        use_state_engine=bool(use_state_engine),
+        limit_rule_file=str(config.limit_rule_file),
+        use_index_constituent_guard=bool(config.use_index_constituent_guard),
+        index_constituent_file=str(config.index_constituent_file),
+        index_constituent_symbol=str(config.index_constituent_symbol),
+    )
+
+
+def replay_daily_backtest_tape(
+    *,
+    prepared_tape,
+    config: DailyConfig,
+    weight_threshold: float,
+    max_positions: int,
+) -> BacktestResult:
+    return replay_portfolio_backtest_tape(
+        prepared_tape,
+        weight_threshold=float(weight_threshold),
+        max_positions=int(max_positions),
+        commission_bps=config.commission_bps,
+        slippage_bps=config.slippage_bps,
+        max_trades_per_stock_per_day=int(config.max_trades_per_stock_per_day),
+        max_trades_per_stock_per_week=int(config.max_trades_per_stock_per_week),
+        min_weight_change_to_trade=float(config.min_weight_change_to_trade),
+        range_t_sell_ret_1_min=float(config.range_t_sell_ret_1_min),
+        range_t_sell_price_pos_20_min=float(config.range_t_sell_price_pos_20_min),
+        range_t_buy_ret_1_max=float(config.range_t_buy_ret_1_max),
+        range_t_buy_price_pos_20_max=float(config.range_t_buy_price_pos_20_max),
+        use_turnover_control=config.use_turnover_control,
+        use_tradeability_guard=bool(config.use_tradeability_guard),
+        tradeability_limit_tolerance=float(config.tradeability_limit_tolerance),
+        tradeability_min_volume=float(config.tradeability_min_volume),
+    )
+
+
 def metric_delta(new: float, old: float) -> float:
     if pd.isna(new) or pd.isna(old):
         return np.nan
@@ -206,6 +279,14 @@ def optimize_strategy_selection(
         config.optimizer_stock_news_strengths,
         fallback=float(config.stock_news_strength),
     )
+    force_full_news_strength_grid = bool(getattr(config, "optimizer_force_full_news_strength_grid", False))
+    if bool(config.use_learned_news_fusion) and not force_full_news_strength_grid:
+        market_strength_grid = [float(config.market_news_strength)]
+        stock_strength_grid = [float(config.stock_news_strength)]
+        print(
+            "[OPT] learned news fusion enabled; collapsing news-strength search dimensions "
+            "(set optimizer_force_full_news_strength_grid=true to search full grid)"
+        )
 
     trials: list[StrategyTrial] = []
     best_trial: StrategyTrial | None = None
@@ -223,74 +304,95 @@ def optimize_strategy_selection(
     budget_text = "unlimited" if time_budget_sec <= 0 else f"{time_budget_sec:.0f}s"
     print(f"[OPT] strategy search started: trials={total_trials}, budget={budget_text}")
 
-    for trial_idx, (retrain_days, threshold, max_pos, market_strength, stock_strength) in enumerate(
-        product(retrain_grid, threshold_grid, max_pos_grid, market_strength_grid, stock_strength_grid),
-        start=1,
-    ):
-        elapsed = time.monotonic() - start_ts
-        if time_budget_sec > 0 and elapsed >= time_budget_sec:
-            print(f"[OPT] time budget reached at {elapsed:.1f}s, stop search ({trial_idx - 1}/{total_trials} trials).")
-            break
-        print(
-            f"[OPT] trial {trial_idx}/{total_trials} "
-            f"(retrain={int(retrain_days)}, threshold={float(threshold):.2f}, "
-            f"max_pos={int(max_pos)}, m_news={float(market_strength):.2f}, s_news={float(stock_strength):.2f})"
-        )
-        try:
-            backtest = run_daily_backtest(
-                config=config,
-                market_security=market_security,
-                stocks=stocks,
-                news_items_train=news_items_train,
+    prepared_cache: dict[tuple[int, float, float], object] = {}
+    expensive_grid = list(product(retrain_grid, market_strength_grid, stock_strength_grid))
+    cheap_grid = list(product(threshold_grid, max_pos_grid))
+    trial_idx = 0
+    stop_search = False
+
+    for retrain_days, market_strength, stock_strength in expensive_grid:
+        cache_key = (int(retrain_days), float(market_strength), float(stock_strength))
+        prepared_or_error = prepared_cache.get(cache_key)
+        if prepared_or_error is None:
+            try:
+                prepared_or_error = prepare_daily_backtest_tape(
+                    config=config,
+                    market_security=market_security,
+                    stocks=stocks,
+                    news_items_train=news_items_train,
+                    retrain_days=int(retrain_days),
+                    market_news_strength=float(market_strength),
+                    stock_news_strength=float(stock_strength),
+                )
+            except Exception as exc:
+                prepared_or_error = exc
+            prepared_cache[cache_key] = prepared_or_error
+
+        for threshold, max_pos in cheap_grid:
+            trial_idx += 1
+            elapsed = time.monotonic() - start_ts
+            if time_budget_sec > 0 and elapsed >= time_budget_sec:
+                print(f"[OPT] time budget reached at {elapsed:.1f}s, stop search ({trial_idx - 1}/{total_trials} trials).")
+                stop_search = True
+                break
+            print(
+                f"[OPT] trial {trial_idx}/{total_trials} "
+                f"(retrain={int(retrain_days)}, threshold={float(threshold):.2f}, "
+                f"max_pos={int(max_pos)}, m_news={float(market_strength):.2f}, s_news={float(stock_strength):.2f})"
+            )
+            if isinstance(prepared_or_error, Exception):
+                print(f"[OPT] trial {trial_idx}/{total_trials} failed: {prepared_or_error}")
+                continue
+            try:
+                backtest = replay_daily_backtest_tape(
+                    prepared_tape=prepared_or_error,
+                    config=config,
+                    weight_threshold=float(threshold),
+                    max_positions=int(max_pos),
+                )
+            except Exception as exc:
+                print(f"[OPT] trial {trial_idx}/{total_trials} failed: {exc}")
+                continue
+
+            metric = pick_target_metric(backtest.metrics, target_years=int(config.optimizer_target_years))
+            score = strategy_objective(
+                metric,
+                turnover_penalty=float(config.optimizer_turnover_penalty),
+                drawdown_penalty=float(config.optimizer_drawdown_penalty),
+            )
+            if metric is None:
+                print(f"[OPT] trial {trial_idx}/{total_trials} skipped: missing target metric")
+                continue
+            print(
+                f"[OPT] trial {trial_idx}/{total_trials} result: "
+                f"objective={float(score):.4f}, annual={float(metric.annual_return):.2%}, "
+                f"excess={float(metric.excess_annual_return):.2%}, max_dd={float(metric.max_drawdown):.2%}"
+            )
+            trial = StrategyTrial(
+                rank=0,
+                metric_label=metric.label,
                 retrain_days=int(retrain_days),
                 weight_threshold=float(threshold),
                 max_positions=int(max_pos),
                 market_news_strength=float(market_strength),
                 stock_news_strength=float(stock_strength),
-                max_trades_per_stock_per_day=int(config.max_trades_per_stock_per_day),
-                max_trades_per_stock_per_week=int(config.max_trades_per_stock_per_week),
+                objective_score=float(score),
+                annual_return=float(metric.annual_return),
+                excess_annual_return=float(metric.excess_annual_return),
+                max_drawdown=float(metric.max_drawdown),
+                annual_turnover=float(metric.annual_turnover),
+                total_cost=float(metric.total_cost),
+                sharpe=float(metric.sharpe),
+                avg_trades_per_stock_per_week=float(metric.avg_trades_per_stock_per_week),
             )
-        except Exception as exc:
-            print(f"[OPT] trial {trial_idx}/{total_trials} failed: {exc}")
-            continue
-
-        metric = pick_target_metric(backtest.metrics, target_years=int(config.optimizer_target_years))
-        score = strategy_objective(
-            metric,
-            turnover_penalty=float(config.optimizer_turnover_penalty),
-            drawdown_penalty=float(config.optimizer_drawdown_penalty),
-        )
-        if metric is None:
-            print(f"[OPT] trial {trial_idx}/{total_trials} skipped: missing target metric")
-            continue
-        print(
-            f"[OPT] trial {trial_idx}/{total_trials} result: "
-            f"objective={float(score):.4f}, annual={float(metric.annual_return):.2%}, "
-            f"excess={float(metric.excess_annual_return):.2%}, max_dd={float(metric.max_drawdown):.2%}"
-        )
-        trial = StrategyTrial(
-            rank=0,
-            metric_label=metric.label,
-            retrain_days=int(retrain_days),
-            weight_threshold=float(threshold),
-            max_positions=int(max_pos),
-            market_news_strength=float(market_strength),
-            stock_news_strength=float(stock_strength),
-            objective_score=float(score),
-            annual_return=float(metric.annual_return),
-            excess_annual_return=float(metric.excess_annual_return),
-            max_drawdown=float(metric.max_drawdown),
-            annual_turnover=float(metric.annual_turnover),
-            total_cost=float(metric.total_cost),
-            sharpe=float(metric.sharpe),
-            avg_trades_per_stock_per_week=float(metric.avg_trades_per_stock_per_week),
-        )
-        trials.append(trial)
-        if score > best_score:
-            best_score = float(score)
-            best_trial = trial
-            best_backtest = backtest
-            print(f"[OPT] new best at trial {trial_idx}/{total_trials}: score={best_score:.4f}, label={metric.label}")
+            trials.append(trial)
+            if score > best_score:
+                best_score = float(score)
+                best_trial = trial
+                best_backtest = backtest
+                print(f"[OPT] new best at trial {trial_idx}/{total_trials}: score={best_score:.4f}, label={metric.label}")
+        if stop_search:
+            break
 
     if not trials:
         return baseline

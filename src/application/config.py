@@ -65,6 +65,7 @@ class DailyConfig(ForecastConfig):
     optimizer_max_positions: tuple[int, ...]
     optimizer_market_news_strengths: tuple[float, ...]
     optimizer_stock_news_strengths: tuple[float, ...]
+    optimizer_force_full_news_strength_grid: bool
     optimizer_turnover_penalty: float
     optimizer_drawdown_penalty: float
     optimizer_target_years: int

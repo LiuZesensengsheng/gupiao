@@ -90,6 +90,7 @@ def run_daily(settings: dict[str, Any], *, dependencies: Any) -> int:
         optimizer_max_positions=deps._parse_int_list(settings["optimizer_max_positions"], min_value=1) or (3, 5),
         optimizer_market_news_strengths=deps._parse_float_list(settings["optimizer_market_news_strengths"], min_value=0.0) or (0.8, 1.0),
         optimizer_stock_news_strengths=deps._parse_float_list(settings["optimizer_stock_news_strengths"], min_value=0.0) or (1.0, 1.2),
+        optimizer_force_full_news_strength_grid=deps._parse_bool(settings["optimizer_force_full_news_strength_grid"]),
         optimizer_turnover_penalty=float(settings["optimizer_turnover_penalty"]),
         optimizer_drawdown_penalty=float(settings["optimizer_drawdown_penalty"]),
         optimizer_target_years=max(1, int(settings["optimizer_target_years"])),

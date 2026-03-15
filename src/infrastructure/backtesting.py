@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 from dataclasses import dataclass
 import json
@@ -77,6 +77,41 @@ class _IndexConstituentBook:
     index_symbol: str
     snapshot_dates: list[pd.Timestamp]
     snapshot_members: list[set[str]]
+
+
+@dataclass(frozen=True)
+class PreparedBacktestDay:
+    date: pd.Timestamp
+    next_date: pd.Timestamp
+    benchmark_ret: float
+    market_short_prob_quant: float
+    market_mid_prob_quant: float
+    market_short_prob_fused: float
+    market_mid_prob_fused: float
+    quant_scores: np.ndarray
+    fused_scores: np.ndarray
+    fwd_ret_1: np.ndarray
+    ret_1: np.ndarray
+    price_pos_20: np.ndarray
+    open_prices: np.ndarray
+    high_prices: np.ndarray
+    low_prices: np.ndarray
+    close_prices: np.ndarray
+    volumes: np.ndarray
+    member_mask: np.ndarray
+    missing_member_snapshot: bool = False
+
+
+@dataclass(frozen=True)
+class PreparedBacktestTape:
+    symbols: list[str]
+    days: list[PreparedBacktestDay]
+    news_enabled: bool
+    use_state_engine: bool
+    window_years: tuple[int, ...]
+    limit_rule_book: _LimitRuleBook | None
+    use_index_constituent_guard: bool
+    index_constituent_symbol: str
 
 
 def _annualized(total_return: float, n_days: int) -> float:
@@ -630,6 +665,41 @@ def _build_tradeability_flags(
     return can_buy, can_sell, suspended_count
 
 
+def _build_tradeability_flags_from_arrays(
+    *,
+    date: pd.Timestamp,
+    symbols: list[str],
+    open_arr: np.ndarray,
+    high_arr: np.ndarray,
+    low_arr: np.ndarray,
+    close_arr: np.ndarray,
+    volume_arr: np.ndarray,
+    ret_1_arr: np.ndarray,
+    min_volume: float,
+    limit_tolerance: float,
+    limit_rule_book: _LimitRuleBook | None,
+) -> tuple[np.ndarray, np.ndarray, int]:
+    item_map = {
+        symbol: {
+            "open": float(open_arr[idx]),
+            "high": float(high_arr[idx]),
+            "low": float(low_arr[idx]),
+            "close": float(close_arr[idx]),
+            "volume": float(volume_arr[idx]),
+            "ret_1": float(ret_1_arr[idx]),
+        }
+        for idx, symbol in enumerate(symbols)
+    }
+    return _build_tradeability_flags(
+        date=date,
+        symbols=symbols,
+        item_map=item_map,
+        min_volume=min_volume,
+        limit_tolerance=limit_tolerance,
+        limit_rule_book=limit_rule_book,
+    )
+
+
 def _apply_tradeability_guard(
     *,
     prev_weights: np.ndarray,
@@ -666,7 +736,7 @@ def _build_window_metrics(frame: pd.DataFrame, window_years: Sequence[int], pref
     def _label(base: str) -> str:
         return f"{prefix}{base}" if prefix else base
 
-    metrics: list[BacktestMetrics] = [_to_metrics(frame, _label("全样本"))]
+    metrics: list[BacktestMetrics] = [_to_metrics(frame, _label("all"))]
     if frame.empty:
         return metrics
 
@@ -674,8 +744,75 @@ def _build_window_metrics(frame: pd.DataFrame, window_years: Sequence[int], pref
     for years in _normalize_window_years(window_years):
         window_start = end_date - pd.DateOffset(years=years)
         window_frame = frame[frame["date"] >= window_start].copy()
-        metrics.append(_to_metrics(window_frame, _label(f"近{years}年")))
+        metrics.append(_to_metrics(window_frame, _label(f"{int(years)}y")))
     return metrics
+
+
+    return metrics
+
+
+def _empty_backtest_result(*, news_enabled: bool, use_state_engine: bool) -> BacktestResult:
+    daily_frame = pd.DataFrame()
+    empty_curve = pd.DataFrame(columns=["date", "strategy_nav", "benchmark_nav", "excess_nav"])
+    if news_enabled:
+        return BacktestResult(
+            daily_frame=daily_frame,
+            curve_frame=empty_curve,
+            metrics=[BacktestMetrics.empty("fused-empty"), BacktestMetrics.empty("quant-empty")],
+            audit={"use_state_engine": bool(use_state_engine)},
+        )
+    return BacktestResult(
+        daily_frame=daily_frame,
+        curve_frame=empty_curve,
+        metrics=[BacktestMetrics.empty("empty")],
+        audit={"use_state_engine": bool(use_state_engine)},
+    )
+
+
+
+
+def _finalize_backtest_result(
+    *,
+    records: list[dict[str, object]],
+    news_enabled: bool,
+    window_years: Sequence[int],
+    use_state_engine: bool,
+    audit: dict[str, float | int | bool],
+) -> BacktestResult:
+    daily_frame = pd.DataFrame(records).sort_values("date").drop_duplicates(subset=["date"]).reset_index(drop=True)
+    if daily_frame.empty:
+        return _empty_backtest_result(news_enabled=news_enabled, use_state_engine=use_state_engine)
+
+    quant_frame = _to_strategy_frame(
+        daily_frame,
+        ret_col="quant_ret",
+        turnover_col="turnover_quant",
+        cost_col="cost_quant",
+        trade_count_col="trade_count_quant",
+    )
+    fused_frame = _to_strategy_frame(
+        daily_frame,
+        ret_col="fused_ret",
+        turnover_col="turnover_fused",
+        cost_col="cost_fused",
+        trade_count_col="trade_count_fused",
+    )
+    active_frame = fused_frame if news_enabled else quant_frame
+
+    curve = active_frame[["date"]].copy()
+    curve["strategy_nav"] = (1.0 + active_frame["strategy_ret"].astype(float)).cumprod()
+    curve["benchmark_nav"] = (1.0 + active_frame["benchmark_ret"].astype(float)).cumprod()
+    curve["excess_nav"] = (1.0 + active_frame["excess_ret"].astype(float)).cumprod()
+    if news_enabled:
+        curve["quant_nav"] = (1.0 + quant_frame["strategy_ret"].astype(float)).cumprod()
+        curve["fused_nav"] = (1.0 + fused_frame["strategy_ret"].astype(float)).cumprod()
+
+    if news_enabled:
+        metrics = _build_window_metrics(fused_frame, window_years, prefix="閾诲秴鎮庣粵鏍殣-")
+        metrics.extend(_build_window_metrics(quant_frame, window_years, prefix="闁插繐瀵查崺铏瑰殠-"))
+    else:
+        metrics = _build_window_metrics(quant_frame, window_years, prefix="")
+    return BacktestResult(daily_frame=daily_frame, curve_frame=curve, metrics=metrics, audit=audit)
 
 
 def run_portfolio_backtest(
@@ -1280,17 +1417,18 @@ def run_portfolio_backtest(
     daily_frame = pd.DataFrame(records).sort_values("date").drop_duplicates(subset=["date"]).reset_index(drop=True)
     if daily_frame.empty:
         empty_curve = pd.DataFrame(columns=["date", "strategy_nav", "benchmark_nav", "excess_nav"])
+        empty_curve = pd.DataFrame(columns=["date", "strategy_nav", "benchmark_nav", "excess_nav"])
         if news_enabled:
             return BacktestResult(
                 daily_frame=daily_frame,
                 curve_frame=empty_curve,
-                metrics=[BacktestMetrics.empty("融合策略-全样本"), BacktestMetrics.empty("量化基线-全样本")],
+                metrics=[BacktestMetrics.empty("fused-empty"), BacktestMetrics.empty("quant-empty")],
                 audit={"use_state_engine": bool(use_state_engine)},
             )
         return BacktestResult(
             daily_frame=daily_frame,
             curve_frame=empty_curve,
-            metrics=[BacktestMetrics.empty("全样本")],
+            metrics=[BacktestMetrics.empty("empty")],
             audit={"use_state_engine": bool(use_state_engine)},
         )
 
@@ -1319,8 +1457,8 @@ def run_portfolio_backtest(
         curve["fused_nav"] = (1.0 + fused_frame["strategy_ret"].astype(float)).cumprod()
 
     if news_enabled:
-        metrics = _build_window_metrics(fused_frame, window_years, prefix="融合策略-")
-        metrics.extend(_build_window_metrics(quant_frame, window_years, prefix="量化基线-"))
+        metrics = _build_window_metrics(fused_frame, window_years, prefix="铻嶅悎绛栫暐-")
+        metrics.extend(_build_window_metrics(quant_frame, window_years, prefix="閲忓寲鍩虹嚎-"))
     else:
         metrics = _build_window_metrics(quant_frame, window_years, prefix="")
 
@@ -1352,3 +1490,4 @@ def run_portfolio_backtest(
         "oversell_violations_fused": int(oversell_violations_fused),
     }
     return BacktestResult(daily_frame=daily_frame, curve_frame=curve, metrics=metrics, audit=audit)
+

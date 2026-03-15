@@ -103,6 +103,7 @@ DEFAULT_TASK: dict[str, dict[str, Any]] = {
         "optimizer_max_positions": [3, 5],
         "optimizer_market_news_strengths": [0.8, 1.0],
         "optimizer_stock_news_strengths": [1.0, 1.2],
+        "optimizer_force_full_news_strength_grid": False,
         "optimizer_turnover_penalty": 0.0015,
         "optimizer_drawdown_penalty": 0.20,
         "optimizer_target_years": 3,
