@@ -131,175 +131,87 @@ def publish_research_artifacts(
         us_index_source=us_index_source,
     )
     settings = dependencies.resolve_v2_universe_settings_fn(settings=dict(settings), cache_root=cache_root)
-    run_id = datetime.now().strftime("%Y%m%d_%H%M%S")
-    created_at = datetime.now().isoformat(timespec="seconds")
-    base_dir = Path(str(artifact_root)) / str(strategy_id) / run_id
-    base_dir.mkdir(parents=True, exist_ok=True)
-    universe_path = Path(str(settings.get("universe_file", "")))
-    symbols = [str(item) for item in settings.get("symbols", [])]
-    universe_tier_value = str(settings.get("universe_tier", "")).strip()
-    universe_id = str(settings.get("universe_id", "")).strip() or universe_tier_value or universe_path.stem or "v2_universe"
-    universe_size = int(settings.get("universe_size", len(symbols)) or len(symbols))
-    universe_generation_rule = str(settings.get("universe_generation_rule", "")).strip() or "external_universe_file"
-    source_universe_manifest_path = str(
-        settings.get("source_universe_manifest_path", settings.get("universe_file", ""))
-    )
-    active_default_universe_tier = str(settings.get("active_default_universe_tier", "favorites_16")).strip()
-    candidate_default_universe_tier = str(settings.get("candidate_default_universe_tier", "generated_80")).strip()
-    baseline_reference_run_id = str(settings.get("baseline_reference_run_id", "")).strip()
-
-    config_hash = dependencies.stable_json_hash_fn(settings)
-    learning_manifest = add_artifact_metadata(
-        asdict(learning.model),
-        artifact_type="learned_policy_model",
-    )
-    policy_hash = dependencies.stable_json_hash_fn(learning_manifest)
-    universe_hash = str(settings.get("universe_hash", "")) or dependencies.sha256_file_fn(universe_path) or dependencies.stable_json_hash_fn(symbols)
-    model_hashes = {
-        "market_model": dependencies.sha256_text_fn("mkt_lr_v2"),
-        "sector_model": dependencies.sha256_text_fn("sector_lr_v2"),
-        "stock_model": dependencies.sha256_text_fn("stock_lr_v2"),
-        "cross_section_model": dependencies.sha256_text_fn("cross_section_v2"),
-        "learned_policy_model": policy_hash,
-    }
-    snapshot_hash = dependencies.compose_run_snapshot_hash_fn(
-        run_id=run_id,
+    context = _build_publish_runtime_context(
+        dependencies=dependencies,
         strategy_id=strategy_id,
-        config_hash=config_hash,
-        policy_hash=policy_hash,
-        universe_hash=universe_hash,
-        model_hashes=model_hashes,
+        artifact_root=artifact_root,
+        settings=settings,
+        baseline=baseline,
+        calibration=calibration,
+        learning=learning,
     )
-    baseline_meta = with_backtest_metadata(
-        baseline,
-        run_id=run_id,
-        snapshot_hash=snapshot_hash,
-        config_hash=config_hash,
+    forecast_artifacts = _build_forecast_publish_artifacts(
+        dependencies=dependencies,
+        settings=settings,
+        context=context,
+        strategy_id=strategy_id,
+        config_path=config_path,
+        source=source,
+        universe_file=universe_file,
+        universe_limit=universe_limit,
+        universe_tier=universe_tier,
+        cache_root=cache_root,
+        forecast_backend=forecast_backend,
+        publish_forecast_models=publish_forecast_models,
+        split_mode=split_mode,
+        embargo_days=embargo_days,
     )
-    calibrated_meta = with_backtest_metadata(
-        calibration.calibrated,
-        run_id=run_id,
-        snapshot_hash=snapshot_hash,
-        config_hash=config_hash,
-    )
-    learned_meta = with_backtest_metadata(
-        learning.learned,
-        run_id=run_id,
-        snapshot_hash=snapshot_hash,
-        config_hash=config_hash,
-    )
-
-    def _window_payload(trajectory: Any | None) -> dict[str, object]:
-        if trajectory is None or not getattr(trajectory, "steps", None):
-            return {"start": "", "end": "", "n_steps": 0}
-        return {
-            "start": str(trajectory.steps[0].date.date()),
-            "end": str(trajectory.steps[-1].next_date.date()),
-            "n_steps": int(len(trajectory.steps)),
-        }
-
-    trajectory = None
-    frozen_daily_state: dict[str, object] = {}
-    forecast_models_manifest: dict[str, object] = {}
-    frozen_forecast_bundle: dict[str, object] = {}
-    train_window = {"start": "", "end": "", "n_steps": 0}
-    validation_window = {"start": "", "end": "", "n_steps": 0}
-    holdout_window = {"start": "", "end": "", "n_steps": 0}
-    regime_counts: dict[str, int] = {}
-    if publish_forecast_models:
-        trajectory = dependencies.load_or_build_v2_backtest_trajectory_fn(
-            config_path=str(settings.get("config_path", config_path)),
-            source=str(settings.get("source", source)) if settings.get("source", source) is not None else None,
-            universe_file=str(settings.get("universe_file", universe_file))
-            if settings.get("universe_file", universe_file) is not None
-            else None,
-            universe_limit=(
-                int(settings.get("universe_limit"))
-                if settings.get("universe_limit") is not None
-                else (int(universe_limit) if universe_limit is not None else None)
-            ),
-            universe_tier=str(settings.get("universe_tier", universe_tier)),
-            cache_root=cache_root,
-            refresh_cache=False,
-            forecast_backend=forecast_backend,
-            use_us_index_context=bool(settings.get("use_us_index_context", False)),
-            us_index_source=str(settings.get("us_index_source", "akshare")),
-        )
-        if trajectory is not None:
-            train_traj, validation_traj, holdout_traj = dependencies.split_research_trajectory_fn(
-                trajectory,
-                split_mode=split_mode,
-                embargo_days=embargo_days,
-            )
-            train_window = _window_payload(train_traj)
-            validation_window = _window_payload(validation_traj)
-            holdout_window = _window_payload(holdout_traj)
-            frozen_daily_state = dependencies.build_frozen_daily_state_payload_fn(
-                trajectory=trajectory,
-                split_mode=split_mode,
-                embargo_days=embargo_days,
-            )
-            for step in holdout_traj.steps:
-                regime = str(step.composite_state.risk_regime or "unknown")
-                regime_counts[regime] = int(regime_counts.get(regime, 0)) + 1
-            if (
-                str(forecast_backend).strip().lower() == "linear"
-                and getattr(trajectory, "prepared", None) is not None
-                and hasattr(trajectory.prepared, "market_valid")
-                and hasattr(trajectory.prepared, "panel")
-                and hasattr(trajectory.prepared, "market_feature_cols")
-                and hasattr(trajectory.prepared, "feature_cols")
-                and hasattr(trajectory.prepared, "dates")
-            ):
-                frozen_forecast_bundle = dependencies.build_frozen_linear_forecast_bundle_fn(trajectory.prepared)
-        forecast_models_manifest = add_artifact_metadata(
-            {
-                "run_id": run_id,
-                "strategy_id": str(strategy_id),
-                "forecast_backend": str(forecast_backend),
-                "split_mode": str(split_mode),
-                "embargo_days": int(embargo_days),
-                "use_us_index_context": bool(settings.get("use_us_index_context", False)),
-                "us_index_source": str(settings.get("us_index_source", "akshare")),
-                "use_us_sector_etf_context": bool(settings.get("use_us_sector_etf_context", False)),
-                "use_cn_etf_context": bool(settings.get("use_cn_etf_context", False)),
-                "cn_etf_source": str(settings.get("cn_etf_source", "akshare")),
-                "model_hashes": model_hashes,
-                "data_window": {
-                    "start": str(settings.get("start", "")),
-                    "end": str(settings.get("end", "")),
-                },
-                "regime_counts": regime_counts,
-                "frozen_bundle_ready": bool(frozen_forecast_bundle),
-            },
-            artifact_type="forecast_models_manifest",
-        )
-
-    dataset_path = base_dir / "dataset_manifest.json"
-    calibration_path = base_dir / "policy_calibration.json"
-    learning_path = base_dir / "learned_policy_model.json"
-    forecast_models_path = base_dir / "forecast_models_manifest.json"
-    frozen_forecast_bundle_path = base_dir / "frozen_forecast_bundle.json"
-    frozen_state_path = base_dir / "frozen_daily_state.json"
-    backtest_path = base_dir / "backtest_summary.json"
-    consistency_path = base_dir / "consistency_checklist.json"
-    rolling_oos_path = base_dir / "rolling_oos_report.json"
-    info_manifest_path = base_dir / "info_manifest.json"
-    info_shadow_report_path = base_dir / "info_shadow_report.json"
-    external_signal_manifest_path = ensure_external_signal_manifest_path(base_dir)
-    manifest_path = base_dir / "research_manifest.json"
-    latest_policy_path = Path(str(artifact_root)) / str(strategy_id) / "latest_policy_model.json"
-    latest_manifest_path = Path(str(artifact_root)) / str(strategy_id) / "latest_research_manifest.json"
-    tier_latest_policy_path = dependencies.tier_latest_policy_path_fn(
+    paths = _build_publish_paths(
+        dependencies=dependencies,
         artifact_root=artifact_root,
         strategy_id=strategy_id,
-        universe_tier=universe_tier_value,
+        base_dir=context.base_dir,
+        universe_tier_value=context.universe_tier_value,
     )
-    tier_latest_manifest_path = dependencies.tier_latest_manifest_path_fn(
-        artifact_root=artifact_root,
-        strategy_id=strategy_id,
-        universe_tier=universe_tier_value,
-    )
+
+    run_id = context.run_id
+    created_at = context.created_at
+    base_dir = context.base_dir
+    symbols = context.symbols
+    universe_tier_value = context.universe_tier_value
+    universe_id = context.universe_id
+    universe_size = context.universe_size
+    universe_generation_rule = context.universe_generation_rule
+    source_universe_manifest_path = context.source_universe_manifest_path
+    active_default_universe_tier = context.active_default_universe_tier
+    candidate_default_universe_tier = context.candidate_default_universe_tier
+    baseline_reference_run_id = context.baseline_reference_run_id
+    config_hash = context.config_hash
+    learning_manifest = context.learning_manifest
+    policy_hash = context.policy_hash
+    universe_hash = context.universe_hash
+    model_hashes = context.model_hashes
+    snapshot_hash = context.snapshot_hash
+    baseline_meta = context.baseline_meta
+    calibrated_meta = context.calibrated_meta
+    learned_meta = context.learned_meta
+
+    trajectory = forecast_artifacts.trajectory
+    frozen_daily_state = forecast_artifacts.frozen_daily_state
+    forecast_models_manifest = forecast_artifacts.forecast_models_manifest
+    frozen_forecast_bundle = forecast_artifacts.frozen_forecast_bundle
+    train_window = forecast_artifacts.train_window
+    validation_window = forecast_artifacts.validation_window
+    holdout_window = forecast_artifacts.holdout_window
+    regime_counts = forecast_artifacts.regime_counts
+
+    dataset_path = paths.dataset_path
+    calibration_path = paths.calibration_path
+    learning_path = paths.learning_path
+    forecast_models_path = paths.forecast_models_path
+    frozen_forecast_bundle_path = paths.frozen_forecast_bundle_path
+    frozen_state_path = paths.frozen_state_path
+    backtest_path = paths.backtest_path
+    consistency_path = paths.consistency_path
+    rolling_oos_path = paths.rolling_oos_path
+    info_manifest_path = paths.info_manifest_path
+    info_shadow_report_path = paths.info_shadow_report_path
+    external_signal_manifest_path = paths.external_signal_manifest_path
+    manifest_path = paths.manifest_path
+    latest_policy_path = paths.latest_policy_path
+    latest_manifest_path = paths.latest_manifest_path
+    tier_latest_policy_path = paths.tier_latest_policy_path
+    tier_latest_manifest_path = paths.tier_latest_manifest_path
 
     info_artifacts = _build_info_publish_artifacts(
         dependencies=dependencies,
@@ -518,6 +430,312 @@ class PublishManifestArtifacts:
     consistency_manifest: dict[str, object]
     rolling_oos_manifest: dict[str, object]
     research_manifest: dict[str, object]
+
+
+@dataclass(frozen=True)
+class PublishRuntimeContext:
+    run_id: str
+    created_at: str
+    base_dir: Path
+    symbols: list[str]
+    universe_tier_value: str
+    universe_id: str
+    universe_size: int
+    universe_generation_rule: str
+    source_universe_manifest_path: str
+    active_default_universe_tier: str
+    candidate_default_universe_tier: str
+    baseline_reference_run_id: str
+    config_hash: str
+    learning_manifest: dict[str, object]
+    policy_hash: str
+    universe_hash: str
+    model_hashes: dict[str, str]
+    snapshot_hash: str
+    baseline_meta: V2BacktestSummary
+    calibrated_meta: V2BacktestSummary
+    learned_meta: V2BacktestSummary
+
+
+@dataclass(frozen=True)
+class ForecastPublishArtifacts:
+    trajectory: Any | None
+    frozen_daily_state: dict[str, object]
+    forecast_models_manifest: dict[str, object]
+    frozen_forecast_bundle: dict[str, object]
+    train_window: dict[str, object]
+    validation_window: dict[str, object]
+    holdout_window: dict[str, object]
+    regime_counts: dict[str, int]
+
+
+@dataclass(frozen=True)
+class PublishPaths:
+    dataset_path: Path
+    calibration_path: Path
+    learning_path: Path
+    forecast_models_path: Path
+    frozen_forecast_bundle_path: Path
+    frozen_state_path: Path
+    backtest_path: Path
+    consistency_path: Path
+    rolling_oos_path: Path
+    info_manifest_path: Path
+    info_shadow_report_path: Path
+    external_signal_manifest_path: Path
+    manifest_path: Path
+    latest_policy_path: Path
+    latest_manifest_path: Path
+    tier_latest_policy_path: Path
+    tier_latest_manifest_path: Path
+
+
+def _window_payload(trajectory: Any | None) -> dict[str, object]:
+    if trajectory is None or not getattr(trajectory, "steps", None):
+        return {"start": "", "end": "", "n_steps": 0}
+    return {
+        "start": str(trajectory.steps[0].date.date()),
+        "end": str(trajectory.steps[-1].next_date.date()),
+        "n_steps": int(len(trajectory.steps)),
+    }
+
+
+def _build_publish_runtime_context(
+    *,
+    dependencies: ResearchPublishDependencies,
+    strategy_id: str,
+    artifact_root: str,
+    settings: dict[str, object],
+    baseline: V2BacktestSummary,
+    calibration: V2CalibrationResult,
+    learning: V2PolicyLearningResult,
+) -> PublishRuntimeContext:
+    run_id = datetime.now().strftime("%Y%m%d_%H%M%S")
+    created_at = datetime.now().isoformat(timespec="seconds")
+    base_dir = Path(str(artifact_root)) / str(strategy_id) / run_id
+    base_dir.mkdir(parents=True, exist_ok=True)
+    universe_path = Path(str(settings.get("universe_file", "")))
+    symbols = [str(item) for item in settings.get("symbols", [])]
+    universe_tier_value = str(settings.get("universe_tier", "")).strip()
+    universe_id = str(settings.get("universe_id", "")).strip() or universe_tier_value or universe_path.stem or "v2_universe"
+    universe_size = int(settings.get("universe_size", len(symbols)) or len(symbols))
+    universe_generation_rule = str(settings.get("universe_generation_rule", "")).strip() or "external_universe_file"
+    source_universe_manifest_path = str(
+        settings.get("source_universe_manifest_path", settings.get("universe_file", ""))
+    )
+    active_default_universe_tier = str(settings.get("active_default_universe_tier", "favorites_16")).strip()
+    candidate_default_universe_tier = str(settings.get("candidate_default_universe_tier", "generated_80")).strip()
+    baseline_reference_run_id = str(settings.get("baseline_reference_run_id", "")).strip()
+    config_hash = dependencies.stable_json_hash_fn(settings)
+    learning_manifest = add_artifact_metadata(
+        asdict(learning.model),
+        artifact_type="learned_policy_model",
+    )
+    policy_hash = dependencies.stable_json_hash_fn(learning_manifest)
+    universe_hash = (
+        str(settings.get("universe_hash", ""))
+        or dependencies.sha256_file_fn(universe_path)
+        or dependencies.stable_json_hash_fn(symbols)
+    )
+    model_hashes = {
+        "market_model": dependencies.sha256_text_fn("mkt_lr_v2"),
+        "sector_model": dependencies.sha256_text_fn("sector_lr_v2"),
+        "stock_model": dependencies.sha256_text_fn("stock_lr_v2"),
+        "cross_section_model": dependencies.sha256_text_fn("cross_section_v2"),
+        "learned_policy_model": policy_hash,
+    }
+    snapshot_hash = dependencies.compose_run_snapshot_hash_fn(
+        run_id=run_id,
+        strategy_id=strategy_id,
+        config_hash=config_hash,
+        policy_hash=policy_hash,
+        universe_hash=universe_hash,
+        model_hashes=model_hashes,
+    )
+    baseline_meta = with_backtest_metadata(
+        baseline,
+        run_id=run_id,
+        snapshot_hash=snapshot_hash,
+        config_hash=config_hash,
+    )
+    calibrated_meta = with_backtest_metadata(
+        calibration.calibrated,
+        run_id=run_id,
+        snapshot_hash=snapshot_hash,
+        config_hash=config_hash,
+    )
+    learned_meta = with_backtest_metadata(
+        learning.learned,
+        run_id=run_id,
+        snapshot_hash=snapshot_hash,
+        config_hash=config_hash,
+    )
+    return PublishRuntimeContext(
+        run_id=run_id,
+        created_at=created_at,
+        base_dir=base_dir,
+        symbols=symbols,
+        universe_tier_value=universe_tier_value,
+        universe_id=universe_id,
+        universe_size=universe_size,
+        universe_generation_rule=universe_generation_rule,
+        source_universe_manifest_path=source_universe_manifest_path,
+        active_default_universe_tier=active_default_universe_tier,
+        candidate_default_universe_tier=candidate_default_universe_tier,
+        baseline_reference_run_id=baseline_reference_run_id,
+        config_hash=config_hash,
+        learning_manifest=learning_manifest,
+        policy_hash=policy_hash,
+        universe_hash=universe_hash,
+        model_hashes=model_hashes,
+        snapshot_hash=snapshot_hash,
+        baseline_meta=baseline_meta,
+        calibrated_meta=calibrated_meta,
+        learned_meta=learned_meta,
+    )
+
+
+def _build_forecast_publish_artifacts(
+    *,
+    dependencies: ResearchPublishDependencies,
+    settings: dict[str, object],
+    context: PublishRuntimeContext,
+    strategy_id: str,
+    config_path: str,
+    source: str | None,
+    universe_file: str | None,
+    universe_limit: int | None,
+    universe_tier: str | None,
+    cache_root: str,
+    forecast_backend: str,
+    publish_forecast_models: bool,
+    split_mode: str,
+    embargo_days: int,
+) -> ForecastPublishArtifacts:
+    empty_window = {"start": "", "end": "", "n_steps": 0}
+    trajectory = None
+    frozen_daily_state: dict[str, object] = {}
+    forecast_models_manifest: dict[str, object] = {}
+    frozen_forecast_bundle: dict[str, object] = {}
+    train_window = empty_window
+    validation_window = empty_window
+    holdout_window = empty_window
+    regime_counts: dict[str, int] = {}
+    if publish_forecast_models:
+        trajectory = dependencies.load_or_build_v2_backtest_trajectory_fn(
+            config_path=str(settings.get("config_path", config_path)),
+            source=str(settings.get("source", source)) if settings.get("source", source) is not None else None,
+            universe_file=str(settings.get("universe_file", universe_file))
+            if settings.get("universe_file", universe_file) is not None
+            else None,
+            universe_limit=(
+                int(settings.get("universe_limit"))
+                if settings.get("universe_limit") is not None
+                else (int(universe_limit) if universe_limit is not None else None)
+            ),
+            universe_tier=str(settings.get("universe_tier", universe_tier)),
+            cache_root=cache_root,
+            refresh_cache=False,
+            forecast_backend=forecast_backend,
+            use_us_index_context=bool(settings.get("use_us_index_context", False)),
+            us_index_source=str(settings.get("us_index_source", "akshare")),
+        )
+        if trajectory is not None:
+            train_traj, validation_traj, holdout_traj = dependencies.split_research_trajectory_fn(
+                trajectory,
+                split_mode=split_mode,
+                embargo_days=embargo_days,
+            )
+            train_window = _window_payload(train_traj)
+            validation_window = _window_payload(validation_traj)
+            holdout_window = _window_payload(holdout_traj)
+            frozen_daily_state = dependencies.build_frozen_daily_state_payload_fn(
+                trajectory=trajectory,
+                split_mode=split_mode,
+                embargo_days=embargo_days,
+            )
+            for step in holdout_traj.steps:
+                regime = str(step.composite_state.risk_regime or "unknown")
+                regime_counts[regime] = int(regime_counts.get(regime, 0)) + 1
+            if (
+                str(forecast_backend).strip().lower() == "linear"
+                and getattr(trajectory, "prepared", None) is not None
+                and hasattr(trajectory.prepared, "market_valid")
+                and hasattr(trajectory.prepared, "panel")
+                and hasattr(trajectory.prepared, "market_feature_cols")
+                and hasattr(trajectory.prepared, "feature_cols")
+                and hasattr(trajectory.prepared, "dates")
+            ):
+                frozen_forecast_bundle = dependencies.build_frozen_linear_forecast_bundle_fn(trajectory.prepared)
+        forecast_models_manifest = add_artifact_metadata(
+            {
+                "run_id": context.run_id,
+                "strategy_id": str(strategy_id),
+                "forecast_backend": str(forecast_backend),
+                "split_mode": str(split_mode),
+                "embargo_days": int(embargo_days),
+                "use_us_index_context": bool(settings.get("use_us_index_context", False)),
+                "us_index_source": str(settings.get("us_index_source", "akshare")),
+                "use_us_sector_etf_context": bool(settings.get("use_us_sector_etf_context", False)),
+                "use_cn_etf_context": bool(settings.get("use_cn_etf_context", False)),
+                "cn_etf_source": str(settings.get("cn_etf_source", "akshare")),
+                "model_hashes": context.model_hashes,
+                "data_window": {
+                    "start": str(settings.get("start", "")),
+                    "end": str(settings.get("end", "")),
+                },
+                "regime_counts": regime_counts,
+                "frozen_bundle_ready": bool(frozen_forecast_bundle),
+            },
+            artifact_type="forecast_models_manifest",
+        )
+    return ForecastPublishArtifacts(
+        trajectory=trajectory,
+        frozen_daily_state=frozen_daily_state,
+        forecast_models_manifest=forecast_models_manifest,
+        frozen_forecast_bundle=frozen_forecast_bundle,
+        train_window=train_window,
+        validation_window=validation_window,
+        holdout_window=holdout_window,
+        regime_counts=regime_counts,
+    )
+
+
+def _build_publish_paths(
+    *,
+    dependencies: ResearchPublishDependencies,
+    artifact_root: str,
+    strategy_id: str,
+    base_dir: Path,
+    universe_tier_value: str,
+) -> PublishPaths:
+    return PublishPaths(
+        dataset_path=base_dir / "dataset_manifest.json",
+        calibration_path=base_dir / "policy_calibration.json",
+        learning_path=base_dir / "learned_policy_model.json",
+        forecast_models_path=base_dir / "forecast_models_manifest.json",
+        frozen_forecast_bundle_path=base_dir / "frozen_forecast_bundle.json",
+        frozen_state_path=base_dir / "frozen_daily_state.json",
+        backtest_path=base_dir / "backtest_summary.json",
+        consistency_path=base_dir / "consistency_checklist.json",
+        rolling_oos_path=base_dir / "rolling_oos_report.json",
+        info_manifest_path=base_dir / "info_manifest.json",
+        info_shadow_report_path=base_dir / "info_shadow_report.json",
+        external_signal_manifest_path=ensure_external_signal_manifest_path(base_dir),
+        manifest_path=base_dir / "research_manifest.json",
+        latest_policy_path=Path(str(artifact_root)) / str(strategy_id) / "latest_policy_model.json",
+        latest_manifest_path=Path(str(artifact_root)) / str(strategy_id) / "latest_research_manifest.json",
+        tier_latest_policy_path=dependencies.tier_latest_policy_path_fn(
+            artifact_root=artifact_root,
+            strategy_id=strategy_id,
+            universe_tier=universe_tier_value,
+        ),
+        tier_latest_manifest_path=dependencies.tier_latest_manifest_path_fn(
+            artifact_root=artifact_root,
+            strategy_id=strategy_id,
+            universe_tier=universe_tier_value,
+        ),
+    )
 
 
 def _default_info_shadow_report(settings: dict[str, object]) -> dict[str, object]:
