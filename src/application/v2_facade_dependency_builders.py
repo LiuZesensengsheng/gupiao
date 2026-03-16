@@ -120,6 +120,7 @@ def build_state_build_runtime_dependencies(module: ModuleType) -> _v2_state_buil
         forecast_cross_section_state=module.forecast_cross_section_state,
         build_mainline_states=module._build_mainline_states_external,
         build_candidate_selection_state=module._build_candidate_selection_state_external,
+        apply_leader_candidate_overlay=module._apply_leader_candidate_overlay,
     )
 
 
@@ -299,6 +300,7 @@ def build_daily_state_runtime_dependencies(
         top_positive_stock_signals=module.top_positive_stock_signals,
         quant_info_divergence_rows=module.quant_info_divergence_rows,
         attach_external_signals_to_composite_state=module._attach_external_signals_to_composite_state,
+        attach_insight_memory_to_state=module._attach_insight_memory_to_state,
     )
 
 
@@ -329,15 +331,19 @@ def build_daily_workflow_dependencies(module: ModuleType) -> DailyWorkflowDepend
         build_daily_symbol_names_fn=module._build_daily_symbol_names,
         attach_daily_info_overlay_fn=module._attach_daily_info_overlay,
         attach_daily_external_signal_overlay_fn=module._attach_daily_external_signal_overlay,
+        attach_daily_insight_overlay_fn=module._attach_daily_insight_overlay,
         filter_state_for_recommendation_scope_fn=module._filter_state_for_recommendation_scope,
+        apply_leader_candidate_overlay_fn=module._apply_leader_candidate_overlay,
         parse_boolish_fn=module._parse_boolish,
         resolve_daily_policy_model_fn=module._resolve_daily_policy_model,
         policy_spec_from_model_fn=module._policy_spec_from_model,
         apply_policy_fn=module.apply_policy,
+        build_execution_plans_fn=module._build_execution_plans,
         build_trade_actions_fn=module.build_trade_actions,
         load_prediction_review_context_fn=module._load_prediction_review_context,
         build_live_market_reporting_overlay_fn=module._build_live_market_reporting_overlay,
         decorate_composite_state_for_reporting_fn=module._decorate_composite_state_for_reporting,
         remember_daily_run_fn=module.remember_daily_run,
+        persist_daily_insight_artifacts_fn=module._persist_daily_insight_artifacts,
         emit_progress_fn=module._emit_progress,
     )

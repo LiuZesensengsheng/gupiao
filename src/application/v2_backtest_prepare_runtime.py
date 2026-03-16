@@ -75,7 +75,7 @@ def trajectory_cache_key(
     training_window_days: int | None,
 ) -> str:
     payload = {
-        "version": "v2-trajectory-cache-3",
+        "version": "v2-trajectory-cache-4",
         "config_path": str(Path(config_path).resolve()),
         "source": "" if source is None else str(source),
         "universe_file": "" if universe_file is None else str(Path(universe_file).resolve()),

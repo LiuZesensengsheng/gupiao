@@ -9,6 +9,7 @@ from src.application.v2_contracts import (
     CandidateSelectionState,
     CompositeState,
     CrossSectionForecastState,
+    ExecutionPlan,
     HorizonForecast,
     InfoAggregateState,
     MainlineState,
@@ -17,7 +18,10 @@ from src.application.v2_contracts import (
     MarketSentimentState,
     MacroContextState,
     SectorForecastState,
+    StockRoleSnapshot,
     StockForecastState,
+    ThemeEpisode,
+    Viewpoint,
 )
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -97,6 +101,10 @@ def decode_composite_state(payload: object) -> CompositeState | None:
         market_info_raw = payload.get("market_info_state", {})
         sector_info_raw = payload.get("sector_info_states", {})
         stock_info_raw = payload.get("stock_info_states", {})
+        viewpoints_raw = payload.get("viewpoints", [])
+        theme_episodes_raw = payload.get("theme_episodes", [])
+        stock_roles_raw = payload.get("stock_role_states", {})
+        execution_plans_raw = payload.get("execution_plans", [])
         return CompositeState(
             market=market,
             cross_section=cross,
@@ -125,6 +133,14 @@ def decode_composite_state(payload: object) -> CompositeState | None:
             macro_context_state=MacroContextState(**payload.get("macro_context_state", {}))
             if isinstance(payload.get("macro_context_state"), dict)
             else MacroContextState(),
+            viewpoints=[Viewpoint(**item) for item in viewpoints_raw if isinstance(item, dict)],
+            theme_episodes=[ThemeEpisode(**item) for item in theme_episodes_raw if isinstance(item, dict)],
+            stock_role_states={
+                str(key): StockRoleSnapshot(**value)
+                for key, value in stock_roles_raw.items()
+                if isinstance(value, dict)
+            } if isinstance(stock_roles_raw, dict) else {},
+            execution_plans=[ExecutionPlan(**item) for item in execution_plans_raw if isinstance(item, dict)],
         )
     except Exception:
         return None
@@ -222,6 +238,13 @@ def serialize_composite_state(state: CompositeState) -> dict[str, object]:
         },
         "capital_flow_state": asdict(getattr(state, "capital_flow_state", CapitalFlowState())),
         "macro_context_state": asdict(getattr(state, "macro_context_state", MacroContextState())),
+        "viewpoints": [asdict(item) for item in getattr(state, "viewpoints", [])],
+        "theme_episodes": [asdict(item) for item in getattr(state, "theme_episodes", [])],
+        "stock_role_states": {
+            str(key): asdict(value)
+            for key, value in getattr(state, "stock_role_states", {}).items()
+        },
+        "execution_plans": [asdict(item) for item in getattr(state, "execution_plans", [])],
     }
 
 

@@ -18,6 +18,7 @@ from src.application.v2_contracts import (
     SectorForecastState,
     StockForecastState,
 )
+from src.application.v2_leader_runtime import build_leader_score_snapshots
 from src.domain.entities import TradeAction
 
 
@@ -62,6 +63,78 @@ def stock_policy_score(
     return float(deps.alpha_score_components(stock)["alpha_score"])
 
 
+def stock_signal_profile(
+    stock: StockForecastState,
+    *,
+    deps: PolicyRuntimeDependencies,
+) -> dict[str, float | bool]:
+    components = deps.alpha_score_components(stock)
+    alpha_score = float(components["alpha_score"])
+    entry_score = float(
+        deps.clip(
+            alpha_score
+            + 0.42 * float(components["swing_edge"])
+            + 0.28 * float(components["medium_edge"])
+            + 0.16 * float(components["sector_edge"])
+            + 0.14 * float(components["trend_alignment"])
+            - 0.26 * float(components["risk_penalty"])
+            - 0.10 * float(components["status_penalty"]),
+            0.0,
+            1.0,
+        )
+    )
+    hold_score = float(
+        deps.clip(
+            alpha_score
+            + 0.46 * float(components["continuation_bonus"])
+            + 0.18 * float(components["stability_bonus"])
+            + 0.12 * float(components["quality_bonus"])
+            + 0.10 * float(components["trend_alignment"])
+            - 0.22 * float(components["swing_fade_penalty"])
+            - 0.14 * float(components["reversal_penalty"]),
+            0.0,
+            1.0,
+        )
+    )
+    exit_risk = float(
+        deps.clip(
+            0.72 * float(components["risk_penalty"])
+            + 0.48 * float(components["swing_fade_penalty"])
+            + 0.28 * float(components["reversal_penalty"])
+            + 0.24 * float(components["weak_mid_penalty"])
+            + 0.18 * float(components["status_penalty"])
+            - 0.28 * float(components["continuation_bonus"])
+            - 0.16 * float(components["quality_bonus"]),
+            0.0,
+            1.0,
+        )
+    )
+    conviction_spread = float(max(0.0, entry_score - max(0.52, exit_risk + 0.44)))
+    keep_strength = float(
+        deps.clip(
+            0.55 * hold_score
+            + 0.20 * entry_score
+            + 0.15 * float(components["quality_bonus"])
+            + 0.10 * float(components["stability_bonus"])
+            - 0.28 * exit_risk,
+            0.0,
+            1.0,
+        )
+    )
+    return {
+        "alpha_score": alpha_score,
+        "entry_score": entry_score,
+        "hold_score": hold_score,
+        "exit_risk": exit_risk,
+        "conviction_spread": conviction_spread,
+        "keep_strength": keep_strength,
+        "strong_entry": bool(entry_score >= 0.66 and exit_risk <= 0.12),
+        "strong_hold": bool(hold_score >= 0.65 and exit_risk <= 0.10),
+        "weakening": bool(hold_score <= 0.57 or exit_risk >= 0.11),
+        "urgent_exit": bool(exit_risk >= 0.15 and hold_score < 0.60),
+    }
+
+
 def alpha_opportunity_metrics(
     stocks: Iterable[StockForecastState],
     *,
@@ -79,8 +152,19 @@ def alpha_opportunity_metrics(
             "breadth_ratio": 0.0,
             "strong_count": 0.0,
             "alpha_headroom": 0.0,
+            "entry_top_score": 0.0,
+            "entry_avg_top3": 0.0,
+            "entry_median_score": 0.0,
+            "entry_headroom": 0.0,
+            "entry_separation": 0.0,
+            "hold_strength": 0.0,
+            "exit_pressure": 0.0,
         }
     scores = sorted((stock_policy_score(stock, deps=deps) for stock in actionable), reverse=True)
+    signal_profiles = [stock_signal_profile(stock, deps=deps) for stock in actionable]
+    entry_scores = sorted((float(profile["entry_score"]) for profile in signal_profiles), reverse=True)
+    hold_scores = sorted((float(profile["hold_score"]) for profile in signal_profiles), reverse=True)
+    exit_risks = sorted((float(profile["exit_risk"]) for profile in signal_profiles))
     top_slice = scores[: min(3, len(scores))]
     top_score = float(scores[0])
     avg_top3 = float(sum(top_slice) / max(1, len(top_slice)))
@@ -89,6 +173,21 @@ def alpha_opportunity_metrics(
     strong_count = int(sum(1 for score in scores if score >= strong_cut))
     breadth_ratio = float(strong_count / max(1, len(scores)))
     alpha_headroom = float(max(0.0, avg_top3 - max(0.54, median_score)))
+    entry_top = float(entry_scores[0])
+    entry_top3 = entry_scores[: min(3, len(entry_scores))]
+    entry_avg_top3 = float(sum(entry_top3) / max(1, len(entry_top3)))
+    entry_median = float(np.median(entry_scores))
+    entry_headroom = float(max(0.0, entry_avg_top3 - max(0.55, entry_median)))
+    entry_separation = float(
+        deps.clip(
+            1.15 * max(0.0, entry_top - entry_median)
+            + 0.95 * max(0.0, entry_avg_top3 - entry_median),
+            0.0,
+            0.30,
+        )
+    )
+    hold_strength = float(sum(hold_scores[: min(3, len(hold_scores))]) / max(1, min(3, len(hold_scores))))
+    exit_pressure = float(np.mean(exit_risks[-min(5, len(exit_risks)) :])) if exit_risks else 0.0
     return {
         "top_score": top_score,
         "avg_top3": avg_top3,
@@ -96,6 +195,45 @@ def alpha_opportunity_metrics(
         "breadth_ratio": breadth_ratio,
         "strong_count": float(strong_count),
         "alpha_headroom": alpha_headroom,
+        "entry_top_score": entry_top,
+        "entry_avg_top3": entry_avg_top3,
+        "entry_median_score": entry_median,
+        "entry_headroom": entry_headroom,
+        "entry_separation": entry_separation,
+        "hold_strength": hold_strength,
+        "exit_pressure": exit_pressure,
+    }
+
+
+def holding_alpha_profile(
+    stock: StockForecastState,
+    *,
+    deps: PolicyRuntimeDependencies,
+) -> dict[str, float | bool]:
+    signal_profile = stock_signal_profile(stock, deps=deps)
+    near_term_stack = float(
+        0.22 * float(stock.up_1d_prob)
+        + 0.24 * float(getattr(stock, "up_2d_prob", 0.5))
+        + 0.26 * float(getattr(stock, "up_3d_prob", 0.5))
+        + 0.28 * float(stock.up_5d_prob)
+    )
+    continuation_stack = float(
+        0.34 * float(getattr(stock, "up_3d_prob", 0.5))
+        + 0.36 * float(stock.up_5d_prob)
+        + 0.12 * float(getattr(stock, "up_10d_prob", 0.5))
+        + 0.18 * float(stock.up_20d_prob)
+    )
+    relative_edge = float(stock.excess_vs_sector_prob)
+    return {
+        "alpha_score": float(signal_profile["alpha_score"]),
+        "near_term_stack": near_term_stack,
+        "continuation_stack": continuation_stack,
+        "relative_edge": relative_edge,
+        "persistence_score": float(signal_profile["keep_strength"]),
+        "breakdown_risk": float(signal_profile["exit_risk"]),
+        "strong_persistence": bool(signal_profile["strong_hold"]),
+        "weakening": bool(signal_profile["weakening"]),
+        "urgent_exit": bool(signal_profile["urgent_exit"]),
     }
 
 
@@ -137,6 +275,104 @@ def mainline_preference_maps(
             symbol_key = str(symbol)
             symbol_boosts[symbol_key] = max(symbol_boosts.get(symbol_key, 0.0), boost + 0.03)
     return sector_boosts, symbol_boosts, confirmed
+
+
+def merge_symbol_score_adjustments(
+    *maps: dict[str, float] | None,
+    deps: PolicyRuntimeDependencies,
+) -> dict[str, float]:
+    merged: dict[str, float] = {}
+    for mapping in maps:
+        if not mapping:
+            continue
+        for symbol, value in mapping.items():
+            symbol_key = str(symbol).strip()
+            if not symbol_key:
+                continue
+            merged[symbol_key] = float(
+                deps.clip(
+                    float(merged.get(symbol_key, 0.0)) + float(value),
+                    -0.24,
+                    0.20,
+                )
+            )
+    return merged
+
+
+def leader_symbol_preference_maps(
+    *,
+    state: CompositeState,
+    candidate_stocks: Iterable[StockForecastState],
+    deps: PolicyRuntimeDependencies,
+) -> tuple[dict[str, float], list[str]]:
+    candidate_symbols = {
+        str(stock.symbol).strip()
+        for stock in candidate_stocks
+        if str(getattr(stock, "symbol", "")).strip()
+    }
+    snapshots = [
+        item
+        for item in build_leader_score_snapshots(state=state)
+        if not candidate_symbols or str(item.symbol).strip() in candidate_symbols
+    ]
+    if not snapshots:
+        return {}, []
+
+    adjustments: dict[str, float] = {}
+    promoted: list[str] = []
+    suppressed: list[str] = []
+    hard_negative_count = 0
+    for item in snapshots:
+        role = str(item.role or "").strip().lower()
+        phase = str(item.theme_phase or "").strip().lower()
+        adjustment = 0.0
+        adjustment += {
+            "leader": 0.06,
+            "core": 0.03,
+            "follower": 0.00,
+            "rebound": -0.01,
+            "laggard": -0.08,
+        }.get(role, 0.0)
+        adjustment += {
+            "strengthening": 0.04,
+            "emerging": 0.02,
+            "crowded": -0.02,
+            "diverging": -0.05,
+            "fading": -0.10,
+        }.get(phase, 0.0)
+        adjustment += 0.08 * max(0.0, float(item.conviction_score) - 0.62) / 0.38
+        adjustment += 0.05 * max(0.0, float(item.candidate_score) - 0.60) / 0.40
+        adjustment -= 0.12 * max(0.0, float(item.negative_score) - 0.46) / 0.54
+        if bool(item.role_downgrade):
+            adjustment -= 0.05
+        if bool(item.hard_negative):
+            hard_negative_count += 1
+            adjustment = min(
+                adjustment,
+                -0.18 - 0.10 * max(0.0, float(item.negative_score) - 0.58) / 0.42,
+            )
+        adjustment = float(deps.clip(float(adjustment), -0.26, 0.14))
+        if abs(adjustment) < 0.015:
+            continue
+        adjustments[str(item.symbol)] = adjustment
+        if adjustment >= 0.06:
+            promoted.append(str(item.symbol))
+        elif adjustment <= -0.10:
+            suppressed.append(str(item.symbol))
+
+    if not adjustments:
+        return {}, []
+
+    notes: list[str] = []
+    notes.append(
+        "Leader weighting active: "
+        f"{len(promoted)} promoted, {len(suppressed)} suppressed, {hard_negative_count} hard negatives."
+    )
+    if promoted:
+        notes.append("Leader-promoted symbols: " + ", ".join(promoted[:3]))
+    if suppressed:
+        notes.append("Leader-suppressed symbols: " + ", ".join(suppressed[:3]))
+    return adjustments, notes
 
 
 def ranked_sector_budgets_with_alpha(
@@ -209,12 +445,23 @@ def allocate_with_sector_budgets(
     )
 
 
+def _role_rank(role: str) -> int:
+    return {
+        "leader": 0,
+        "core": 1,
+        "follower": 2,
+        "rebound": 3,
+        "laggard": 4,
+    }.get(str(role or "").strip().lower(), 99)
+
+
 def finalize_target_weights(
     *,
     desired_weights: dict[str, float],
     current_weights: dict[str, float],
     current_holding_days: dict[str, int],
     stocks: list[StockForecastState],
+    state: CompositeState | None = None,
     target_exposure: float,
     min_trade_delta: float,
     min_holding_days: int,
@@ -222,6 +469,18 @@ def finalize_target_weights(
 ) -> tuple[dict[str, float], list[str]]:
     adjusted = {symbol: max(0.0, float(weight)) for symbol, weight in desired_weights.items()}
     state_map = {item.symbol: item for item in stocks}
+    holding_profiles = {
+        symbol: holding_alpha_profile(state, deps=deps)
+        for symbol, state in state_map.items()
+    }
+    theme_episodes = {
+        str(item.theme): item
+        for item in getattr(state, "theme_episodes", []) or []
+    } if state is not None else {}
+    role_states = {
+        str(symbol): payload
+        for symbol, payload in (getattr(state, "stock_role_states", {}) or {}).items()
+    } if state is not None else {}
     notes: list[str] = []
     locked_symbols: set[str] = set()
 
@@ -257,20 +516,110 @@ def finalize_target_weights(
                 notes.append(f"{symbol}: data insufficient, add-on blocked.")
                 continue
         holding_days = int(max(0, current_holding_days.get(symbol, 0)))
+        holding_profile = holding_profiles.get(symbol)
+        role_state = role_states.get(symbol)
+        theme_episode = theme_episodes.get(str(getattr(role_state, "theme", ""))) if role_state is not None else None
+        theme_fading = bool(theme_episode is not None and str(theme_episode.phase) == "fading")
+        theme_strengthening = bool(theme_episode is not None and str(theme_episode.phase) == "strengthening")
+        theme_crowded = bool(
+            theme_episode is not None
+            and str(theme_episode.phase) == "crowded"
+            and float(getattr(theme_episode, "event_risk", 0.0)) >= 0.55
+        )
+        role_downgrade = bool(getattr(role_state, "role_downgrade", False))
+        laggard_role = bool(role_state is not None and str(getattr(role_state, "role", "")) == "laggard")
+        strong_theme_holder = bool(
+            theme_strengthening
+            and role_state is not None
+            and str(getattr(role_state, "role", "")) in {"leader", "core"}
+        )
         if current > 1e-9 and holding_days < int(min_holding_days) and target < current - 1e-9:
+            if (
+                holding_profile is not None
+                and (
+                    bool(holding_profile["urgent_exit"])
+                    or theme_fading
+                    or role_downgrade
+                    or laggard_role
+                )
+            ):
+                notes.append(
+                    f"{symbol}: early exit allowed inside holding window because exit pressure is confirmed."
+                )
+                continue
             adjusted[symbol] = current
             locked_symbols.add(symbol)
             notes.append(
                 f"{symbol}: minimum holding window active ({holding_days}/{int(min_holding_days)}d), sell blocked."
             )
             continue
+        if (
+            current > 1e-9
+            and target > 1e-9
+            and target < current - 1e-9
+            and holding_profile is not None
+            and bool(holding_profile["strong_persistence"])
+            and not bool(holding_profile["urgent_exit"])
+            and target >= current * 0.35
+        ):
+            retention_ratio = float(
+                np.clip(
+                    (
+                        0.72
+                        + 0.25 * max(0.0, float(holding_profile["persistence_score"]) - 0.60)
+                        + (0.04 if strong_theme_holder else 0.0)
+                    ),
+                    0.72,
+                    0.86 if strong_theme_holder else 0.82,
+                )
+            )
+            retained_weight = max(target, current * retention_ratio)
+            if retained_weight > target + 1e-9:
+                adjusted[symbol] = retained_weight
+                locked_symbols.add(symbol)
+                notes.append(
+                    (
+                        f"{symbol}: strengthening theme plus leader/core role softened the trim."
+                        if strong_theme_holder
+                        else f"{symbol}: strong alpha persistence, trim softened to keep winner running."
+                    )
+                )
+        if current > 1e-9 and target > 1e-9 and target < current - 1e-9 and theme_crowded:
+            notes.append(f"{symbol}: crowded theme with high event risk, reduce into strength instead of chasing.")
 
     for symbol in sorted(set(adjusted) | set(current_weights)):
         current = max(0.0, float(current_weights.get(symbol, 0.0)))
         target = max(0.0, float(adjusted.get(symbol, 0.0)))
-        if abs(target - current) < float(min_trade_delta):
+        dynamic_trade_delta = float(min_trade_delta)
+        holding_profile = holding_profiles.get(symbol)
+        role_state = role_states.get(symbol)
+        theme_episode = theme_episodes.get(str(getattr(role_state, "theme", ""))) if role_state is not None else None
+        theme_fading = bool(theme_episode is not None and str(theme_episode.phase) == "fading")
+        strong_theme_holder = bool(
+            theme_episode is not None
+            and str(theme_episode.phase) == "strengthening"
+            and role_state is not None
+            and str(getattr(role_state, "role", "")) in {"leader", "core"}
+        )
+        if current > 1e-9 and target < current - 1e-9 and holding_profile is not None:
+            if strong_theme_holder and target > 1e-9:
+                dynamic_trade_delta *= 1.90
+            elif bool(holding_profile["strong_persistence"]) and target > 1e-9:
+                dynamic_trade_delta *= 1.60
+            if theme_fading or bool(getattr(role_state, "role_downgrade", False)) or str(getattr(role_state, "role", "")) == "laggard":
+                dynamic_trade_delta *= 0.40
+            elif bool(holding_profile["urgent_exit"]):
+                dynamic_trade_delta *= 0.35
+            elif bool(holding_profile["weakening"]):
+                dynamic_trade_delta *= 0.45
+        if abs(target - current) < dynamic_trade_delta:
             if abs(target - current) > 1e-9:
-                notes.append(f"{symbol}: rebalance gap below threshold.")
+                if dynamic_trade_delta > float(min_trade_delta) + 1e-9:
+                    notes.append(f"{symbol}: strong alpha hold threshold suppressed a small trim.")
+                elif dynamic_trade_delta < float(min_trade_delta) - 1e-9:
+                    notes.append(f"{symbol}: weakening alpha lowered the rebalance threshold.")
+                else:
+                    notes.append(f"{symbol}: rebalance gap below threshold.")
             if current > 1e-9:
                 adjusted[symbol] = current
                 locked_symbols.add(symbol)
@@ -429,6 +778,12 @@ def apply_policy(
         risk_cutoff=float(policy_spec.event_risk_cutoff),
         deps=deps,
     )
+    leader_symbol_boosts, leader_weight_notes = leader_symbol_preference_maps(
+        state=state,
+        candidate_stocks=candidate_stocks,
+        deps=deps,
+    )
+    risk_notes.extend(leader_weight_notes)
     alpha_headroom = float(alpha_metrics["alpha_headroom"])
     alpha_breadth = float(alpha_metrics["breadth_ratio"])
     top_alpha = float(alpha_metrics["top_score"])
@@ -567,6 +922,13 @@ def apply_policy(
             if not concentration_preference:
                 target_position_count = min(5, target_position_count + 1)
             risk_notes.append(f"Mainline {top_mainline.name} confirmed: measured exposure support.")
+    theme_episodes = list(getattr(state, "theme_episodes", []) or [])
+    if theme_episodes:
+        top_theme = theme_episodes[0]
+        if str(top_theme.phase) == "crowded" and float(top_theme.event_risk) >= float(policy_spec.event_risk_cutoff):
+            risk_notes.append(
+                f"Theme {top_theme.theme} is crowded with high event risk: favor reduce-into-strength over fresh chase."
+            )
     if confirmed_mainlines:
         if concentration_preference:
             target_position_count = min(target_position_count, 3)
@@ -687,7 +1049,11 @@ def apply_policy(
             for sector, weight in desired_sector_budgets.items()
         },
         max_single_position=float(max_single_position),
-        symbol_score_adjustments=mainline_symbol_boosts,
+        symbol_score_adjustments=merge_symbol_score_adjustments(
+            mainline_symbol_boosts,
+            leader_symbol_boosts,
+            deps=deps,
+        ),
         deps=deps,
     )
     desired_symbol_target_weights, external_signal_notes = apply_external_signal_weight_tilts(
@@ -708,6 +1074,7 @@ def apply_policy(
         current_weights=policy_input.current_weights,
         current_holding_days=policy_input.current_holding_days,
         stocks=state.stocks,
+        state=state,
         target_exposure=target_exposure,
         min_trade_delta=min(0.02, 0.25 * float(turnover_cap)),
         min_holding_days=min_holding_days,

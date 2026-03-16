@@ -167,6 +167,77 @@ class MainlineState:
 
 
 @dataclass(frozen=True)
+class Viewpoint:
+    target_type: str
+    target: str
+    theme: str
+    direction: str
+    confidence: float
+    importance: float
+    horizon: str
+    reason: str
+    invalid_if: str = ""
+    event_tag: str = ""
+    source: str = ""
+    source_weight: float = 1.0
+    effective_time: str = ""
+    ingest_time: str = ""
+    weight: float = 0.0
+    reason_hash: str = ""
+
+
+@dataclass(frozen=True)
+class ThemeEpisode:
+    theme: str
+    phase: str
+    conviction: float = 0.0
+    breadth: float = 0.0
+    leadership: float = 0.0
+    catalyst_strength: float = 0.0
+    event_risk: float = 0.0
+    crowding: float = 0.0
+    capital_support: float = 0.0
+    macro_alignment: float = 0.0
+    viewpoint_score: float = 0.0
+    viewpoint_conflict: float = 0.0
+    viewpoint_count: int = 0
+    sectors: List[str] = field(default_factory=list)
+    representative_symbols: List[str] = field(default_factory=list)
+    effective_time: str = ""
+    phase_reason: str = ""
+
+
+@dataclass(frozen=True)
+class StockRoleSnapshot:
+    symbol: str
+    theme: str
+    role: str
+    previous_role: str = ""
+    role_downgrade: bool = False
+    theme_rank: int = 0
+    theme_size: int = 0
+    theme_percentile: float = 0.0
+    alpha_score: float = 0.0
+    excess_vs_sector: float = 0.0
+    breakdown_risk: float = 0.0
+    note: str = ""
+
+
+@dataclass(frozen=True)
+class ExecutionPlan:
+    symbol: str
+    bias: str
+    buy_zone: str
+    avoid_zone: str
+    reduce_if: str
+    exit_if: str
+    reason: str
+    name: str = ""
+    theme: str = ""
+    role: str = ""
+
+
+@dataclass(frozen=True)
 class InfoItem:
     date: str
     target_type: str
@@ -236,6 +307,10 @@ class CompositeState:
     stock_info_states: Dict[str, InfoAggregateState] = field(default_factory=dict)
     capital_flow_state: CapitalFlowState = field(default_factory=CapitalFlowState)
     macro_context_state: MacroContextState = field(default_factory=MacroContextState)
+    viewpoints: List[Viewpoint] = field(default_factory=list)
+    theme_episodes: List[ThemeEpisode] = field(default_factory=list)
+    stock_role_states: Dict[str, StockRoleSnapshot] = field(default_factory=dict)
+    execution_plans: List[ExecutionPlan] = field(default_factory=list)
 
 
 @dataclass(frozen=True)

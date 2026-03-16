@@ -6,6 +6,7 @@ from pathlib import Path
 
 import pandas as pd
 
+from src.application.v2_leader_runtime import top_leader_candidates
 from src.application.v2_contracts import DailyRunResult, V2BacktestSummary, V2CalibrationResult, V2PolicyLearningResult
 from src.contracts.reporting import DailyReportViewModel, ResearchReportViewModel
 from src.review_analytics.summaries import (
@@ -27,6 +28,14 @@ def _load_json_payload(path_like: object) -> dict[str, object]:
     except Exception:
         return {}
     return payload if isinstance(payload, dict) else {}
+
+
+def _load_json_items(path_like: object) -> list[dict[str, object]]:
+    payload = _load_json_payload(path_like)
+    items = payload.get("items", [])
+    if not isinstance(items, list):
+        return []
+    return [dict(item) for item in items if isinstance(item, dict)]
 
 
 def _next_business_day(date_text: str) -> str:
@@ -74,6 +83,20 @@ def build_daily_report_view_model(result: DailyRunResult) -> DailyReportViewMode
 
     def _stock_name(symbol: str) -> str:
         return str(name_map.get(symbol, symbol))
+
+    theme_episodes = [asdict(item) for item in getattr(result.composite_state, "theme_episodes", [])]
+    leader_candidates = [
+        {
+            **asdict(item),
+            "name": _stock_name(item.symbol),
+        }
+        for item in top_leader_candidates(state=result.composite_state, limit=10)
+    ]
+    role_states = {
+        str(symbol): asdict(item)
+        for symbol, item in getattr(result.composite_state, "stock_role_states", {}).items()
+    }
+    execution_plans = [asdict(item) for item in getattr(result.composite_state, "execution_plans", [])]
 
     candidate_order = {
         str(symbol): idx
@@ -179,6 +202,28 @@ def build_daily_report_view_model(result: DailyRunResult) -> DailyReportViewMode
             }
         )
 
+    holding_role_changes: list[dict[str, object]] = []
+    active_symbols = {
+        str(action.symbol)
+        for action in result.trade_actions
+        if float(action.current_weight) > 0.0 or float(action.target_weight) > 0.0
+    }
+    for symbol in sorted(active_symbols):
+        role_payload = role_states.get(symbol)
+        if not role_payload:
+            continue
+        holding_role_changes.append(
+            {
+                "symbol": symbol,
+                "name": _stock_name(symbol),
+                "theme": str(role_payload.get("theme", "")),
+                "role": str(role_payload.get("role", "")),
+                "previous_role": str(role_payload.get("previous_role", "")),
+                "role_downgrade": bool(role_payload.get("role_downgrade", False)),
+                "note": str(role_payload.get("note", "")),
+            }
+        )
+
     return DailyReportViewModel(
         strategy_id=str(summary["strategy_id"]),
         run_id=str(summary["run_id"]),
@@ -230,6 +275,10 @@ def build_daily_report_view_model(result: DailyRunResult) -> DailyReportViewMode
             "macro_context": dict(summary["macro_context_state"]),
         },
         mainlines=[dict(item) for item in summary["mainlines"]],
+        theme_episodes=theme_episodes,
+        leader_candidates=leader_candidates,
+        holding_role_changes=holding_role_changes,
+        execution_plans=execution_plans,
         top_recommendations=top_recommendations,
         explanation_cards=explanation_cards,
         prediction_review={
@@ -333,6 +382,25 @@ def build_research_report_view_model(
 
     info_manifest = _load_json_payload(artifact_payload.get("info_manifest"))
     info_shadow = _load_json_payload(artifact_payload.get("info_shadow_report"))
+    insight_manifest = _load_json_payload(artifact_payload.get("insight_manifest"))
+    leader_manifest = _load_json_payload(artifact_payload.get("leader_manifest"))
+    leader_candidates = _load_json_items(artifact_payload.get("leader_candidates"))
+    theme_episodes = _load_json_items(artifact_payload.get("theme_episodes"))
+    stock_roles = _load_json_items(artifact_payload.get("stock_roles"))
+    phase_counts = dict(insight_manifest.get("phase_counts", {}))
+    role_counts = dict(insight_manifest.get("role_counts", {}))
+    fading_themes = [
+        item for item in theme_episodes
+        if str(item.get("phase", "")) == "fading"
+    ]
+    crowded_themes = [
+        item for item in theme_episodes
+        if str(item.get("phase", "")) == "crowded"
+    ]
+    role_downgrades = [
+        item for item in stock_roles
+        if bool(item.get("role_downgrade", False))
+    ]
     return ResearchReportViewModel(
         strategy_id=str(strategy_id),
         run_id=final_run_id,
@@ -348,5 +416,25 @@ def build_research_report_view_model(
         info_shadow_summary={
             "manifest": info_manifest,
             "shadow_report": info_shadow,
+        },
+        theme_lifecycle_summary={
+            "manifest": insight_manifest,
+            "phase_counts": phase_counts,
+            "top_themes": theme_episodes[:6],
+        },
+        role_distribution_summary={
+            "role_counts": role_counts,
+            "top_roles": stock_roles[:12],
+        },
+        exit_contribution_summary={
+            "fading_theme_count": len(fading_themes),
+            "crowded_theme_count": len(crowded_themes),
+            "role_downgrade_count": len(role_downgrades),
+            "examples": role_downgrades[:8],
+        },
+        leader_summary={
+            "manifest": leader_manifest,
+            "evaluation": dict(leader_manifest.get("evaluation", {})),
+            "top_candidates": leader_candidates[:12],
         },
     )

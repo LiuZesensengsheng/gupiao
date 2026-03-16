@@ -38,6 +38,7 @@ class StateBuildRuntimeDependencies:
     forecast_cross_section_state: Callable[[pd.DataFrame], object]
     build_mainline_states: Callable[..., list[object]]
     build_candidate_selection_state: Callable[..., object]
+    apply_leader_candidate_overlay: Callable[..., CompositeState]
 
 
 def build_stock_states_from_panel_slice(
@@ -500,7 +501,7 @@ def compose_state(
         risk_regime=risk_regime,
         stock_score_fn=deps.stock_policy_score,
     )
-    return CompositeState(
+    composite_state = CompositeState(
         market=market,
         cross_section=cross_section,
         sectors=ordered_sectors,
@@ -509,6 +510,9 @@ def compose_state(
         risk_regime=risk_regime,
         candidate_selection=candidate_selection,
         mainlines=mainlines,
+    )
+    return deps.apply_leader_candidate_overlay(
+        state=composite_state,
     )
 
 

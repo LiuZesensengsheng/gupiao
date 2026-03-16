@@ -70,6 +70,8 @@ def build_research_publish_dependencies() -> ResearchPublishDependencies:
         decode_composite_state_fn=legacy._decode_composite_state,
         enrich_state_with_info_fn=legacy._enrich_state_with_info,
         attach_external_signals_to_composite_state_fn=legacy._attach_external_signals_to_composite_state,
+        attach_insight_memory_to_state_fn=legacy._attach_insight_memory_to_state,
+        build_insight_artifact_payloads_fn=legacy._build_insight_artifact_payloads,
         serialize_composite_state_fn=legacy._serialize_composite_state,
         load_json_dict_fn=legacy._load_json_dict,
         tier_latest_manifest_path_fn=legacy._tier_latest_manifest_path,

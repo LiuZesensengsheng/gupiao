@@ -13,6 +13,7 @@ from src.application.v2_external_signal_support import (
     ensure_external_signal_manifest_path,
     merge_external_signal_manifest_summary,
 )
+from src.application.v2_leader_runtime import build_leader_artifact_payloads
 from src.contracts.artifacts import add_artifact_metadata
 
 
@@ -37,6 +38,8 @@ class ResearchPublishDependencies:
     decode_composite_state_fn: Callable[[object], object | None]
     enrich_state_with_info_fn: Callable[..., object]
     attach_external_signals_to_composite_state_fn: Callable[..., tuple[object, dict[str, object]]]
+    attach_insight_memory_to_state_fn: Callable[..., object]
+    build_insight_artifact_payloads_fn: Callable[..., dict[str, object]]
     serialize_composite_state_fn: Callable[[object], dict[str, object]]
     load_json_dict_fn: Callable[[object], dict[str, object]]
     tier_latest_manifest_path_fn: Callable[..., Path]
@@ -184,7 +187,21 @@ def publish_research_artifacts(
         cache_root=cache_root,
         retrain_days=retrain_days,
         forecast_backend=forecast_backend,
+        training_window_days=training_window_days,
         publish_forecast_models=publish_forecast_models,
+        split_mode=split_mode,
+        embargo_days=embargo_days,
+    )
+    insight_artifacts = _build_insight_publish_artifacts(
+        dependencies=dependencies,
+        settings=settings,
+        info_artifacts=info_artifacts,
+    )
+    leader_artifacts = _build_leader_publish_artifacts(
+        dependencies=dependencies,
+        settings=settings,
+        info_artifacts=info_artifacts,
+        forecast_artifacts=forecast_artifacts,
         split_mode=split_mode,
         embargo_days=embargo_days,
     )
@@ -205,6 +222,8 @@ def publish_research_artifacts(
         paths=paths,
         forecast_artifacts=forecast_artifacts,
         info_artifacts=info_artifacts,
+        insight_artifacts=insight_artifacts,
+        leader_artifacts=leader_artifacts,
         split_mode=split_mode,
         embargo_days=embargo_days,
         publish_forecast_models=publish_forecast_models,
@@ -218,6 +237,8 @@ def publish_research_artifacts(
         paths=paths,
         forecast_artifacts=forecast_artifacts,
         info_artifacts=info_artifacts,
+        insight_artifacts=insight_artifacts,
+        leader_artifacts=leader_artifacts,
         manifests=manifests,
         gate_artifacts=gate_artifacts,
         publish_forecast_models=publish_forecast_models,
@@ -253,6 +274,13 @@ def publish_research_artifacts(
         "info_item_count": str(info_artifacts.info_manifest.get("info_item_count", 0)),
         "info_shadow_enabled": "true" if info_artifacts.info_shadow_enabled else "false",
         "external_signal_manifest": str(paths.external_signal_manifest_path),
+        "insight_manifest": str(paths.insight_manifest_path),
+        "viewpoints": str(paths.viewpoints_path),
+        "theme_episodes": str(paths.theme_episodes_path),
+        "stock_roles": str(paths.stock_roles_path),
+        "execution_plan": str(paths.execution_plan_path),
+        "leader_manifest": str(paths.leader_manifest_path),
+        "leader_candidates": str(paths.leader_candidates_path),
         "external_signal_version": str(settings.get("external_signal_version", "v1")),
         "external_signal_enabled": "true" if bool(settings.get("external_signals", True)) else "false",
         "generator_manifest": str(settings.get("generator_manifest_path", "")),
@@ -362,6 +390,21 @@ class ForecastPublishArtifacts:
 
 
 @dataclass(frozen=True)
+class InsightPublishArtifacts:
+    manifest: dict[str, object]
+    viewpoints: list[dict[str, object]]
+    theme_episodes: list[dict[str, object]]
+    stock_roles: list[dict[str, object]]
+    execution_plan: list[dict[str, object]]
+
+
+@dataclass(frozen=True)
+class LeaderPublishArtifacts:
+    manifest: dict[str, object]
+    candidates: list[dict[str, object]]
+
+
+@dataclass(frozen=True)
 class PublishPaths:
     dataset_path: Path
     calibration_path: Path
@@ -375,6 +418,13 @@ class PublishPaths:
     info_manifest_path: Path
     info_shadow_report_path: Path
     external_signal_manifest_path: Path
+    insight_manifest_path: Path
+    viewpoints_path: Path
+    theme_episodes_path: Path
+    stock_roles_path: Path
+    execution_plan_path: Path
+    leader_manifest_path: Path
+    leader_candidates_path: Path
     manifest_path: Path
     latest_policy_path: Path
     latest_manifest_path: Path
@@ -629,6 +679,13 @@ def _build_publish_paths(
         info_manifest_path=base_dir / "info_manifest.json",
         info_shadow_report_path=base_dir / "info_shadow_report.json",
         external_signal_manifest_path=ensure_external_signal_manifest_path(base_dir),
+        insight_manifest_path=base_dir / "insight_manifest.json",
+        viewpoints_path=base_dir / "viewpoints.json",
+        theme_episodes_path=base_dir / "theme_episodes.json",
+        stock_roles_path=base_dir / "stock_roles.json",
+        execution_plan_path=base_dir / "execution_plan.json",
+        leader_manifest_path=base_dir / "leader_manifest.json",
+        leader_candidates_path=base_dir / "leader_candidates.json",
         manifest_path=base_dir / "research_manifest.json",
         latest_policy_path=Path(str(artifact_root)) / str(strategy_id) / "latest_policy_model.json",
         latest_manifest_path=Path(str(artifact_root)) / str(strategy_id) / "latest_research_manifest.json",
@@ -682,6 +739,7 @@ def _build_info_publish_artifacts(
     cache_root: str,
     retrain_days: int,
     forecast_backend: str,
+    training_window_days: int | None,
     publish_forecast_models: bool,
     split_mode: str,
     embargo_days: int,
@@ -784,6 +842,12 @@ def _build_info_publish_artifacts(
                 as_of_date=info_as_of_date,
                 info_items=info_items,
             )
+            frozen_composite = dependencies.attach_insight_memory_to_state_fn(
+                state=frozen_composite,
+                settings=settings,
+                as_of_date=info_as_of_date,
+                info_items=info_items,
+            )
             decorated_daily_state["composite_state"] = dependencies.serialize_composite_state_fn(frozen_composite)
         decorated_daily_state = add_artifact_metadata(
             decorated_daily_state,
@@ -807,6 +871,93 @@ def _build_info_publish_artifacts(
         external_signal_manifest=external_signal_manifest,
         frozen_daily_state=decorated_daily_state,
         frozen_forecast_bundle=decorated_forecast_bundle,
+    )
+
+
+def _build_insight_publish_artifacts(
+    *,
+    dependencies: ResearchPublishDependencies,
+    settings: dict[str, object],
+    info_artifacts: InfoPublishArtifacts,
+) -> InsightPublishArtifacts:
+    frozen_composite = None
+    if isinstance(info_artifacts.frozen_daily_state, dict):
+        frozen_composite = dependencies.decode_composite_state_fn(
+            info_artifacts.frozen_daily_state.get("composite_state")
+        )
+    if frozen_composite is None:
+        return InsightPublishArtifacts(
+            manifest={
+                "as_of_date": "",
+                "enable_insight_memory": bool(settings.get("enable_insight_memory", True)),
+                "insight_notes_dir": str(settings.get("insight_notes_dir", "input/insight_notes")),
+                "viewpoint_count": 0,
+                "theme_episode_count": 0,
+                "stock_role_count": 0,
+                "execution_plan_count": 0,
+                "source_breakdown": {},
+                "phase_counts": {},
+                "role_counts": {},
+                "role_downgrade_count": 0,
+            },
+            viewpoints=[],
+            theme_episodes=[],
+            stock_roles=[],
+            execution_plan=[],
+        )
+    if getattr(frozen_composite, "viewpoints", None) or getattr(frozen_composite, "theme_episodes", None):
+        insight_state = frozen_composite
+    else:
+        insight_state = dependencies.attach_insight_memory_to_state_fn(
+            state=frozen_composite,
+            settings=settings,
+            as_of_date=info_artifacts.info_as_of_date,
+            info_items=info_artifacts.info_items,
+        )
+    payloads = dependencies.build_insight_artifact_payloads_fn(
+        state=insight_state,
+        settings=settings,
+        execution_plans=[],
+    )
+    return InsightPublishArtifacts(
+        manifest=dict(payloads.get("insight_manifest", {})),
+        viewpoints=[dict(item) for item in payloads.get("viewpoints", []) if isinstance(item, dict)],
+        theme_episodes=[dict(item) for item in payloads.get("theme_episodes", []) if isinstance(item, dict)],
+        stock_roles=[dict(item) for item in payloads.get("stock_roles", []) if isinstance(item, dict)],
+        execution_plan=[dict(item) for item in payloads.get("execution_plan", []) if isinstance(item, dict)],
+    )
+
+
+def _build_leader_publish_artifacts(
+    *,
+    dependencies: ResearchPublishDependencies,
+    settings: dict[str, object],
+    info_artifacts: InfoPublishArtifacts,
+    forecast_artifacts: ForecastPublishArtifacts,
+    split_mode: str,
+    embargo_days: int,
+) -> LeaderPublishArtifacts:
+    frozen_composite = None
+    if isinstance(info_artifacts.frozen_daily_state, dict):
+        frozen_composite = dependencies.decode_composite_state_fn(
+            info_artifacts.frozen_daily_state.get("composite_state")
+        )
+    evaluation_trajectory = None
+    if forecast_artifacts.trajectory is not None:
+        _, _, evaluation_trajectory = dependencies.split_research_trajectory_fn(
+            forecast_artifacts.trajectory,
+            split_mode=split_mode,
+            embargo_days=embargo_days,
+        )
+    payloads = build_leader_artifact_payloads(
+        state=frozen_composite,
+        trajectory=evaluation_trajectory,
+        top_k=3,
+        limit=16,
+    )
+    return LeaderPublishArtifacts(
+        manifest=dict(payloads.get("leader_manifest", {})),
+        candidates=[dict(item) for item in payloads.get("leader_candidates", []) if isinstance(item, dict)],
     )
 
 
@@ -915,6 +1066,8 @@ def _write_and_publish_artifacts(
     paths: PublishPaths,
     forecast_artifacts: ForecastPublishArtifacts,
     info_artifacts: InfoPublishArtifacts,
+    insight_artifacts: InsightPublishArtifacts,
+    leader_artifacts: LeaderPublishArtifacts,
     manifests: PublishManifestArtifacts,
     gate_artifacts: PublishGateArtifacts,
     publish_forecast_models: bool,
@@ -934,6 +1087,13 @@ def _write_and_publish_artifacts(
     _write_publish_json(paths.info_manifest_path, info_artifacts.info_manifest)
     _write_publish_json(paths.info_shadow_report_path, info_artifacts.info_shadow_report)
     _write_publish_json(paths.external_signal_manifest_path, info_artifacts.external_signal_manifest)
+    _write_publish_json(paths.insight_manifest_path, insight_artifacts.manifest)
+    _write_publish_json(paths.viewpoints_path, {"items": insight_artifacts.viewpoints})
+    _write_publish_json(paths.theme_episodes_path, {"items": insight_artifacts.theme_episodes})
+    _write_publish_json(paths.stock_roles_path, {"items": insight_artifacts.stock_roles})
+    _write_publish_json(paths.execution_plan_path, {"items": insight_artifacts.execution_plan})
+    _write_publish_json(paths.leader_manifest_path, leader_artifacts.manifest)
+    _write_publish_json(paths.leader_candidates_path, {"items": leader_artifacts.candidates})
     _write_publish_json(paths.manifest_path, manifests.research_manifest)
     _write_publish_json(paths.tier_latest_manifest_path, manifests.research_manifest)
     if gate_artifacts.gate_ok:
@@ -963,6 +1123,8 @@ def _build_publish_manifests(
     paths: PublishPaths,
     forecast_artifacts: ForecastPublishArtifacts,
     info_artifacts: InfoPublishArtifacts,
+    insight_artifacts: InsightPublishArtifacts,
+    leader_artifacts: LeaderPublishArtifacts,
     split_mode: str,
     embargo_days: int,
     publish_forecast_models: bool,
@@ -1015,6 +1177,9 @@ def _build_publish_manifests(
             "external_signal_manifest": str(paths.external_signal_manifest_path),
             "external_signal_version": str(settings.get("external_signal_version", "v1")),
             "external_signal_enabled": bool(settings.get("external_signals", True)),
+            "enable_insight_memory": bool(settings.get("enable_insight_memory", True)),
+            "insight_notes_dir": str(settings.get("insight_notes_dir", "input/insight_notes")),
+            "execution_overlay_enabled": bool(settings.get("execution_overlay_enabled", True)),
             "event_lookback_days": int(settings.get("event_lookback_days", settings.get("info_lookback_days", 45))),
             "capital_flow_lookback_days": int(settings.get("capital_flow_lookback_days", 20)),
             "macro_lookback_days": int(settings.get("macro_lookback_days", 60)),
@@ -1065,6 +1230,8 @@ def _build_publish_manifests(
             "info_source_mode": str(settings.get("info_source_mode", "layered")),
             "external_signal_enabled": bool(settings.get("external_signals", True)),
             "external_signal_version": str(settings.get("external_signal_version", "v1")),
+            "enable_insight_memory": bool(settings.get("enable_insight_memory", True)),
+            "execution_overlay_enabled": bool(settings.get("execution_overlay_enabled", True)),
             "use_us_index_context": bool(settings.get("use_us_index_context", False)),
             "us_index_source": str(settings.get("us_index_source", "akshare")),
         },
@@ -1129,6 +1296,9 @@ def _build_publish_manifests(
             "theme_allocations": [dict(item) for item in settings.get("theme_allocations", []) if isinstance(item, dict)],
             "capital_flow_snapshot": dict(info_artifacts.external_signal_package.get("capital_flow_snapshot", {})),
             "macro_context_snapshot": dict(info_artifacts.external_signal_package.get("macro_context_snapshot", {})),
+            "enable_insight_memory": bool(settings.get("enable_insight_memory", True)),
+            "insight_notes_dir": str(settings.get("insight_notes_dir", "input/insight_notes")),
+            "execution_overlay_enabled": bool(settings.get("execution_overlay_enabled", True)),
             "use_us_index_context": bool(settings.get("use_us_index_context", False)),
             "us_index_source": str(settings.get("us_index_source", "akshare")),
             "data_window": {
@@ -1154,6 +1324,15 @@ def _build_publish_manifests(
             "info_manifest": str(paths.info_manifest_path),
             "info_shadow_report": str(paths.info_shadow_report_path),
             "external_signal_manifest": str(paths.external_signal_manifest_path),
+            "insight_manifest": str(paths.insight_manifest_path),
+            "viewpoints": str(paths.viewpoints_path),
+            "theme_episodes": str(paths.theme_episodes_path),
+            "stock_roles": str(paths.stock_roles_path),
+            "execution_plan": str(paths.execution_plan_path),
+            "insight_summary": insight_artifacts.manifest,
+            "leader_manifest": str(paths.leader_manifest_path),
+            "leader_candidates": str(paths.leader_candidates_path),
+            "leader_summary": leader_artifacts.manifest,
             "published_policy_model": str(paths.latest_policy_path),
             "latest_research_manifest": str(paths.latest_manifest_path),
             "tier_published_policy_model": str(paths.tier_latest_policy_path),

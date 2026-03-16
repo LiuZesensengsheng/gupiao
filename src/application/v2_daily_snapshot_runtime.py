@@ -333,6 +333,17 @@ def hydrate_daily_settings_from_dataset_manifest(
         dataset_manifest.get("external_signal_enabled", hydrated.get("external_signals", True)),
         True,
     )
+    hydrated["enable_insight_memory"] = parse_boolish(
+        dataset_manifest.get("enable_insight_memory", hydrated.get("enable_insight_memory", True)),
+        True,
+    )
+    hydrated["insight_notes_dir"] = str(
+        dataset_manifest.get("insight_notes_dir", hydrated.get("insight_notes_dir", "input/insight_notes"))
+    )
+    hydrated["execution_overlay_enabled"] = parse_boolish(
+        dataset_manifest.get("execution_overlay_enabled", hydrated.get("execution_overlay_enabled", True)),
+        True,
+    )
     hydrated["external_signal_version"] = str(
         dataset_manifest.get("external_signal_version", hydrated.get("external_signal_version", "v1"))
     )

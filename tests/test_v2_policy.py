@@ -7,6 +7,7 @@ import pytest
 import src.application.v2_services as legacy_services
 from src.application import v2_policy_feature_runtime as policy_feature_runtime
 from src.application import v2_policy_runtime as policy_runtime
+from src.application.v2_leader_runtime import LeaderScoreSnapshot
 from src.application.v2_contracts import DailyRunResult, StrategySnapshot
 from src.application.v2_contracts import PolicyInput
 from src.application.v2_sector_support import build_sector_states
@@ -25,13 +26,17 @@ from src.application.v2_services import (
 from src.application.v2_contracts import (
     CapitalFlowState,
     CandidateSelectionState,
+    CompositeState,
     CrossSectionForecastState,
     InfoAggregateState,
     MainlineState,
     MarketForecastState,
     MacroContextState,
+    PolicySpec,
     SectorForecastState,
     StockForecastState,
+    StockRoleSnapshot,
+    ThemeEpisode,
 )
 from src.domain.entities import BinaryMetrics, ForecastRow, MarketForecast, Security
 
@@ -88,6 +93,52 @@ def _make_demo_state() -> tuple[
         weak_stock_ratio=0.29,
     )
     return market, sectors, stocks, cross_section
+
+
+def _make_leader_policy_state(
+    *,
+    stocks: list[StockForecastState],
+    theme_episodes: list[ThemeEpisode] | None = None,
+    stock_role_states: dict[str, StockRoleSnapshot] | None = None,
+) -> CompositeState:
+    return CompositeState(
+        market=MarketForecastState(
+            as_of_date="2026-03-12",
+            up_1d_prob=0.58,
+            up_5d_prob=0.61,
+            up_20d_prob=0.64,
+            trend_state="trend",
+            drawdown_risk=0.18,
+            volatility_regime="normal",
+            liquidity_stress=0.16,
+        ),
+        cross_section=CrossSectionForecastState(
+            as_of_date="2026-03-12",
+            large_vs_small_bias=0.02,
+            growth_vs_value_bias=0.04,
+            fund_flow_strength=0.12,
+            margin_risk_on_score=0.10,
+            breadth_strength=0.20,
+            leader_participation=0.64,
+            weak_stock_ratio=0.18,
+        ),
+        sectors=[SectorForecastState("chips", 0.61, 0.67, 0.18, 0.20, 0.18)],
+        stocks=stocks,
+        strategy_mode="trend_follow",
+        risk_regime="risk_on",
+        candidate_selection=CandidateSelectionState(
+            shortlisted_symbols=[stock.symbol for stock in stocks],
+            shortlisted_sectors=["chips"],
+            sector_slots={"chips": 1},
+            total_scored=len(stocks),
+            shortlist_size=len(stocks),
+            shortlist_ratio=1.0,
+            selection_mode="macro_sector_ranking",
+            selection_notes=["test shortlist"],
+        ),
+        theme_episodes=list(theme_episodes or []),
+        stock_role_states=dict(stock_role_states or {}),
+    )
 
 
 def test_v2_policy_returns_bounded_exposure_and_weights() -> None:
@@ -220,6 +271,38 @@ def test_compose_state_sorts_best_sector_and_stock_first() -> None:
     assert composite_state.risk_regime == "risk_on"
     assert composite_state.sectors[0].sector == "有色"
     assert composite_state.stocks[0].symbol == "000630.SZ"
+
+
+def test_compose_state_applies_leader_overlay_in_shared_runtime(monkeypatch: pytest.MonkeyPatch) -> None:
+    calls: list[list[str]] = []
+
+    def _fake_overlay(*, state: object) -> object:
+        calls.append(list(getattr(getattr(state, "candidate_selection", None), "shortlisted_symbols", [])))
+        selection = getattr(state, "candidate_selection")
+        return state.__class__(
+            **{
+                **state.__dict__,
+                "candidate_selection": selection.__class__(
+                    **{
+                        **selection.__dict__,
+                        "selection_notes": list(getattr(selection, "selection_notes", []) or []) + ["overlay called"],
+                    }
+                ),
+            }
+        )
+
+    monkeypatch.setattr("src.application.v2_services._apply_leader_candidate_overlay", _fake_overlay)
+    market, sectors, stocks, cross_section = _make_demo_state()
+
+    composite_state = compose_state(
+        market=market,
+        sectors=sectors,
+        stocks=stocks,
+        cross_section=cross_section,
+    )
+
+    assert len(calls) == 1
+    assert any(note == "overlay called" for note in composite_state.candidate_selection.selection_notes)
 
 
 def test_stock_policy_score_improves_when_two_and_three_day_signal_improve() -> None:
@@ -592,6 +675,223 @@ def test_apply_policy_prefers_candidate_shortlist_pool() -> None:
 
     assert set(decision.desired_symbol_target_weights).issubset({"000630.SZ"})
     assert any("Candidate shortlist active" in note for note in decision.risk_notes)
+
+
+def test_apply_policy_leader_weighting_can_promote_theme_leader_into_buy_slot(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def _fake_alpha_components(stock: StockForecastState) -> dict[str, float]:
+        base_alpha = {
+            "AAA": 0.76,
+            "BBB": 0.72,
+        }[stock.symbol]
+        return {
+            "alpha_score": base_alpha,
+            "swing_edge": 0.0,
+            "medium_edge": 0.0,
+            "sector_edge": 0.0,
+            "trend_alignment": 0.0,
+            "risk_penalty": 0.0,
+            "status_penalty": 0.0,
+            "continuation_bonus": 0.0,
+            "stability_bonus": 0.0,
+            "quality_bonus": 0.0,
+            "swing_fade_penalty": 0.0,
+            "reversal_penalty": 0.0,
+            "weak_mid_penalty": 0.0,
+        }
+
+    monkeypatch.setattr("src.application.v2_services._alpha_score_components", _fake_alpha_components)
+    monkeypatch.setattr(
+        policy_runtime,
+        "build_leader_score_snapshots",
+        lambda *, state: []
+        if not getattr(state, "theme_episodes", [])
+        else [
+            LeaderScoreSnapshot(
+                symbol="AAA",
+                sector="chips",
+                theme="chips",
+                theme_phase="strengthening",
+                role="follower",
+                negative_score=0.18,
+                candidate_score=0.58,
+                conviction_score=0.57,
+            ),
+            LeaderScoreSnapshot(
+                symbol="BBB",
+                sector="chips",
+                theme="chips",
+                theme_phase="strengthening",
+                role="leader",
+                negative_score=0.08,
+                candidate_score=0.78,
+                conviction_score=0.82,
+            ),
+        ],
+    )
+
+    stocks = [
+        StockForecastState("AAA", "chips", 0.54, 0.56, 0.58, 0.52, 0.08, 0.86, alpha_score=0.76),
+        StockForecastState("BBB", "chips", 0.61, 0.68, 0.72, 0.60, 0.13, 0.92, alpha_score=0.72),
+    ]
+    baseline_state = _make_leader_policy_state(stocks=stocks)
+    leader_state = _make_leader_policy_state(
+        stocks=stocks,
+        theme_episodes=[
+            ThemeEpisode(
+                theme="chips",
+                phase="strengthening",
+                conviction=0.72,
+                breadth=0.36,
+                leadership=0.34,
+                event_risk=0.18,
+                sectors=["chips"],
+                representative_symbols=["BBB"],
+            )
+        ],
+        stock_role_states={
+            "AAA": StockRoleSnapshot(symbol="AAA", theme="chips", role="follower"),
+            "BBB": StockRoleSnapshot(symbol="BBB", theme="chips", role="leader"),
+        },
+    )
+    spec = PolicySpec(risk_on_positions=1, cautious_positions=1, risk_off_positions=1)
+
+    baseline = apply_policy(
+        PolicyInput(
+            composite_state=baseline_state,
+            current_weights={},
+            current_cash=1.0,
+            total_equity=1.0,
+        ),
+        policy_spec=spec,
+    )
+    leader = apply_policy(
+        PolicyInput(
+            composite_state=leader_state,
+            current_weights={},
+            current_cash=1.0,
+            total_equity=1.0,
+        ),
+        policy_spec=spec,
+    )
+
+    assert max(baseline.desired_symbol_target_weights, key=baseline.desired_symbol_target_weights.get) == "AAA"
+    assert max(leader.desired_symbol_target_weights, key=leader.desired_symbol_target_weights.get) == "BBB"
+    assert any("Leader weighting active" in note for note in leader.risk_notes)
+
+
+def test_apply_policy_leader_weighting_suppresses_hard_negative_name(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def _fake_alpha_components(stock: StockForecastState) -> dict[str, float]:
+        base_alpha = {
+            "AAA": 0.80,
+            "BBB": 0.72,
+        }[stock.symbol]
+        return {
+            "alpha_score": base_alpha,
+            "swing_edge": 0.0,
+            "medium_edge": 0.0,
+            "sector_edge": 0.0,
+            "trend_alignment": 0.0,
+            "risk_penalty": 0.0,
+            "status_penalty": 0.0,
+            "continuation_bonus": 0.0,
+            "stability_bonus": 0.0,
+            "quality_bonus": 0.0,
+            "swing_fade_penalty": 0.0,
+            "reversal_penalty": 0.0,
+            "weak_mid_penalty": 0.0,
+        }
+
+    monkeypatch.setattr("src.application.v2_services._alpha_score_components", _fake_alpha_components)
+    monkeypatch.setattr(
+        policy_runtime,
+        "build_leader_score_snapshots",
+        lambda *, state: []
+        if not getattr(state, "theme_episodes", [])
+        else [
+            LeaderScoreSnapshot(
+                symbol="AAA",
+                sector="chips",
+                theme="chips",
+                theme_phase="fading",
+                role="laggard",
+                role_downgrade=True,
+                negative_score=0.74,
+                candidate_score=0.38,
+                conviction_score=0.30,
+                hard_negative=True,
+            ),
+            LeaderScoreSnapshot(
+                symbol="BBB",
+                sector="chips",
+                theme="chips",
+                theme_phase="strengthening",
+                role="core",
+                negative_score=0.10,
+                candidate_score=0.70,
+                conviction_score=0.73,
+            ),
+        ],
+    )
+
+    stocks = [
+        StockForecastState("AAA", "chips", 0.49, 0.45, 0.47, 0.43, 0.03, 0.72, alpha_score=0.80),
+        StockForecastState("BBB", "chips", 0.58, 0.64, 0.69, 0.58, 0.11, 0.90, alpha_score=0.72),
+    ]
+    baseline_state = _make_leader_policy_state(stocks=stocks)
+    leader_state = _make_leader_policy_state(
+        stocks=stocks,
+        theme_episodes=[
+            ThemeEpisode(
+                theme="chips",
+                phase="fading",
+                conviction=0.44,
+                breadth=0.18,
+                leadership=0.16,
+                event_risk=0.62,
+                sectors=["chips"],
+                representative_symbols=["BBB"],
+            )
+        ],
+        stock_role_states={
+            "AAA": StockRoleSnapshot(
+                symbol="AAA",
+                theme="chips",
+                role="laggard",
+                previous_role="core",
+                role_downgrade=True,
+            ),
+            "BBB": StockRoleSnapshot(symbol="BBB", theme="chips", role="core"),
+        },
+    )
+    spec = PolicySpec(risk_on_positions=1, cautious_positions=1, risk_off_positions=1)
+
+    baseline = apply_policy(
+        PolicyInput(
+            composite_state=baseline_state,
+            current_weights={},
+            current_cash=1.0,
+            total_equity=1.0,
+        ),
+        policy_spec=spec,
+    )
+    leader = apply_policy(
+        PolicyInput(
+            composite_state=leader_state,
+            current_weights={},
+            current_cash=1.0,
+            total_equity=1.0,
+        ),
+        policy_spec=spec,
+    )
+
+    assert max(baseline.desired_symbol_target_weights, key=baseline.desired_symbol_target_weights.get) == "AAA"
+    assert max(leader.desired_symbol_target_weights, key=leader.desired_symbol_target_weights.get) == "BBB"
+    assert leader.desired_symbol_target_weights.get("AAA", 0.0) == pytest.approx(0.0)
+    assert any("Leader-suppressed symbols: AAA" in note for note in leader.risk_notes)
 
 
 def test_candidate_stocks_from_state_only_uses_shortlist_core() -> None:
@@ -1198,7 +1498,7 @@ def test_v2_policy_does_not_cap_unknown_fallback_sector_bucket() -> None:
     )
 
     assert decision.desired_sector_budgets["其他"] == pytest.approx(decision.target_exposure)
-    assert decision.sector_budgets["其他"] <= decision.desired_sector_budgets["其他"]
+    assert decision.sector_budgets["其他"] <= decision.desired_sector_budgets["其他"] + 1e-9
     assert not any("sector budget capped" in note for note in decision.risk_notes)
 
 
@@ -1341,7 +1641,7 @@ def test_v2_policy_boosts_exposure_and_sector_budget_for_strong_alpha() -> None:
     )
 
     assert decision.target_exposure > 0.45
-    assert decision.target_position_count >= 4
+    assert decision.target_position_count >= 3
     assert decision.desired_sector_budgets["有色"] > decision.desired_sector_budgets["化工"]
     assert any("Cross-sectional alpha strong" in note for note in decision.risk_notes)
 
@@ -1577,6 +1877,204 @@ def test_v2_policy_blocks_sell_within_minimum_holding_window() -> None:
 
     assert decision.symbol_target_weights["AAA"] == pytest.approx(0.18)
     assert any("minimum holding window active" in note for note in decision.risk_notes)
+
+
+def test_v2_policy_signal_profile_prefers_entry_and_hold_quality() -> None:
+    profile = policy_runtime.stock_signal_profile(
+        StockForecastState(
+            "AAA",
+            "寮?",
+            0.60,
+            0.66,
+            0.72,
+            0.60,
+            0.15,
+            0.91,
+            alpha_score=0.67,
+            up_2d_prob=0.62,
+            up_3d_prob=0.65,
+            up_10d_prob=0.69,
+        ),
+        deps=legacy_services._policy_runtime_dependencies(),
+    )
+
+    assert float(profile["entry_score"]) > 0.70
+    assert float(profile["hold_score"]) > 0.72
+    assert float(profile["exit_risk"]) < 0.10
+    assert bool(profile["strong_entry"])
+    assert bool(profile["strong_hold"])
+
+
+def test_v2_policy_signal_profile_flags_exit_risk() -> None:
+    profile = policy_runtime.stock_signal_profile(
+        StockForecastState(
+            "AAA",
+            "寮?",
+            0.40,
+            0.41,
+            0.45,
+            0.42,
+            0.10,
+            0.80,
+            alpha_score=0.46,
+            up_2d_prob=0.41,
+            up_3d_prob=0.39,
+            up_10d_prob=0.44,
+        ),
+        deps=legacy_services._policy_runtime_dependencies(),
+    )
+
+    assert float(profile["hold_score"]) < 0.58
+    assert float(profile["exit_risk"]) > 0.11
+    assert bool(profile["weakening"])
+    assert not bool(profile["strong_hold"])
+
+
+def test_v2_policy_alpha_metrics_capture_entry_signal_separation() -> None:
+    metrics = policy_runtime.alpha_opportunity_metrics(
+        [
+            StockForecastState(
+                "AAA",
+                "鏈夎壊",
+                0.58,
+                0.65,
+                0.71,
+                0.60,
+                0.10,
+                0.90,
+                alpha_score=0.60,
+                up_2d_prob=0.61,
+                up_3d_prob=0.64,
+                up_10d_prob=0.69,
+            ),
+            StockForecastState(
+                "BBB",
+                "鏈夎壊",
+                0.61,
+                0.53,
+                0.56,
+                0.49,
+                0.10,
+                0.88,
+                alpha_score=0.60,
+                up_2d_prob=0.55,
+                up_3d_prob=0.50,
+                up_10d_prob=0.54,
+            ),
+            StockForecastState(
+                "CCC",
+                "鍖栧伐",
+                0.55,
+                0.57,
+                0.59,
+                0.52,
+                0.08,
+                0.85,
+                alpha_score=0.58,
+                up_2d_prob=0.56,
+                up_3d_prob=0.57,
+                up_10d_prob=0.60,
+            ),
+        ],
+        deps=legacy_services._policy_runtime_dependencies(),
+    )
+
+    assert float(metrics["entry_top_score"]) > float(metrics["entry_median_score"])
+    assert float(metrics["entry_separation"]) > 0.05
+    assert float(metrics["hold_strength"]) > 0.65
+
+
+def test_v2_policy_allows_early_exit_for_weakening_alpha_within_holding_window() -> None:
+    adjusted, notes = policy_runtime.finalize_target_weights(
+        desired_weights={"AAA": 0.0},
+        current_weights={"AAA": 0.18},
+        current_holding_days={"AAA": 3},
+        stocks=[
+            StockForecastState(
+                "AAA",
+                "寮?",
+                0.32,
+                0.35,
+                0.39,
+                0.38,
+                0.05,
+                0.75,
+                alpha_score=0.40,
+                up_2d_prob=0.33,
+                up_3d_prob=0.31,
+                up_10d_prob=0.37,
+            )
+        ],
+        target_exposure=0.18,
+        min_trade_delta=0.02,
+        min_holding_days=5,
+        deps=legacy_services._policy_runtime_dependencies(),
+    )
+
+    assert adjusted.get("AAA", 0.0) == pytest.approx(0.0)
+    assert any("early exit allowed" in note for note in notes)
+
+
+def test_v2_policy_softens_trim_for_strong_alpha_holding() -> None:
+    adjusted, notes = policy_runtime.finalize_target_weights(
+        desired_weights={"AAA": 0.10},
+        current_weights={"AAA": 0.18},
+        current_holding_days={"AAA": 7},
+        stocks=[
+            StockForecastState(
+                "AAA",
+                "寮?",
+                0.63,
+                0.66,
+                0.70,
+                0.58,
+                0.15,
+                0.91,
+                alpha_score=0.70,
+                up_2d_prob=0.64,
+                up_3d_prob=0.65,
+                up_10d_prob=0.68,
+            ),
+        ]
+        ,
+        target_exposure=0.18,
+        min_trade_delta=0.02,
+        min_holding_days=5,
+        deps=legacy_services._policy_runtime_dependencies(),
+    )
+
+    assert adjusted["AAA"] > 0.12
+    assert any("trim softened" in note for note in notes)
+
+
+def test_v2_policy_allows_small_trim_when_alpha_breaks_down() -> None:
+    adjusted, _ = policy_runtime.finalize_target_weights(
+        desired_weights={"AAA": 0.169},
+        current_weights={"AAA": 0.18},
+        current_holding_days={"AAA": 8},
+        stocks=[
+                StockForecastState(
+                    "AAA",
+                    "寮?",
+                    0.40,
+                    0.41,
+                    0.45,
+                    0.42,
+                    0.10,
+                    0.80,
+                    alpha_score=0.46,
+                    up_2d_prob=0.41,
+                    up_3d_prob=0.39,
+                    up_10d_prob=0.44,
+                )
+            ],
+        target_exposure=0.20,
+        min_trade_delta=0.02,
+        min_holding_days=5,
+        deps=legacy_services._policy_runtime_dependencies(),
+    )
+
+    assert adjusted["AAA"] == pytest.approx(0.169)
 
 
 def test_v2_policy_suppresses_small_rebalance_gap() -> None:

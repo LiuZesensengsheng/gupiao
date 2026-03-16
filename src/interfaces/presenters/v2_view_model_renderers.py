@@ -151,6 +151,37 @@ def render_daily_markdown(view_model: DailyReportViewModel) -> str:
     lines.append(f"| 宽度代理 | {_pct(float(macro_context.get('index_breadth_proxy', float('nan'))))} |")
     lines.append("")
 
+    lines.append("## 当日主线列表")
+    lines.append("")
+    lines.append("| 主线 | phase | conviction | breadth | leadership | event_risk | 说明 |")
+    lines.append("|---|---|---:|---:|---:|---:|---|")
+    if not view_model.theme_episodes:
+        lines.append("| NA | NA | NA | NA | NA | NA | 暂无 insight 主线 |")
+    else:
+        for item in view_model.theme_episodes[:8]:
+            lines.append(
+                f"| {item.get('theme', 'NA')} | {item.get('phase', 'NA')} | {_pct(float(item.get('conviction', float('nan'))))} | "
+                f"{_pct(float(item.get('breadth', float('nan'))))} | {_pct(float(item.get('leadership', float('nan'))))} | "
+                f"{_pct(float(item.get('event_risk', float('nan'))))} | {item.get('phase_reason', 'NA')} |"
+            )
+    lines.append("")
+
+    lines.append("## 龙头候选")
+    lines.append("")
+    lines.append("| 股票 | 主线 | phase | role | candidate | conviction | negative | 说明 |")
+    lines.append("|---|---|---|---|---:|---:|---:|---|")
+    if not view_model.leader_candidates:
+        lines.append("| NA | NA | NA | NA | NA | NA | NA | 暂无龙头候选 |")
+    else:
+        for item in view_model.leader_candidates[:8]:
+            lines.append(
+                f"| {item.get('name', 'NA')} ({item.get('symbol', 'NA')}) | {item.get('theme', 'NA')} | {item.get('theme_phase', 'NA')} | "
+                f"{item.get('role', 'NA')} | {_pct(float(item.get('candidate_score', float('nan'))))} | "
+                f"{_pct(float(item.get('conviction_score', float('nan'))))} | {_pct(float(item.get('negative_score', float('nan'))))} | "
+                f"{' | '.join(str(v) for v in item.get('reasons', [])[:3]) or 'NA'} |"
+            )
+    lines.append("")
+
     lines.append("## Top20 推荐")
     lines.append("")
     lines.append("| 排名 | 股票 | 行业 | 下一交易日区间 | 5日中位预期 | 20日中位预期 | 1日上涨概率 | 置信度 |")
@@ -176,6 +207,34 @@ def render_daily_markdown(view_model: DailyReportViewModel) -> str:
             lines.append(
                 f"| {item['name']} ({item['symbol']}) | {item['action']} | {_pct(float(item['current_weight']))} | {_pct(float(item['target_weight']))} | "
                 f"{_pct(float(item['delta_weight']))} | {item['reason'] or 'NA'} |"
+            )
+    lines.append("")
+
+    lines.append("## 持仓角色变化")
+    lines.append("")
+    lines.append("| 股票 | 主线 | 当前角色 | 前序角色 | 角色降级 | 备注 |")
+    lines.append("|---|---|---|---|---|---|")
+    if not view_model.holding_role_changes:
+        lines.append("| NA | NA | NA | NA | NA | 暂无角色变化 |")
+    else:
+        for item in view_model.holding_role_changes:
+            lines.append(
+                f"| {item['name']} ({item['symbol']}) | {item['theme'] or 'NA'} | {item['role'] or 'NA'} | "
+                f"{item['previous_role'] or 'NA'} | {'yes' if item['role_downgrade'] else 'no'} | {item['note'] or 'NA'} |"
+            )
+    lines.append("")
+
+    lines.append("## 次日执行计划")
+    lines.append("")
+    lines.append("| 股票 | bias | buy_zone | avoid_zone | reduce_if | exit_if | reason |")
+    lines.append("|---|---|---|---|---|---|---|")
+    if not view_model.execution_plans:
+        lines.append("| NA | NA | NA | NA | NA | NA | 暂无执行计划 |")
+    else:
+        for item in view_model.execution_plans:
+            lines.append(
+                f"| {item.get('name', 'NA')} ({item.get('symbol', 'NA')}) | {item.get('bias', 'NA')} | {item.get('buy_zone', 'NA')} | "
+                f"{item.get('avoid_zone', 'NA')} | {item.get('reduce_if', 'NA')} | {item.get('exit_if', 'NA')} | {item.get('reason', 'NA')} |"
             )
     lines.append("")
 
@@ -281,6 +340,55 @@ def render_research_markdown(view_model: ResearchReportViewModel) -> str:
     lines.append(f"- train_r2_positions: {_num(float(view_model.learning_model.get('train_r2_positions', 0.0)), 3)}")
     lines.append(f"- train_r2_turnover: {_num(float(view_model.learning_model.get('train_r2_turnover', 0.0)), 3)}")
     lines.append("")
+    lines.append("## 主线生命周期摘要")
+    lines.append("")
+    lines.append(f"- phase_counts: {view_model.theme_lifecycle_summary.get('phase_counts', {})}")
+    for item in view_model.theme_lifecycle_summary.get("top_themes", [])[:6]:
+        lines.append(
+            f"- {item.get('theme', 'NA')}: {item.get('phase', 'NA')} | conviction={_pct(float(item.get('conviction', float('nan'))))} | "
+            f"event_risk={_pct(float(item.get('event_risk', float('nan'))))}"
+        )
+    lines.append("")
+    lines.append("## 龙头识别评估")
+    lines.append("")
+    leader_eval = dict(view_model.leader_summary.get("evaluation", {}))
+    lines.append(
+        f"- candidate_recall_at_k: {_pct(float(leader_eval.get('candidate_recall_at_k', 0.0)))}"
+        f" | conviction_precision_at_1: {_pct(float(leader_eval.get('conviction_precision_at_1', 0.0)))}"
+        f" | ndcg_at_k: {_num(float(leader_eval.get('ndcg_at_k', 0.0)), 3)}"
+    )
+    lines.append(
+        f"- hard_negative_survival_recall: {_pct(float(leader_eval.get('hard_negative_survival_recall', 0.0)))}"
+        f" | hard_negative_filter_rate: {_pct(float(leader_eval.get('hard_negative_filter_rate', 0.0)))}"
+        f" | theme_groups: {int(leader_eval.get('theme_group_count', 0))}"
+    )
+    for item in view_model.leader_summary.get("top_candidates", [])[:6]:
+        lines.append(
+            f"- {item.get('symbol', 'NA')}: {item.get('theme', 'NA')} / {item.get('role', 'NA')} | "
+            f"candidate={_pct(float(item.get('candidate_score', float('nan'))))} | "
+            f"conviction={_pct(float(item.get('conviction_score', float('nan'))))}"
+        )
+    lines.append("")
+    lines.append("## 角色分布摘要")
+    lines.append("")
+    lines.append(f"- role_counts: {view_model.role_distribution_summary.get('role_counts', {})}")
+    for item in view_model.role_distribution_summary.get("top_roles", [])[:8]:
+        lines.append(
+            f"- {item.get('symbol', 'NA')}: {item.get('theme', 'NA')} / {item.get('role', 'NA')} | downgrade={item.get('role_downgrade', False)}"
+        )
+    lines.append("")
+    lines.append("## 持仓退出决策贡献摘要")
+    lines.append("")
+    lines.append(
+        f"- fading_theme_count: {int(view_model.exit_contribution_summary.get('fading_theme_count', 0))} | "
+        f"crowded_theme_count: {int(view_model.exit_contribution_summary.get('crowded_theme_count', 0))} | "
+        f"role_downgrade_count: {int(view_model.exit_contribution_summary.get('role_downgrade_count', 0))}"
+    )
+    for item in view_model.exit_contribution_summary.get("examples", [])[:6]:
+        lines.append(
+            f"- {item.get('symbol', 'NA')}: {item.get('theme', 'NA')} / {item.get('role', 'NA')} | note={item.get('note', 'NA')}"
+        )
+    lines.append("")
     if view_model.artifacts:
         lines.append("## Artifacts")
         lines.append("")
@@ -336,6 +444,54 @@ def render_daily_html(view_model: DailyReportViewModel) -> str:
         f"<td>{escape(str(item['reason'] or 'NA'))}</td>"
         "</tr>"
         for item in view_model.trade_actions
+    )
+    theme_rows = "".join(
+        "<tr>"
+        f"<td>{escape(str(item.get('theme', 'NA')))}</td>"
+        f"<td>{escape(str(item.get('phase', 'NA')))}</td>"
+        f"<td>{_pct(float(item.get('conviction', float('nan'))))}</td>"
+        f"<td>{_pct(float(item.get('breadth', float('nan'))))}</td>"
+        f"<td>{_pct(float(item.get('leadership', float('nan'))))}</td>"
+        f"<td>{_pct(float(item.get('event_risk', float('nan'))))}</td>"
+        f"<td>{escape(str(item.get('phase_reason', 'NA')))}</td>"
+        "</tr>"
+        for item in view_model.theme_episodes[:8]
+    )
+    leader_candidate_rows = "".join(
+        "<tr>"
+        f"<td>{escape(str(item.get('name', 'NA')))} ({escape(str(item.get('symbol', 'NA')) )})</td>"
+        f"<td>{escape(str(item.get('theme', 'NA')))}</td>"
+        f"<td>{escape(str(item.get('theme_phase', 'NA')))}</td>"
+        f"<td>{escape(str(item.get('role', 'NA')))}</td>"
+        f"<td>{_pct(float(item.get('candidate_score', float('nan'))))}</td>"
+        f"<td>{_pct(float(item.get('conviction_score', float('nan'))))}</td>"
+        f"<td>{_pct(float(item.get('negative_score', float('nan'))))}</td>"
+        f"<td>{escape(' | '.join(str(v) for v in item.get('reasons', [])[:3]) or 'NA')}</td>"
+        "</tr>"
+        for item in view_model.leader_candidates[:8]
+    )
+    role_change_rows = "".join(
+        "<tr>"
+        f"<td><div class='ticker'>{escape(str(item['name']))}</div><div class='ticker-sub'>{escape(str(item['symbol']))}</div></td>"
+        f"<td>{escape(str(item['theme'] or 'NA'))}</td>"
+        f"<td>{escape(str(item['role'] or 'NA'))}</td>"
+        f"<td>{escape(str(item['previous_role'] or 'NA'))}</td>"
+        f"<td>{'yes' if item['role_downgrade'] else 'no'}</td>"
+        f"<td>{escape(str(item['note'] or 'NA'))}</td>"
+        "</tr>"
+        for item in view_model.holding_role_changes
+    )
+    execution_plan_rows = "".join(
+        "<tr>"
+        f"<td><div class='ticker'>{escape(str(item.get('name', 'NA')))}</div><div class='ticker-sub'>{escape(str(item.get('symbol', 'NA')))}</div></td>"
+        f"<td>{escape(str(item.get('bias', 'NA')))}</td>"
+        f"<td>{escape(str(item.get('buy_zone', 'NA')))}</td>"
+        f"<td>{escape(str(item.get('avoid_zone', 'NA')))}</td>"
+        f"<td>{escape(str(item.get('reduce_if', 'NA')))}</td>"
+        f"<td>{escape(str(item.get('exit_if', 'NA')))}</td>"
+        f"<td>{escape(str(item.get('reason', 'NA')))}</td>"
+        "</tr>"
+        for item in view_model.execution_plans
     )
     cards_html = "".join(
         "<article class='stock-card'>"
@@ -447,8 +603,12 @@ def render_daily_html(view_model: DailyReportViewModel) -> str:
     </section>
     <section class="panel"><h2>大盘多周期预测</h2><div class="table-wrap"><table><thead><tr><th>周期</th><th>上涨概率</th><th>预期区间</th><th>中位预期</th><th>置信度</th></tr></thead><tbody>{market_rows}</tbody></table></div></section>
     <section class="panel"><h2>Dynamic Universe Funnel</h2><p class="muted">coarse {int(view_model.dynamic_universe.get('coarse_pool_size', 0))} | refined {int(view_model.dynamic_universe.get('refined_pool_size', 0))} | selected {int(view_model.dynamic_universe.get('selected_pool_size', 0))}</p><p class="muted">{escape(str(view_model.dynamic_universe.get('generator_version', 'NA')))} | {escape(shortlist_text)}</p><p class="muted">{escape(selection_notes)}</p></section>
+    <section class="panel"><h2>当日主线列表</h2><div class="table-wrap"><table><thead><tr><th>主线</th><th>phase</th><th>conviction</th><th>breadth</th><th>leadership</th><th>event_risk</th><th>说明</th></tr></thead><tbody>{theme_rows or "<tr><td colspan='7'>暂无 insight 主线</td></tr>"}</tbody></table></div></section>
+    <section class="panel"><h2>龙头候选</h2><div class="table-wrap"><table><thead><tr><th>股票</th><th>主线</th><th>phase</th><th>role</th><th>candidate</th><th>conviction</th><th>negative</th><th>说明</th></tr></thead><tbody>{leader_candidate_rows or "<tr><td colspan='8'>暂无龙头候选</td></tr>"}</tbody></table></div></section>
     <section class="panel"><h2>Top20 推荐</h2><div class="table-wrap"><table><thead><tr><th>排名</th><th>股票</th><th>行业</th><th>下一交易日区间</th><th>5日中位预期</th><th>20日中位预期</th><th>1日上涨概率</th><th>置信度</th></tr></thead><tbody>{top20_rows or "<tr><td colspan='8'>暂无候选</td></tr>"}</tbody></table></div></section>
     <section class="panel"><h2>实际操作</h2><div class="table-wrap"><table><thead><tr><th>股票</th><th>动作</th><th>当前权重</th><th>目标权重</th><th>权重变化</th><th>操作理由</th></tr></thead><tbody>{action_rows or "<tr><td colspan='6'>当前不触发调仓</td></tr>"}</tbody></table></div></section>
+    <section class="panel"><h2>持仓角色变化</h2><div class="table-wrap"><table><thead><tr><th>股票</th><th>主线</th><th>当前角色</th><th>前序角色</th><th>角色降级</th><th>备注</th></tr></thead><tbody>{role_change_rows or "<tr><td colspan='6'>暂无角色变化</td></tr>"}</tbody></table></div></section>
+    <section class="panel"><h2>次日执行计划</h2><div class="table-wrap"><table><thead><tr><th>股票</th><th>bias</th><th>buy_zone</th><th>avoid_zone</th><th>reduce_if</th><th>exit_if</th><th>reason</th></tr></thead><tbody>{execution_plan_rows or "<tr><td colspan='7'>暂无执行计划</td></tr>"}</tbody></table></div></section>
     <section class="stock-grid">{cards_html or "<div class='panel'>暂无解释卡</div>"}</section>
     <section class="panel"><h2>Mainline Radar</h2><ul class="list">{mainline_rows or "<li>暂无主线</li>"}</ul></section>
     <section class="panel"><h2>预测复盘</h2><div class="table-wrap"><table><thead><tr><th>窗口</th><th>命中参考</th><th>平均边际</th><th>近窗表现</th><th>样本数</th><th>说明</th></tr></thead><tbody>{review_rows or "<tr><td colspan='6'>暂无复盘数据</td></tr>"}</tbody></table></div><p class="muted">{escape('；'.join(str(item) for item in view_model.prediction_review.get('notes', [])))}</p></section>
@@ -501,6 +661,45 @@ def render_research_html(view_model: ResearchReportViewModel) -> str:
         f"<tr><th>{escape(str(key))}</th><td>{escape(str(value))}</td></tr>"
         for key, value in view_model.artifacts.items()
     )
+    lifecycle_rows = "".join(
+        "<tr>"
+        f"<td>{escape(str(item.get('theme', 'NA')))}</td>"
+        f"<td>{escape(str(item.get('phase', 'NA')))}</td>"
+        f"<td>{_pct(float(item.get('conviction', float('nan'))))}</td>"
+        f"<td>{_pct(float(item.get('event_risk', float('nan'))))}</td>"
+        "</tr>"
+        for item in view_model.theme_lifecycle_summary.get("top_themes", [])[:8]
+    )
+    role_rows = "".join(
+        "<tr>"
+        f"<td>{escape(str(item.get('symbol', 'NA')))}</td>"
+        f"<td>{escape(str(item.get('theme', 'NA')))}</td>"
+        f"<td>{escape(str(item.get('role', 'NA')))}</td>"
+        f"<td>{'yes' if item.get('role_downgrade', False) else 'no'}</td>"
+        "</tr>"
+        for item in view_model.role_distribution_summary.get("top_roles", [])[:10]
+    )
+    exit_rows = "".join(
+        "<tr>"
+        f"<td>{escape(str(item.get('symbol', 'NA')))}</td>"
+        f"<td>{escape(str(item.get('theme', 'NA')))}</td>"
+        f"<td>{escape(str(item.get('role', 'NA')))}</td>"
+        f"<td>{escape(str(item.get('note', 'NA')))}</td>"
+        "</tr>"
+        for item in view_model.exit_contribution_summary.get("examples", [])[:8]
+    )
+    leader_eval = dict(view_model.leader_summary.get("evaluation", {}))
+    leader_rows = "".join(
+        "<tr>"
+        f"<td>{escape(str(item.get('symbol', 'NA')))}</td>"
+        f"<td>{escape(str(item.get('theme', 'NA')))}</td>"
+        f"<td>{escape(str(item.get('role', 'NA')))}</td>"
+        f"<td>{_pct(float(item.get('candidate_score', float('nan'))))}</td>"
+        f"<td>{_pct(float(item.get('conviction_score', float('nan'))))}</td>"
+        f"<td>{_pct(float(item.get('negative_score', float('nan'))))}</td>"
+        "</tr>"
+        for item in view_model.leader_summary.get("top_candidates", [])[:8]
+    )
     feature_names = ", ".join(str(item) for item in view_model.learning_model.get("feature_names", [])) or "NA"
     return f"""<!doctype html>
 <html lang="zh-CN">
@@ -541,6 +740,10 @@ def render_research_html(view_model: ResearchReportViewModel) -> str:
     <section class="card"><h2>Horizon Metrics</h2><table><thead><tr><th>方案</th><th>周期</th><th>RankIC</th><th>头部分层收益</th><th>头尾价差</th><th>TopK命中率</th></tr></thead><tbody>{horizon_rows}</tbody></table></section>
     <section class="card"><h2>Validation Trials</h2><table><thead><tr><th>排名</th><th>risk_on_exposure</th><th>risk_on_positions</th><th>risk_on_turnover_cap</th><th>annual_return</th><th>benchmark_annual_return</th><th>excess_annual_return</th><th>information_ratio</th><th>max_drawdown</th><th>score</th></tr></thead><tbody>{''.join(trial_rows) or "<tr><td colspan='10'>暂无试验</td></tr>"}</tbody></table></section>
     <section class="card"><h2>Learned Policy</h2><p>feature_names: {escape(feature_names)}</p><p>train_rows: {int(view_model.learning_model.get('train_rows', 0))}</p><p>train_r2_exposure: {_num(float(view_model.learning_model.get('train_r2_exposure', 0.0)), 3)} | train_r2_positions: {_num(float(view_model.learning_model.get('train_r2_positions', 0.0)), 3)} | train_r2_turnover: {_num(float(view_model.learning_model.get('train_r2_turnover', 0.0)), 3)}</p></section>
+    <section class="card"><h2>主线生命周期摘要</h2><p>phase_counts: {escape(str(view_model.theme_lifecycle_summary.get('phase_counts', {})))}</p><table><thead><tr><th>主线</th><th>phase</th><th>conviction</th><th>event_risk</th></tr></thead><tbody>{lifecycle_rows or "<tr><td colspan='4'>暂无主线摘要</td></tr>"}</tbody></table></section>
+    <section class="card"><h2>龙头识别评估</h2><p>candidate_recall_at_k {_pct(float(leader_eval.get('candidate_recall_at_k', 0.0)))} | conviction_precision_at_1 {_pct(float(leader_eval.get('conviction_precision_at_1', 0.0)))} | ndcg_at_k {_num(float(leader_eval.get('ndcg_at_k', 0.0)), 3)} | hard_negative_survival_recall {_pct(float(leader_eval.get('hard_negative_survival_recall', 0.0)))} | theme_groups {int(leader_eval.get('theme_group_count', 0))}</p><table><thead><tr><th>symbol</th><th>theme</th><th>role</th><th>candidate</th><th>conviction</th><th>negative</th></tr></thead><tbody>{leader_rows or "<tr><td colspan='6'>暂无龙头评估</td></tr>"}</tbody></table></section>
+    <section class="card"><h2>角色分布摘要</h2><p>role_counts: {escape(str(view_model.role_distribution_summary.get('role_counts', {})))}</p><table><thead><tr><th>symbol</th><th>theme</th><th>role</th><th>downgrade</th></tr></thead><tbody>{role_rows or "<tr><td colspan='4'>暂无角色摘要</td></tr>"}</tbody></table></section>
+    <section class="card"><h2>持仓退出决策贡献摘要</h2><p>fading themes {int(view_model.exit_contribution_summary.get('fading_theme_count', 0))} | crowded themes {int(view_model.exit_contribution_summary.get('crowded_theme_count', 0))} | role downgrades {int(view_model.exit_contribution_summary.get('role_downgrade_count', 0))}</p><table><thead><tr><th>symbol</th><th>theme</th><th>role</th><th>note</th></tr></thead><tbody>{exit_rows or "<tr><td colspan='4'>暂无退出摘要</td></tr>"}</tbody></table></section>
     <section class="card"><h2>Artifacts</h2><table><tbody>{artifact_rows or "<tr><td>暂无产物</td></tr>"}</tbody></table></section>
   </div>
 </body>

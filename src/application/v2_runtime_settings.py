@@ -316,6 +316,9 @@ def load_v2_runtime_settings(
             if external_signals is not None
             else parse_boolish(pick("external_signals", True), True)
         ),
+        "enable_insight_memory": parse_boolish(pick("enable_insight_memory", True), True),
+        "insight_notes_dir": str(pick("insight_notes_dir", "input/insight_notes")),
+        "execution_overlay_enabled": parse_boolish(pick("execution_overlay_enabled", True), True),
         "external_signal_version": str(pick("external_signal_version", "v1")),
         "event_risk_cutoff": float(pick("event_risk_cutoff", 0.55)),
         "catalyst_boost_cap": float(pick("catalyst_boost_cap", 0.12)),

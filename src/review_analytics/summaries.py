@@ -56,6 +56,13 @@ def summarize_daily_run(result: DailyRunResult) -> dict[str, object]:
         "capital_flow_state": asdict(result.composite_state.capital_flow_state),
         "macro_context_state": asdict(result.composite_state.macro_context_state),
         "mainlines": [asdict(item) for item in getattr(result.composite_state, "mainlines", [])],
+        "viewpoints": [asdict(item) for item in getattr(result.composite_state, "viewpoints", [])],
+        "theme_episodes": [asdict(item) for item in getattr(result.composite_state, "theme_episodes", [])],
+        "stock_role_states": {
+            str(key): asdict(value)
+            for key, value in getattr(result.composite_state, "stock_role_states", {}).items()
+        },
+        "execution_plans": [asdict(item) for item in getattr(result.composite_state, "execution_plans", [])],
         "policy": policy_payload,
         "top_negative_info_events": [asdict(item) for item in result.top_negative_info_events],
         "top_positive_info_signals": [asdict(item) for item in result.top_positive_info_signals],

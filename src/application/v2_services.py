@@ -106,12 +106,17 @@ from src.application import v2_daily_state_runtime as _v2_daily_state_runtime
 from src.application import v2_forecast_model_runtime as _v2_forecast_model_runtime
 from src.application import v2_frozen_forecast_runtime as _v2_frozen_forecast_runtime
 from src.application import v2_info_shadow_runtime as _v2_info_shadow_runtime
+from src.application import v2_insight_runtime as _v2_insight_runtime
 from src.application import v2_learning_target_runtime as _v2_learning_target_runtime
+from src.application import v2_execution_overlay_runtime as _v2_execution_overlay_runtime
+from src.application import v2_leader_runtime as _v2_leader_runtime
 from src.application import v2_policy_feature_runtime as _v2_policy_feature_runtime
 from src.application import v2_policy_runtime as _v2_policy_runtime
 from src.application import v2_policy_learning_runtime as _v2_policy_learning_runtime
 from src.application import v2_runtime_primitives as _v2_runtime_primitives
+from src.application import v2_stock_role_runtime as _v2_stock_role_runtime
 from src.application import v2_state_build_runtime as _v2_state_build_runtime
+from src.application import v2_theme_episode_runtime as _v2_theme_episode_runtime
 from src.reporting import report_state_runtime as _report_state_runtime
 from src.reporting import forecast_support as _reporting_forecast_support
 from src.reporting import reason_bundles as _reporting_reason_bundles
@@ -223,6 +228,14 @@ _predict_info_shadow_prob = _v2_info_shadow_runtime.predict_info_shadow_prob
 
 _compose_shadow_stock_score = _v2_facade_support_runtime.compose_shadow_stock_score
 _build_sector_map_from_state = _v2_facade_support_runtime.build_sector_map_from_state
+_build_theme_episodes = _v2_theme_episode_runtime.build_theme_episodes
+_build_stock_role_snapshots = _v2_stock_role_runtime.build_stock_role_snapshots
+_attach_insight_memory_to_state = _v2_insight_runtime.attach_insight_memory_to_state
+_build_insight_artifact_payloads = _v2_insight_runtime.build_insight_artifact_payloads
+_write_insight_artifacts = _v2_insight_runtime.write_insight_artifacts
+_persist_daily_insight_artifacts = _v2_insight_runtime.persist_daily_insight_artifacts
+_build_execution_plans = _v2_execution_overlay_runtime.build_execution_plans
+_apply_leader_candidate_overlay = _v2_leader_runtime.apply_leader_candidate_overlay
 
 
 def _with_deps(delegate: object, deps_factory: object) -> object:
@@ -1089,6 +1102,10 @@ _attach_daily_info_overlay = _with_deps(
 )
 _attach_daily_external_signal_overlay = _with_deps(
     _v2_daily_state_runtime.attach_daily_external_signal_overlay,
+    _daily_state_runtime_dependencies,
+)
+_attach_daily_insight_overlay = _with_deps(
+    _v2_daily_state_runtime.attach_daily_insight_overlay,
     _daily_state_runtime_dependencies,
 )
 

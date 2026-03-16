@@ -1,0 +1,683 @@
+from __future__ import annotations
+
+import math
+from dataclasses import asdict, dataclass, field, replace
+
+import pandas as pd
+
+from src.application.v2_contracts import CandidateSelectionState, CompositeState, MainlineState, StockRoleSnapshot, ThemeEpisode
+
+
+@dataclass(frozen=True)
+class LeaderScoreSnapshot:
+    symbol: str
+    sector: str
+    theme: str
+    theme_phase: str
+    role: str
+    role_downgrade: bool = False
+    negative_score: float = 0.0
+    candidate_score: float = 0.0
+    conviction_score: float = 0.0
+    theme_rank: int = 0
+    theme_size: int = 0
+    hard_negative: bool = False
+    reasons: list[str] = field(default_factory=list)
+
+
+def _clip01(value: float) -> float:
+    return float(min(1.0, max(0.0, value)))
+
+
+def _normalize_text(value: object) -> str:
+    return str(value or "").strip()
+
+
+def _safe_float(value: object, default: float = 0.0) -> float:
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return float(default)
+    if math.isnan(number):
+        return float(default)
+    return number
+
+
+def _theme_episode_map(state: CompositeState) -> dict[str, ThemeEpisode]:
+    return {
+        _normalize_text(item.theme): item
+        for item in getattr(state, "theme_episodes", []) or []
+        if _normalize_text(item.theme)
+    }
+
+
+def _mainline_for_stock(
+    *,
+    stock: object,
+    mainlines: list[MainlineState],
+) -> MainlineState | None:
+    symbol = _normalize_text(getattr(stock, "symbol", ""))
+    sector = _normalize_text(getattr(stock, "sector", ""))
+    matched = [
+        item
+        for item in mainlines
+        if symbol in {_normalize_text(value) for value in getattr(item, "representative_symbols", [])}
+        or sector in {_normalize_text(value) for value in getattr(item, "sectors", [])}
+    ]
+    if not matched:
+        return None
+    matched.sort(
+        key=lambda item: (
+            _safe_float(getattr(item, "conviction", 0.0)),
+            _safe_float(getattr(item, "leadership", 0.0)),
+            _safe_float(getattr(item, "catalyst_strength", 0.0)),
+        ),
+        reverse=True,
+    )
+    return matched[0]
+
+
+def _theme_context_for_stock(
+    *,
+    stock: object,
+    role_state: StockRoleSnapshot | None,
+    theme_episode_map: dict[str, ThemeEpisode],
+    mainlines: list[MainlineState],
+) -> tuple[str, str, float, float, float]:
+    if role_state is not None and _normalize_text(getattr(role_state, "theme", "")):
+        theme = _normalize_text(getattr(role_state, "theme", ""))
+        episode = theme_episode_map.get(theme)
+        if episode is not None:
+            return (
+                theme,
+                _normalize_text(getattr(episode, "phase", "")),
+                _safe_float(getattr(episode, "conviction", 0.0)),
+                _safe_float(getattr(episode, "leadership", 0.0)),
+                _safe_float(getattr(episode, "event_risk", 0.0)),
+            )
+        return theme, "", 0.0, 0.0, 0.0
+
+    mainline = _mainline_for_stock(stock=stock, mainlines=mainlines)
+    if mainline is not None:
+        theme = _normalize_text(getattr(mainline, "name", ""))
+        episode = theme_episode_map.get(theme)
+        if episode is not None:
+            return (
+                theme,
+                _normalize_text(getattr(episode, "phase", "")),
+                _safe_float(getattr(episode, "conviction", 0.0)),
+                _safe_float(getattr(episode, "leadership", 0.0)),
+                _safe_float(getattr(episode, "event_risk", 0.0)),
+            )
+        return (
+            theme,
+            "",
+            _safe_float(getattr(mainline, "conviction", 0.0)),
+            _safe_float(getattr(mainline, "leadership", 0.0)),
+            _safe_float(getattr(mainline, "event_risk_level", 0.0)),
+        )
+    return _normalize_text(getattr(stock, "sector", "")) or "other", "", 0.0, 0.0, 0.0
+
+
+def _base_negative_score(
+    *,
+    stock: object,
+    theme_event_risk: float,
+) -> float:
+    excess = _safe_float(getattr(stock, "excess_vs_sector_prob", 0.5), 0.5)
+    up_5d = _safe_float(getattr(stock, "up_5d_prob", 0.5), 0.5)
+    up_20d = _safe_float(getattr(stock, "up_20d_prob", 0.5), 0.5)
+    tradeability = _safe_float(getattr(stock, "tradeability_score", 0.5), 0.5)
+    event_impact = _safe_float(getattr(stock, "event_impact_score", 0.5), 0.5)
+    return _clip01(
+        0.28 * max(0.0, 0.54 - excess) / 0.12
+        + 0.22 * max(0.0, 0.55 - up_5d) / 0.12
+        + 0.14 * max(0.0, 0.55 - up_20d) / 0.12
+        + 0.18 * max(0.0, 0.82 - tradeability) / 0.16
+        + 0.08 * max(0.0, 0.10 - event_impact) / 0.10
+        + 0.10 * max(0.0, theme_event_risk - 0.55) / 0.20
+    )
+
+
+def _fallback_role(
+    *,
+    stock: object,
+    rank: int,
+    theme_size: int,
+    base_negative_score: float,
+) -> str:
+    leader_cut = max(2, int(math.ceil(theme_size * 0.10)))
+    core_cut = max(leader_cut, int(math.ceil(theme_size * 0.30)))
+    excess = _safe_float(getattr(stock, "excess_vs_sector_prob", 0.5), 0.5)
+    rebound_strength = (
+        _safe_float(getattr(stock, "up_1d_prob", 0.5), 0.5)
+        + _safe_float(getattr(stock, "up_2d_prob", 0.5), 0.5)
+        + _safe_float(getattr(stock, "up_3d_prob", 0.5), 0.5)
+    ) / 3.0
+    if rank <= leader_cut and excess >= 0.56:
+        return "leader"
+    if rank <= core_cut:
+        return "core"
+    if rebound_strength >= 0.57 and excess < 0.54:
+        return "rebound"
+    if base_negative_score >= 0.45 or rank > max(core_cut, int(math.ceil(theme_size * 0.70))):
+        return "laggard"
+    return "follower"
+
+
+def _role_bonus(role: str) -> float:
+    return {
+        "leader": 0.12,
+        "core": 0.08,
+        "follower": 0.02,
+        "rebound": 0.00,
+        "laggard": -0.10,
+    }.get(_normalize_text(role).lower(), 0.0)
+
+
+def _phase_bonus(phase: str) -> float:
+    return {
+        "strengthening": 0.08,
+        "emerging": 0.04,
+        "crowded": -0.02,
+        "diverging": -0.06,
+        "fading": -0.12,
+    }.get(_normalize_text(phase).lower(), 0.0)
+
+
+def _negative_adjustment_for_role_and_phase(
+    *,
+    role: str,
+    phase: str,
+    role_downgrade: bool,
+) -> float:
+    role_term = {
+        "leader": -0.04,
+        "core": 0.00,
+        "follower": 0.04,
+        "rebound": 0.06,
+        "laggard": 0.16,
+    }.get(_normalize_text(role).lower(), 0.0)
+    phase_term = {
+        "strengthening": -0.03,
+        "emerging": 0.00,
+        "crowded": 0.04,
+        "diverging": 0.06,
+        "fading": 0.14,
+    }.get(_normalize_text(phase).lower(), 0.0)
+    downgrade_term = 0.10 if role_downgrade else 0.0
+    return role_term + phase_term + downgrade_term
+
+
+def _theme_relative_score(stock: object) -> float:
+    return float(
+        0.45 * _safe_float(getattr(stock, "alpha_score", 0.0), 0.0)
+        + 0.32 * _safe_float(getattr(stock, "excess_vs_sector_prob", 0.5), 0.5)
+        + 0.23 * _safe_float(getattr(stock, "up_20d_prob", 0.5), 0.5)
+    )
+
+
+def _reason_list(
+    *,
+    stock: object,
+    role: str,
+    phase: str,
+    role_downgrade: bool,
+    negative_score: float,
+    candidate_score: float,
+    conviction_score: float,
+    theme_rank: int,
+    theme_size: int,
+) -> list[str]:
+    reasons: list[str] = []
+    excess = _safe_float(getattr(stock, "excess_vs_sector_prob", 0.5), 0.5)
+    alpha = _safe_float(getattr(stock, "alpha_score", 0.0), 0.0)
+    tradeability = _safe_float(getattr(stock, "tradeability_score", 0.5), 0.5)
+    if phase == "strengthening":
+        reasons.append("theme strengthening")
+    elif phase == "emerging":
+        reasons.append("theme emerging")
+    elif phase == "fading":
+        reasons.append("theme fading")
+    if role_downgrade:
+        reasons.append("role downgrade active")
+    if role in {"leader", "core"}:
+        reasons.append(f"theme role {role}")
+    elif role == "laggard":
+        reasons.append("laggard inside theme")
+    if theme_size > 0 and theme_rank > 0:
+        reasons.append(f"theme rank {theme_rank}/{theme_size}")
+    if excess >= 0.58:
+        reasons.append("strong excess vs sector")
+    elif excess <= 0.52:
+        reasons.append("weak excess vs sector")
+    if alpha >= 0.62:
+        reasons.append("alpha score in upper band")
+    if tradeability >= 0.88:
+        reasons.append("tradeability supportive")
+    elif tradeability <= 0.75:
+        reasons.append("tradeability below comfort zone")
+    if negative_score >= 0.55:
+        reasons.append("hard negative risk elevated")
+    elif candidate_score >= 0.65 and conviction_score >= 0.65:
+        reasons.append("candidate and conviction both confirmed")
+    deduped: list[str] = []
+    seen: set[str] = set()
+    for item in reasons:
+        if item in seen:
+            continue
+        seen.add(item)
+        deduped.append(item)
+        if len(deduped) >= 5:
+            break
+    return deduped
+
+
+def build_leader_score_snapshots(
+    *,
+    state: CompositeState,
+) -> list[LeaderScoreSnapshot]:
+    stocks = list(getattr(state, "stocks", []) or [])
+    if not stocks:
+        return []
+    theme_episode_map = _theme_episode_map(state)
+    role_states = dict(getattr(state, "stock_role_states", {}) or {})
+    mainlines = list(getattr(state, "mainlines", []) or [])
+    themed_rows: dict[str, list[dict[str, object]]] = {}
+
+    for stock in stocks:
+        role_state = role_states.get(_normalize_text(getattr(stock, "symbol", "")))
+        theme, phase, theme_conviction, theme_leadership, theme_event_risk = _theme_context_for_stock(
+            stock=stock,
+            role_state=role_state,
+            theme_episode_map=theme_episode_map,
+            mainlines=mainlines,
+        )
+        base_negative = _base_negative_score(
+            stock=stock,
+            theme_event_risk=theme_event_risk,
+        )
+        themed_rows.setdefault(theme, []).append(
+            {
+                "stock": stock,
+                "role_state": role_state,
+                "theme": theme,
+                "phase": phase,
+                "theme_conviction": theme_conviction,
+                "theme_leadership": theme_leadership,
+                "theme_event_risk": theme_event_risk,
+                "base_negative": base_negative,
+                "theme_relative": _theme_relative_score(stock),
+            }
+        )
+
+    out: list[LeaderScoreSnapshot] = []
+    for theme, rows in themed_rows.items():
+        ranked = sorted(
+            rows,
+            key=lambda item: (
+                _safe_float(item.get("theme_relative", 0.0), 0.0),
+                _safe_float(getattr(item["stock"], "excess_vs_sector_prob", 0.5), 0.5),
+                _safe_float(getattr(item["stock"], "up_5d_prob", 0.5), 0.5),
+            ),
+            reverse=True,
+        )
+        theme_size = int(len(ranked))
+        for idx, row in enumerate(ranked, start=1):
+            stock = row["stock"]
+            role_state = row.get("role_state")
+            role = _normalize_text(getattr(role_state, "role", "")) or _fallback_role(
+                stock=stock,
+                rank=idx,
+                theme_size=theme_size,
+                base_negative_score=_safe_float(row.get("base_negative", 0.0), 0.0),
+            )
+            role_downgrade = bool(getattr(role_state, "role_downgrade", False))
+            phase = _normalize_text(row.get("phase", ""))
+            theme_conviction = _safe_float(row.get("theme_conviction", 0.0), 0.0)
+            theme_leadership = _safe_float(row.get("theme_leadership", 0.0), 0.0)
+            theme_event_risk = _safe_float(row.get("theme_event_risk", 0.0), 0.0)
+            negative_score = _clip01(
+                _safe_float(row.get("base_negative", 0.0), 0.0)
+                + _negative_adjustment_for_role_and_phase(
+                    role=role,
+                    phase=phase,
+                    role_downgrade=role_downgrade,
+                )
+            )
+            theme_support = (
+                0.45 * theme_conviction
+                + 0.30 * theme_leadership
+                + 0.25 * (1.0 - theme_event_risk)
+            )
+            candidate_score = _clip01(
+                0.24 * _safe_float(getattr(stock, "alpha_score", 0.0), 0.0)
+                + 0.22 * _safe_float(getattr(stock, "excess_vs_sector_prob", 0.5), 0.5)
+                + 0.14 * _safe_float(getattr(stock, "up_5d_prob", 0.5), 0.5)
+                + 0.10 * _safe_float(getattr(stock, "up_20d_prob", 0.5), 0.5)
+                + 0.08 * _safe_float(getattr(stock, "tradeability_score", 0.5), 0.5)
+                + 0.12 * theme_support
+                + 0.05 * (1.0 - float(idx / max(1, theme_size)))
+                + _role_bonus(role)
+                + _phase_bonus(phase)
+                - 0.22 * negative_score
+            )
+            conviction_score = _clip01(
+                0.26 * _safe_float(getattr(stock, "alpha_score", 0.0), 0.0)
+                + 0.24 * _safe_float(getattr(stock, "excess_vs_sector_prob", 0.5), 0.5)
+                + 0.16 * _safe_float(getattr(stock, "up_5d_prob", 0.5), 0.5)
+                + 0.10 * _safe_float(getattr(stock, "up_20d_prob", 0.5), 0.5)
+                + 0.14 * theme_conviction
+                + 0.04 * theme_leadership
+                + 0.60 * _role_bonus(role)
+                + 0.50 * _phase_bonus(phase)
+                - 0.28 * negative_score
+                - (0.06 if role_downgrade else 0.0)
+            )
+            hard_negative = bool(
+                negative_score >= 0.58
+                or (role == "laggard" and candidate_score < 0.56)
+                or (
+                    phase == "fading"
+                    and theme_event_risk >= 0.55
+                    and _safe_float(getattr(stock, "excess_vs_sector_prob", 0.5), 0.5) < 0.54
+                )
+            )
+            out.append(
+                LeaderScoreSnapshot(
+                    symbol=_normalize_text(getattr(stock, "symbol", "")),
+                    sector=_normalize_text(getattr(stock, "sector", "")),
+                    theme=theme,
+                    theme_phase=phase,
+                    role=role,
+                    role_downgrade=role_downgrade,
+                    negative_score=negative_score,
+                    candidate_score=candidate_score,
+                    conviction_score=conviction_score,
+                    theme_rank=idx,
+                    theme_size=theme_size,
+                    hard_negative=hard_negative,
+                    reasons=_reason_list(
+                        stock=stock,
+                        role=role,
+                        phase=phase,
+                        role_downgrade=role_downgrade,
+                        negative_score=negative_score,
+                        candidate_score=candidate_score,
+                        conviction_score=conviction_score,
+                        theme_rank=idx,
+                        theme_size=theme_size,
+                    ),
+                )
+            )
+    out.sort(
+        key=lambda item: (
+            not item.hard_negative,
+            item.conviction_score,
+            item.candidate_score,
+            -item.negative_score,
+        ),
+        reverse=True,
+    )
+    return out
+
+
+def top_leader_candidates(
+    *,
+    state: CompositeState,
+    limit: int = 12,
+) -> list[LeaderScoreSnapshot]:
+    snapshots = build_leader_score_snapshots(state=state)
+    filtered = [
+        item
+        for item in snapshots
+        if not item.hard_negative
+    ]
+    filtered.sort(
+        key=lambda item: (
+            item.conviction_score,
+            item.candidate_score,
+            -item.negative_score,
+        ),
+        reverse=True,
+    )
+    return filtered[: max(1, int(limit))]
+
+
+def apply_leader_candidate_overlay(
+    *,
+    state: CompositeState,
+) -> CompositeState:
+    selection = getattr(state, "candidate_selection", CandidateSelectionState())
+    symbols = [str(item) for item in getattr(selection, "shortlisted_symbols", []) if str(item).strip()]
+    if len(symbols) <= 1:
+        return state
+    snapshots = build_leader_score_snapshots(state=state)
+    if not snapshots:
+        return state
+
+    rank_map = {symbol: idx for idx, symbol in enumerate(symbols)}
+    score_map = {item.symbol: item for item in snapshots}
+    shortlist_size = int(getattr(selection, "shortlist_size", 0) or 0)
+    if shortlist_size <= 0:
+        shortlist_size = len(symbols)
+    shortlist_size = min(shortlist_size, len(symbols))
+    core_symbols = list(symbols[:shortlist_size])
+    tail_symbols = list(symbols[shortlist_size:])
+
+    def _sort_key(symbol: str) -> tuple[float, float, float, float, int]:
+        payload = score_map.get(symbol)
+        if payload is None:
+            return (2.0, 0.0, 0.0, 2.0, rank_map.get(symbol, len(rank_map)))
+        hard_negative_bucket = 1.0 if payload.hard_negative else 0.0
+        return (
+            hard_negative_bucket,
+            -float(payload.conviction_score),
+            -float(payload.candidate_score),
+            float(payload.negative_score),
+            rank_map.get(symbol, len(rank_map)),
+        )
+
+    sorted_core = sorted(core_symbols, key=_sort_key)
+    sorted_tail = sorted(tail_symbols, key=_sort_key)
+    reordered = sorted_core + sorted_tail
+    if reordered == symbols:
+        return state
+
+    top_promoted = [
+        symbol
+        for symbol in sorted_core[: min(3, len(sorted_core))]
+        if rank_map.get(symbol, len(rank_map)) > sorted_core.index(symbol)
+    ]
+    notes = list(getattr(selection, "selection_notes", []) or [])
+    note = "Leader overlay reprioritized existing shortlist order without changing membership."
+    if top_promoted:
+        note += " Promoted: " + ", ".join(top_promoted[:3])
+    notes.append(note)
+    return replace(
+        state,
+        candidate_selection=replace(
+            selection,
+            shortlisted_symbols=reordered,
+            selection_notes=notes,
+        ),
+    )
+
+
+def _dcg(relevances: list[float]) -> float:
+    total = 0.0
+    for idx, value in enumerate(relevances, start=1):
+        total += float(value) / math.log2(idx + 1.0)
+    return float(total)
+
+
+def _future_lookup_for_trajectory(trajectory: object) -> dict[str, pd.DataFrame]:
+    prepared = getattr(trajectory, "prepared", None)
+    stock_frames = getattr(prepared, "stock_frames", {}) if prepared is not None else {}
+    lookup: dict[str, pd.DataFrame] = {}
+    for symbol, frame in stock_frames.items():
+        if not isinstance(frame, pd.DataFrame) or frame.empty or "date" not in frame.columns:
+            continue
+        work = frame.copy()
+        work["date"] = pd.to_datetime(work["date"], errors="coerce")
+        work = work.dropna(subset=["date"]).sort_values("date")
+        if work.empty:
+            continue
+        lookup[str(symbol)] = work.set_index("date", drop=False)
+    return lookup
+
+
+def _future_theme_scores(
+    *,
+    group: list[LeaderScoreSnapshot],
+    step_date: pd.Timestamp,
+    future_lookup: dict[str, pd.DataFrame],
+) -> tuple[dict[str, float], set[str], int]:
+    rows: list[tuple[str, float, float]] = []
+    for item in group:
+        frame = future_lookup.get(str(item.symbol))
+        if frame is None or step_date not in frame.index:
+            continue
+        row = frame.loc[step_date]
+        if isinstance(row, pd.DataFrame):
+            row = row.iloc[0]
+        excess_5 = _safe_float(row.get("excess_ret_5_vs_sector", float("nan")), float("nan"))
+        excess_20 = _safe_float(row.get("excess_ret_20_vs_sector", float("nan")), float("nan"))
+        if math.isnan(excess_5) or math.isnan(excess_20):
+            continue
+        rows.append((str(item.symbol), excess_5, excess_20))
+    if len(rows) < 2:
+        return {}, set(), 0
+    frame = pd.DataFrame(rows, columns=["symbol", "excess_5", "excess_20"])
+    frame["score_5_rank"] = frame["excess_5"].rank(method="average", pct=True)
+    frame["score_20_rank"] = frame["excess_20"].rank(method="average", pct=True)
+    frame["future_score"] = (
+        0.60 * frame["score_5_rank"]
+        + 0.40 * frame["score_20_rank"]
+        + 0.05 * (frame["excess_5"] > 0.0).astype(float)
+        + 0.05 * (frame["excess_20"] > 0.0).astype(float)
+    )
+    top_score = float(frame["future_score"].max())
+    leader_cut = max(0.80, top_score - 0.05)
+    leaders = {
+        str(row.symbol)
+        for row in frame.itertuples(index=False)
+        if float(row.future_score) >= leader_cut and float(row.excess_5) > 0.0
+    }
+    if not leaders and top_score >= 0.70:
+        best = frame.sort_values(["future_score", "excess_5", "excess_20"], ascending=False).iloc[0]
+        if float(best["excess_5"]) > 0.0 or float(best["excess_20"]) > 0.0:
+            leaders.add(str(best["symbol"]))
+    return {
+        str(row.symbol): float(row.future_score)
+        for row in frame.itertuples(index=False)
+    }, leaders, int(len(frame))
+
+
+def evaluate_leader_candidates(
+    *,
+    trajectory: object | None,
+    top_k: int = 3,
+) -> dict[str, object]:
+    if trajectory is None or not getattr(trajectory, "steps", None):
+        return {
+            "theme_group_count": 0,
+            "evaluated_stock_count": 0,
+            "true_leader_count": 0,
+            "candidate_recall_at_k": 0.0,
+            "conviction_precision_at_1": 0.0,
+            "ndcg_at_k": 0.0,
+            "hard_negative_survival_recall": 0.0,
+            "hard_negative_filter_rate": 0.0,
+        }
+
+    future_lookup = _future_lookup_for_trajectory(trajectory)
+    theme_group_count = 0
+    evaluated_stock_count = 0
+    true_leader_count = 0
+    candidate_hits = 0.0
+    conviction_hits = 0.0
+    ndcg_values: list[float] = []
+    surviving_true_leaders = 0
+    total_true_leaders = 0
+    filtered_stock_count = 0
+
+    for step in getattr(trajectory, "steps", []) or []:
+        step_date = pd.Timestamp(getattr(step, "date"))
+        snapshots = build_leader_score_snapshots(state=getattr(step, "composite_state"))
+        grouped: dict[str, list[LeaderScoreSnapshot]] = {}
+        for item in snapshots:
+            grouped.setdefault(str(item.theme), []).append(item)
+        for group in grouped.values():
+            if len(group) < 3:
+                continue
+            future_scores, true_leaders, valid_stock_count = _future_theme_scores(
+                group=group,
+                step_date=step_date,
+                future_lookup=future_lookup,
+            )
+            if valid_stock_count < 2 or not true_leaders:
+                continue
+            theme_group_count += 1
+            evaluated_stock_count += int(valid_stock_count)
+            true_leader_count += int(len(true_leaders))
+            total_true_leaders += int(len(true_leaders))
+            filtered_stock_count += int(sum(1 for item in group if item.hard_negative))
+
+            candidate_ranked = sorted(group, key=lambda item: item.candidate_score, reverse=True)
+            conviction_ranked = sorted(group, key=lambda item: item.conviction_score, reverse=True)
+            top_candidate_symbols = {item.symbol for item in candidate_ranked[: max(1, int(top_k))]}
+            if top_candidate_symbols & true_leaders:
+                candidate_hits += 1.0
+            if conviction_ranked and conviction_ranked[0].symbol in true_leaders:
+                conviction_hits += 1.0
+
+            predicted = [float(future_scores.get(item.symbol, 0.0)) for item in conviction_ranked[: max(1, int(top_k))]]
+            ideal = sorted(future_scores.values(), reverse=True)[: max(1, int(top_k))]
+            idcg = _dcg(ideal)
+            ndcg_values.append(0.0 if idcg <= 1e-9 else _dcg(predicted) / idcg)
+
+            for item in group:
+                if item.symbol in true_leaders and not item.hard_negative:
+                    surviving_true_leaders += 1
+
+    filter_denominator = max(1, evaluated_stock_count)
+    return {
+        "theme_group_count": int(theme_group_count),
+        "evaluated_stock_count": int(evaluated_stock_count),
+        "true_leader_count": int(true_leader_count),
+        "candidate_recall_at_k": float(candidate_hits / max(1, theme_group_count)),
+        "conviction_precision_at_1": float(conviction_hits / max(1, theme_group_count)),
+        "ndcg_at_k": float(sum(ndcg_values) / max(1, len(ndcg_values))),
+        "hard_negative_survival_recall": float(surviving_true_leaders / max(1, total_true_leaders)),
+        "hard_negative_filter_rate": float(filtered_stock_count / filter_denominator),
+    }
+
+
+def build_leader_artifact_payloads(
+    *,
+    state: CompositeState | None,
+    trajectory: object | None = None,
+    top_k: int = 3,
+    limit: int = 16,
+) -> dict[str, object]:
+    snapshots = [] if state is None else build_leader_score_snapshots(state=state)
+    candidates = [] if state is None else top_leader_candidates(state=state, limit=limit)
+    evaluation = evaluate_leader_candidates(
+        trajectory=trajectory,
+        top_k=top_k,
+    )
+    theme_breakdown: dict[str, int] = {}
+    for item in candidates:
+        theme_breakdown[item.theme] = int(theme_breakdown.get(item.theme, 0) + 1)
+    return {
+        "leader_manifest": {
+            "as_of_date": "" if state is None else str(getattr(getattr(state, "market", None), "as_of_date", "")),
+            "snapshot_count": int(len(snapshots)),
+            "candidate_count": int(len(candidates)),
+            "hard_negative_count": int(sum(1 for item in snapshots if item.hard_negative)),
+            "theme_breakdown": theme_breakdown,
+            "evaluation": evaluation,
+        },
+        "leader_candidates": [asdict(item) for item in candidates],
+    }

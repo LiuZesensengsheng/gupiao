@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
 from pathlib import Path
 from typing import Callable, Iterable
 
@@ -310,20 +310,13 @@ def enrich_state_with_info(
         capital_flow_state=state.capital_flow_state,
         macro_context_state=state.macro_context_state,
     )
-    return CompositeState(
-        market=state.market,
-        cross_section=state.cross_section,
-        sectors=state.sectors,
-        stocks=state.stocks,
-        strategy_mode=state.strategy_mode,
-        risk_regime=state.risk_regime,
+    return replace(
+        state,
         candidate_selection=getattr(state, "candidate_selection", None) or state.candidate_selection,
         mainlines=updated_mainlines,
         market_info_state=market_info_state,
         sector_info_states=updated_sector_states,
         stock_info_states=updated_stock_states,
-        capital_flow_state=state.capital_flow_state,
-        macro_context_state=state.macro_context_state,
     )
 
 

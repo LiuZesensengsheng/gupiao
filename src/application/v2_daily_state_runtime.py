@@ -54,6 +54,7 @@ class DailyStateRuntimeDependencies:
     top_positive_stock_signals: Callable[..., list[InfoSignalRecord]]
     quant_info_divergence_rows: Callable[..., list[InfoDivergenceRecord]]
     attach_external_signals_to_composite_state: Callable[..., tuple[CompositeState, dict[str, object]]]
+    attach_insight_memory_to_state: Callable[..., CompositeState]
 
 
 def build_daily_universe_context(
@@ -341,4 +342,19 @@ def attach_daily_external_signal_overlay(
         enabled,
         capital_flow_snapshot,
         macro_context_snapshot,
+    )
+
+
+def attach_daily_insight_overlay(
+    *,
+    settings: dict[str, object],
+    composite_state: CompositeState,
+    info_items: list[InfoItem],
+    deps: DailyStateRuntimeDependencies,
+) -> CompositeState:
+    return deps.attach_insight_memory_to_state(
+        state=composite_state,
+        settings=settings,
+        as_of_date=pd.Timestamp(composite_state.market.as_of_date),
+        info_items=info_items,
     )

@@ -20,16 +20,20 @@ class DailyWorkflowDependencies:
     build_daily_symbol_names_fn: Callable[..., dict[str, str]]
     attach_daily_info_overlay_fn: Callable[..., tuple[object, str, str, bool, int, list[object], list[object], list[object], list[object]]]
     attach_daily_external_signal_overlay_fn: Callable[..., tuple[object, str, str, bool, dict[str, object], dict[str, object]]]
+    attach_daily_insight_overlay_fn: Callable[..., object]
     filter_state_for_recommendation_scope_fn: Callable[..., object]
+    apply_leader_candidate_overlay_fn: Callable[..., object]
     parse_boolish_fn: Callable[[object, bool], bool]
     resolve_daily_policy_model_fn: Callable[..., object | None]
     policy_spec_from_model_fn: Callable[..., PolicySpec]
     apply_policy_fn: Callable[..., object]
+    build_execution_plans_fn: Callable[..., list[object]]
     build_trade_actions_fn: Callable[..., list[object]]
     load_prediction_review_context_fn: Callable[..., tuple[object | None, dict[str, object]]]
     build_live_market_reporting_overlay_fn: Callable[..., tuple[object | None, object | None]]
     decorate_composite_state_for_reporting_fn: Callable[..., object]
     remember_daily_run_fn: Callable[..., DailyRunResult]
+    persist_daily_insight_artifacts_fn: Callable[..., dict[str, str]]
     emit_progress_fn: Callable[[str, str], None]
 
 
@@ -179,9 +183,17 @@ def run_daily_v2_live_impl(
         info_items=info_items,
         allow_rebuild=allow_retrain,
     )
+    composite_state = dependencies.attach_daily_insight_overlay_fn(
+        settings=settings,
+        composite_state=composite_state,
+        info_items=info_items,
+    )
     composite_state = dependencies.filter_state_for_recommendation_scope_fn(
         state=composite_state,
         main_board_only=dependencies.parse_boolish_fn(settings.get("main_board_only_recommendations", False), False),
+    )
+    composite_state = dependencies.apply_leader_candidate_overlay_fn(
+        state=composite_state,
     )
 
     learned_policy = None
@@ -215,6 +227,15 @@ def run_daily_v2_live_impl(
         ),
         policy_spec=active_policy_spec,
     )
+    if dependencies.parse_boolish_fn(settings.get("execution_overlay_enabled", True), True):
+        execution_plans = dependencies.build_execution_plans_fn(
+            state=composite_state,
+            policy_decision=policy_decision,
+            current_weights=current_weights,
+            current_holding_days={symbol: 5 for symbol in current_weights},
+            symbol_names=symbol_names,
+        )
+        composite_state = replace(composite_state, execution_plans=execution_plans)
     trade_actions = dependencies.build_trade_actions_fn(
         decision=policy_decision,
         current_weights=current_weights,
@@ -270,6 +291,14 @@ def run_daily_v2_live_impl(
         memory_root=memory_root,
         result=result,
     )
+    try:
+        dependencies.persist_daily_insight_artifacts_fn(
+            result=result,
+            settings=settings,
+            artifact_root=artifact_root,
+        )
+    except Exception:
+        pass
     try:
         with cache_path.open("wb") as f:
             pickle.dump(result, f, protocol=pickle.HIGHEST_PROTOCOL)
