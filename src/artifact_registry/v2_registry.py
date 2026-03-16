@@ -30,6 +30,7 @@ def publish_v2_research_artifacts(
     baseline,
     calibration,
     learning,
+    trajectory=None,
     settings: dict[str, object] | None = None,
     **kwargs: object,
 ):
@@ -40,6 +41,7 @@ def publish_v2_research_artifacts(
         baseline=baseline,
         calibration=calibration,
         learning=learning,
+        trajectory=trajectory,
         **resolved.publish_kwargs(),
     )
     _validate_published_paths(paths)

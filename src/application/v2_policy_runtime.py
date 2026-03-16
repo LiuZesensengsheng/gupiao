@@ -540,10 +540,22 @@ def apply_policy(
         turnover_cap = min(0.45, turnover_cap + 0.03)
         risk_notes.append("Top alpha concentration supports measured rotation.")
 
+    concentration_preference = bool(
+        state.risk_regime != "risk_off"
+        and top_alpha >= 0.69
+        and alpha_headroom >= 0.05
+        and alpha_breadth <= 0.22
+        and cross.breadth_strength >= 0.08
+        and float(candidate_risk["fragile_ratio"]) < 0.18
+        and float(candidate_risk["durability_score"]) >= 0.58
+        and float(market.drawdown_risk) <= 0.35
+    )
+
     if mainlines:
         top_mainline = mainlines[0]
         if float(top_mainline.event_risk_level) >= float(policy_spec.event_risk_cutoff):
             target_exposure *= 0.94
+            target_position_count = max(1, target_position_count - 1)
             turnover_cap = min(turnover_cap, 0.20)
             risk_notes.append(f"Mainline {top_mainline.name} is risk-watched: exposure trimmed.")
         elif (
@@ -552,10 +564,14 @@ def apply_policy(
             and state.risk_regime != "risk_off"
         ):
             target_exposure = min(1.0, target_exposure + 0.03)
-            target_position_count = min(5, target_position_count + 1)
+            if not concentration_preference:
+                target_position_count = min(5, target_position_count + 1)
             risk_notes.append(f"Mainline {top_mainline.name} confirmed: measured exposure support.")
     if confirmed_mainlines:
-        target_position_count = max(target_position_count, min(4, len(confirmed_mainlines) + 1))
+        if concentration_preference:
+            target_position_count = min(target_position_count, 3)
+        else:
+            target_position_count = max(target_position_count, min(4, len(confirmed_mainlines) + 1))
         if state.risk_regime != "risk_off":
             turnover_cap = min(0.40, turnover_cap + 0.02)
         risk_notes.append(
@@ -578,6 +594,10 @@ def apply_policy(
     ):
         target_exposure *= 0.94
         risk_notes.append("Candidate durability soft in a fragile tape: extra exposure trim.")
+    if concentration_preference:
+        target_exposure = min(1.0, target_exposure + min(0.05, 0.55 * alpha_headroom))
+        target_position_count = max(2, min(target_position_count, 3))
+        risk_notes.append("Top alpha concentrated and durable: allow tighter portfolio concentration.")
 
     if candidate_selection is not None and len(candidate_stocks) < len(state.stocks):
         risk_notes.append(
@@ -602,16 +622,23 @@ def apply_policy(
         and int(getattr(candidate_selection, "total_scored", 0)) >= 120
         and int(getattr(candidate_selection, "shortlist_size", 0)) >= 10
     ):
-        target_position_count = max(target_position_count, 3 if state.risk_regime != "risk_off" else 2)
-        max_single_position = min(max_single_position, 0.18 if state.risk_regime == "risk_on" else 0.16)
-        risk_notes.append("Large-universe shortlist: concentration spread across more names.")
+        if concentration_preference:
+            target_position_count = min(target_position_count, 3)
+            max_single_position = min(max_single_position, 0.24 if state.risk_regime == "risk_on" else 0.20)
+            risk_notes.append("Large-universe shortlist respected, but top alpha supports selective concentration.")
+        else:
+            target_position_count = max(target_position_count, 3 if state.risk_regime != "risk_off" else 2)
+            max_single_position = min(max_single_position, 0.18 if state.risk_regime == "risk_on" else 0.16)
+            risk_notes.append("Large-universe shortlist: concentration spread across more names.")
     if float(market.drawdown_risk) >= 0.35 or float(cross.weak_stock_ratio) >= 0.50:
         max_single_position = min(max_single_position, 0.18 if state.risk_regime == "risk_on" else 0.16)
         risk_notes.append("Fragile tape: single-name cap tightened.")
-    if alpha_breadth >= 0.12 and alpha_headroom >= 0.02:
+    if alpha_breadth >= 0.12 and alpha_headroom >= 0.02 and not concentration_preference:
         target_position_count = max(target_position_count, 2)
         max_single_position = min(max_single_position, 0.18 if state.risk_regime == "risk_off" else 0.22)
         risk_notes.append("Alpha breadth strong: concentration reduced across more names.")
+    elif concentration_preference:
+        max_single_position = min(max_single_position, 0.26 if state.risk_regime == "risk_on" else 0.22)
     target_position_count = int(np.clip(target_position_count, 1, 5))
     candidate_sector_names = set(
         getattr(candidate_selection, "shortlisted_sectors", []) if candidate_selection is not None else []

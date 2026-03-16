@@ -197,6 +197,8 @@ def build_forecast_runtime_dependencies(module: ModuleType) -> _v2_feature_runti
         fit_mlp_quantile_quintet=module._fit_mlp_quantile_quintet,
         logistic_model_cls=module.LogisticBinaryModel,
         mlp_model_cls=module.MLPBinaryModel,
+        quantile_model_cls=module.QuantileLinearModel,
+        mlp_quantile_model_cls=module.MLPQuantileModel,
         trajectory_step_cls=module._TrajectoryStep,
         backtest_trajectory_cls=module._BacktestTrajectory,
     )

@@ -314,6 +314,16 @@ def alpha_score_components(
     event_risk = float(deps.clip((0.55 - event_impact) / 0.55, 0.0, 1.0))
     medium_edge = float(deps.clip(0.58 * (up_20d - 0.50) + 0.42 * (up_5d - 0.50), 0.0, 0.35))
     sector_edge = float(deps.clip(excess_vs_sector - 0.50, 0.0, 0.30))
+    swing_edge = float(
+        deps.clip(
+            0.28 * max(0.0, up_2d - 0.50)
+            + 0.40 * max(0.0, up_3d - 0.50)
+            + 0.70 * max(0.0, up_5d - 0.50)
+            + 0.32 * max(0.0, excess_vs_sector - 0.50),
+            0.0,
+            0.42,
+        )
+    )
     trend_alignment = float(
         deps.clip(
             0.55 * max(0.0, up_3d - up_1d)
@@ -323,22 +333,43 @@ def alpha_score_components(
             1.0,
         )
     )
+    continuation_bonus = float(
+        deps.clip(
+            0.75 * max(0.0, up_3d - up_1d)
+            + 1.05 * max(0.0, up_5d - up_3d)
+            + 0.45 * max(0.0, excess_vs_sector - 0.52),
+            0.0,
+            0.38,
+        )
+    )
     stability_bonus = float(deps.clip((0.16 - horizon_dispersion) / 0.16, 0.0, 1.0))
     quality_bonus = float(deps.clip(0.65 * tradeability_score + 0.35 * event_impact - 0.55, 0.0, 0.35))
     reversal_penalty = float(deps.clip(up_1d - max(up_5d, up_20d), 0.0, 0.35))
+    swing_fade_penalty = float(
+        deps.clip(
+            0.75 * max(0.0, up_1d - up_3d)
+            + 0.95 * max(0.0, up_3d - up_5d)
+            + 0.55 * max(0.0, 0.53 - excess_vs_sector),
+            0.0,
+            0.32,
+        )
+    )
     weak_mid_penalty = float(deps.clip(0.52 - up_20d, 0.0, 0.20))
     risk_penalty = float(
         0.16 * horizon_dispersion
         + 0.12 * execution_risk
         + 0.08 * event_risk
         + 0.10 * reversal_penalty
+        + 0.12 * swing_fade_penalty
         + 0.08 * weak_mid_penalty
     )
     selection_bonus = float(
-        0.18 * medium_edge
-        + 0.14 * sector_edge
-        + 0.10 * trend_alignment
-        + 0.08 * stability_bonus
+        0.14 * medium_edge
+        + 0.16 * sector_edge
+        + 0.18 * swing_edge
+        + 0.12 * trend_alignment
+        + 0.12 * continuation_bonus
+        + 0.07 * stability_bonus
         + 0.06 * quality_bonus
     )
     status_penalty = float(status_score_penalty(getattr(stock, "tradability_status", "normal")))
@@ -346,7 +377,9 @@ def alpha_score_components(
     raw["base_alpha_score"] = float(base_alpha_score)
     raw["medium_edge"] = medium_edge
     raw["sector_edge"] = sector_edge
+    raw["swing_edge"] = swing_edge
     raw["trend_alignment"] = trend_alignment
+    raw["continuation_bonus"] = continuation_bonus
     raw["stability_bonus"] = stability_bonus
     raw["quality_bonus"] = quality_bonus
     raw["selection_bonus"] = selection_bonus
@@ -354,6 +387,7 @@ def alpha_score_components(
     raw["execution_risk"] = execution_risk
     raw["event_risk"] = event_risk
     raw["reversal_penalty"] = reversal_penalty
+    raw["swing_fade_penalty"] = swing_fade_penalty
     raw["weak_mid_penalty"] = weak_mid_penalty
     raw["risk_penalty"] = risk_penalty
     raw["status_penalty"] = status_penalty

@@ -229,6 +229,27 @@ def test_load_v2_runtime_settings_applies_tushare_token_from_config(tmp_path: Pa
         market_data.set_tushare_token(previous)
 
 
+def test_load_v2_runtime_settings_resolves_training_window_days(tmp_path: Path) -> None:
+    config_path = tmp_path / "api.json"
+    config_path.write_text(
+        json.dumps(
+            {
+                "common": {"source": "local"},
+                "daily": {"training_window_days": 360},
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    settings = _load_v2_runtime_settings(config_path=str(config_path))
+    override_settings = _load_v2_runtime_settings(config_path=str(config_path), training_window_days=480)
+    disabled_settings = _load_v2_runtime_settings(config_path=str(config_path), training_window_days=0)
+
+    assert settings["training_window_days"] == 360
+    assert override_settings["training_window_days"] == 480
+    assert disabled_settings["training_window_days"] is None
+
+
 def test_load_v2_runtime_settings_prefers_generated_base_file_for_dynamic_universe(tmp_path: Path) -> None:
     config_path = tmp_path / "api.json"
     config_path.write_text(
@@ -1298,6 +1319,81 @@ def test_publish_research_artifacts_freezes_external_signal_states(monkeypatch: 
     assert manifest_payload["external_signal_manifest"]
 
 
+def test_publish_research_artifacts_reuses_supplied_trajectory(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    state = _make_state()
+    trajectory = _BacktestTrajectory(
+        prepared=SimpleNamespace(
+            stock_frames={},
+            settings={"source": "local", "universe_tier": "favorites_16"},
+        ),
+        steps=[
+            _TrajectoryStep(
+                date=pd.Timestamp("2026-02-28"),
+                next_date=pd.Timestamp("2026-03-03"),
+                composite_state=state,
+                stock_states=list(state.stocks),
+                horizon_metrics={},
+            )
+        ],
+    )
+
+    monkeypatch.setattr(
+        "src.application.v2_services._load_or_build_v2_backtest_trajectory",
+        lambda **_: (_ for _ in ()).throw(AssertionError("trajectory loader should not be called")),
+    )
+    monkeypatch.setattr("src.application.v2_services._split_research_trajectory", lambda *args, **kwargs: (trajectory, trajectory, trajectory))
+
+    paths = publish_v2_research_artifacts(
+        strategy_id="swing_v2",
+        artifact_root=str(tmp_path / "artifacts" / "v2"),
+        cache_root=str(tmp_path / "artifacts" / "v2" / "cache"),
+        trajectory=trajectory,
+        baseline=_make_backtest(0.10, 0.08),
+        calibration=V2CalibrationResult(
+            best_policy=PolicySpec(),
+            best_score=0.2,
+            baseline=_make_backtest(0.10, 0.08),
+            calibrated=_make_backtest(0.11, 0.09),
+        ),
+        learning=V2PolicyLearningResult(
+            model=LearnedPolicyModel(
+                feature_names=["x1"],
+                exposure_intercept=0.5,
+                exposure_coef=[0.0],
+                position_intercept=2.0,
+                position_coef=[0.0],
+                turnover_intercept=0.2,
+                turnover_coef=[0.0],
+                train_rows=1,
+                train_r2_exposure=0.0,
+                train_r2_positions=0.0,
+                train_r2_turnover=0.0,
+            ),
+            baseline=_make_backtest(0.10, 0.08),
+            learned=_make_backtest(0.12, 0.10),
+        ),
+        settings={
+            "config_path": "config/api.json",
+            "source": "local",
+            "watchlist": "config/watchlist.json",
+            "universe_tier": "favorites_16",
+            "universe_id": "favorites_16",
+            "universe_size": 2,
+            "universe_generation_rule": "manual",
+            "source_universe_manifest_path": "config/universe_smoke_5.json",
+            "universe_file": "config/universe_smoke_5.json",
+            "universe_limit": 2,
+            "start": "2024-01-01",
+            "end": "2026-03-01",
+            "symbols": ["AAA", "BBB"],
+            "symbol_count": 2,
+        },
+    )
+
+    assert Path(paths["frozen_daily_state"]).exists()
+    assert Path(paths["forecast_models_manifest"]).exists()
+
+
 def test_daily_run_prefers_frozen_external_signal_states(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     run_dir = tmp_path / "artifacts" / "v2" / "swing_v2" / "20260311_100100"
     run_dir.mkdir(parents=True, exist_ok=True)
@@ -1801,8 +1897,8 @@ def test_calibrate_v2_policy_runs_expanded_validation_grid(monkeypatch: pytest.M
         cache_root=str(tmp_path),
     )
 
-    assert len(result.trials) == 27
-    assert seen["calls"] == 26
+    assert len(result.trials) == 36
+    assert seen["calls"] == 35
     assert result.best_score >= max(float(item["score"]) for item in result.trials)
 
 
@@ -1843,6 +1939,68 @@ def test_calibrate_v2_policy_emits_progress_updates(tmp_path: Path) -> None:
 
     assert any(stage == "calibration" and "开始参数搜索" in message for stage, message in progress)
     assert any(stage == "calibration" and "评估候选" in message for stage, message in progress)
+
+
+def test_calibrate_v2_policy_uses_two_stage_screening_when_trajectory_is_long(tmp_path: Path) -> None:
+    baseline = _make_backtest(0.18, 0.16)
+    progress: list[tuple[str, str]] = []
+    counts = {"coarse": 0, "full": 0}
+    trajectory = _BacktestTrajectory(
+        prepared=SimpleNamespace(),
+        steps=[
+            _TrajectoryStep(
+                date=pd.Timestamp("2024-01-01") + pd.Timedelta(days=idx),
+                next_date=pd.Timestamp("2024-01-02") + pd.Timedelta(days=idx),
+                composite_state=_make_state(),
+                stock_states=[],
+                horizon_metrics={},
+            )
+            for idx in range(120)
+        ],
+    )
+
+    def fake_backtest(**kwargs: object) -> V2BacktestSummary:
+        local_trajectory = kwargs.get("trajectory")
+        step_count = len(getattr(local_trajectory, "steps", []))
+        if step_count < 120:
+            counts["coarse"] += 1
+        else:
+            counts["full"] += 1
+        policy_spec = kwargs.get("policy_spec")
+        annual = 0.10
+        if isinstance(policy_spec, PolicySpec):
+            annual += 0.08 * float(policy_spec.risk_on_exposure) + 0.01 * float(policy_spec.risk_on_positions)
+        return V2BacktestSummary(
+            start_date="2024-01-01",
+            end_date="2024-12-31",
+            n_days=step_count,
+            total_return=annual,
+            annual_return=annual,
+            max_drawdown=-0.06,
+            avg_turnover=0.18,
+            total_cost=0.01,
+            excess_annual_return=0.5 * annual,
+            information_ratio=0.50,
+        )
+
+    deps = _policy_learning_dependencies(
+        run_v2_backtest_live=fake_backtest,
+        emit_progress=lambda stage, message: progress.append((stage, message)),
+    )
+
+    result = policy_learning_runtime.calibrate_v2_policy(
+        strategy_id="swing_v2",
+        baseline=baseline,
+        trajectory=trajectory,
+        cache_root=str(tmp_path),
+        deps=deps,
+    )
+
+    assert counts["coarse"] == 35
+    assert counts["full"] == 6
+    assert len(result.trials) == 7
+    assert any(stage == "calibration" and "开始参数粗筛" in message for stage, message in progress)
+    assert any(stage == "calibration" and "粗筛完成" in message for stage, message in progress)
 
 
 def test_research_workflow_light_mode_skips_heavy_stages(tmp_path: Path) -> None:
@@ -2074,16 +2232,52 @@ def test_load_or_build_v2_backtest_trajectory_uses_disk_cache(monkeypatch: pytes
         config_path="config/api.json",
         cache_root=str(tmp_path),
         forecast_backend="linear",
+        training_window_days=480,
     )
     second = _load_or_build_v2_backtest_trajectory(
         config_path="config/api.json",
         cache_root=str(tmp_path),
         forecast_backend="linear",
+        training_window_days=480,
     )
 
     assert first == built_trajectory
     assert second == built_trajectory
     assert seen["build_calls"] == 1
+
+
+def test_research_workflow_passes_training_window_days_to_trajectory_builder(tmp_path: Path) -> None:
+    seen: dict[str, object] = {}
+    trajectory_sentinel = object()
+    empty_trajectory = _BacktestTrajectory(prepared=SimpleNamespace(), steps=[])
+    baseline = _make_backtest(0.10, 0.08)
+
+    def fake_load(**kwargs: object) -> object:
+        seen["training_window_days"] = kwargs.get("training_window_days")
+        return trajectory_sentinel
+
+    def fake_split(*_args: object, **_kwargs: object) -> tuple[object, object, object]:
+        return empty_trajectory, empty_trajectory, empty_trajectory
+
+    def fake_backtest(**kwargs: object) -> V2BacktestSummary:
+        return baseline
+
+    deps = _research_workflow_dependencies(
+        load_or_build_v2_backtest_trajectory_fn=fake_load,
+        split_research_trajectory_fn=fake_split,
+        run_v2_backtest_live_fn=fake_backtest,
+    )
+
+    _run_v2_research_workflow_runtime(
+        dependencies=deps,
+        strategy_id="swing_v2",
+        skip_calibration=True,
+        skip_learning=True,
+        cache_root=str(tmp_path),
+        training_window_days=360,
+    )
+
+    assert seen["training_window_days"] == 360
 
 
 def test_prepare_v2_backtest_data_uses_prepared_cache(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
@@ -2333,12 +2527,14 @@ def test_build_date_slice_index_returns_contiguous_bounds() -> None:
     assert list(sorted_frame.iloc[second_start:second_end]["symbol"]) == ["AAA", "BBB"]
 
 
-def test_make_forecast_backend_accepts_linear_and_deep() -> None:
+def test_make_forecast_backend_accepts_supported_backends() -> None:
     linear_backend = _make_forecast_backend("linear", deps=legacy_services._forecast_runtime_dependencies())
     deep_backend = _make_forecast_backend("deep", deps=legacy_services._forecast_runtime_dependencies())
+    hybrid_backend = _make_forecast_backend("hybrid", deps=legacy_services._forecast_runtime_dependencies())
 
     assert linear_backend.name == "linear"
     assert deep_backend.name == "deep"
+    assert hybrid_backend.name == "hybrid"
 
 
 def test_tensorize_temporal_frame_builds_group_lags() -> None:

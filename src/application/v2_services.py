@@ -1146,6 +1146,7 @@ def publish_v2_research_artifacts(
     baseline: V2BacktestSummary,
     calibration: V2CalibrationResult,
     learning: V2PolicyLearningResult,
+    trajectory: object | None = None,
     settings: dict[str, object] | None = None,
     **kwargs: object,
 ) -> dict[str, str]:
@@ -1155,6 +1156,7 @@ def publish_v2_research_artifacts(
         baseline=baseline,
         calibration=calibration,
         learning=learning,
+        trajectory=trajectory,
         settings=settings,
         **kwargs,
     )

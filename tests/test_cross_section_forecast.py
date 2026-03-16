@@ -43,3 +43,13 @@ def test_forecast_cross_section_state_reflects_positive_flow_and_breadth() -> No
     assert record.growth_vs_value_bias > 0.0
     assert record.fund_flow_strength > 0.0
     assert record.breadth_strength > 0.0
+
+
+def test_forecast_cross_section_state_matches_sorted_result_for_unsorted_input() -> None:
+    frame = _make_market_context_frame()
+    shuffled = pd.concat([frame.iloc[20:], frame.iloc[:20]], ignore_index=True)
+
+    expected = forecast_cross_section_state(frame)
+    actual = forecast_cross_section_state(shuffled)
+
+    assert actual == expected

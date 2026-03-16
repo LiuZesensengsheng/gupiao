@@ -67,6 +67,7 @@ def run_daily_v2_live_impl(
     run_id: str | None = None,
     snapshot_path: str | None = None,
     allow_retrain: bool = False,
+    disable_learned_policy: bool = False,
 ) -> DailyRunResult:
     memory_root = Path(str(artifact_root)) / "memory"
     snapshot_ctx = dependencies.build_daily_snapshot_context_fn(
@@ -111,6 +112,7 @@ def run_daily_v2_live_impl(
         run_id=snapshot_ctx.resolved_run_id,
         snapshot_path=str(snapshot_path or ""),
         allow_retrain=allow_retrain,
+        disable_learned_policy=disable_learned_policy,
     )
     cache_path = dependencies.daily_result_cache_path_fn(
         cache_root=cache_root,
@@ -182,12 +184,14 @@ def run_daily_v2_live_impl(
         main_board_only=dependencies.parse_boolish_fn(settings.get("main_board_only_recommendations", False), False),
     )
 
-    learned_policy = dependencies.resolve_daily_policy_model_fn(
-        strategy_id=strategy_id,
-        artifact_root=artifact_root,
-        manifest=manifest,
-        manifest_path=manifest_path,
-    )
+    learned_policy = None
+    if not disable_learned_policy:
+        learned_policy = dependencies.resolve_daily_policy_model_fn(
+            strategy_id=strategy_id,
+            artifact_root=artifact_root,
+            manifest=manifest,
+            manifest_path=manifest_path,
+        )
     active_policy_spec = None
     if learned_policy is not None:
         active_policy_spec = dependencies.policy_spec_from_model_fn(

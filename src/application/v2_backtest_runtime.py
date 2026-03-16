@@ -528,6 +528,7 @@ def run_v2_backtest_core(
     cache_root: str = "artifacts/v2/cache",
     refresh_cache: bool = False,
     forecast_backend: str = "linear",
+    training_window_days: int | None = None,
     use_us_index_context: bool | None = None,
     us_index_source: str | None = None,
     deps: BacktestCoreDependencies,
@@ -549,6 +550,7 @@ def run_v2_backtest_core(
             cache_root=cache_root,
             refresh_cache=refresh_cache,
             forecast_backend=forecast_backend,
+            training_window_days=training_window_days,
             use_us_index_context=use_us_index_context,
             us_index_source=us_index_source,
         )

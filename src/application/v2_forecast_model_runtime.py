@@ -25,6 +25,23 @@ class ReturnQuantileProfile:
     q90: float
 
 
+QUANTILE_LEVELS = (0.10, 0.30, 0.50, 0.70, 0.90)
+
+
+def _prepare_quantile_training_arrays(
+    df: pd.DataFrame,
+    *,
+    feature_cols: list[str],
+    target_col: str,
+) -> tuple[np.ndarray, np.ndarray]:
+    train = df.dropna(subset=feature_cols + [target_col]).copy()
+    if train.empty:
+        raise ValueError("No rows available for quantile training after dropping NaN.")
+    x = train[feature_cols].astype(float).to_numpy(copy=True)
+    y = train[target_col].astype(float).to_numpy(copy=True)
+    return x, y
+
+
 def fit_quantile_quintet(
     df: pd.DataFrame,
     *,
@@ -32,12 +49,18 @@ def fit_quantile_quintet(
     target_col: str,
     l2: float,
 ) -> tuple[QuantileLinearModel, QuantileLinearModel, QuantileLinearModel, QuantileLinearModel, QuantileLinearModel]:
-    return (
-        QuantileLinearModel(quantile=0.10, l2=l2).fit(df, feature_cols, target_col),
-        QuantileLinearModel(quantile=0.30, l2=l2).fit(df, feature_cols, target_col),
-        QuantileLinearModel(quantile=0.50, l2=l2).fit(df, feature_cols, target_col),
-        QuantileLinearModel(quantile=0.70, l2=l2).fit(df, feature_cols, target_col),
-        QuantileLinearModel(quantile=0.90, l2=l2).fit(df, feature_cols, target_col),
+    x, y = _prepare_quantile_training_arrays(
+        df,
+        feature_cols=feature_cols,
+        target_col=target_col,
+    )
+    return tuple(
+        QuantileLinearModel(quantile=quantile, l2=l2).fit_prepared(
+            x=x,
+            y=y,
+            feature_cols=feature_cols,
+        )
+        for quantile in QUANTILE_LEVELS
     )
 
 
@@ -48,12 +71,18 @@ def fit_mlp_quantile_quintet(
     target_col: str,
     l2: float,
 ) -> tuple[MLPQuantileModel, MLPQuantileModel, MLPQuantileModel, MLPQuantileModel, MLPQuantileModel]:
-    return (
-        MLPQuantileModel(quantile=0.10, l2=l2).fit(df, feature_cols, target_col),
-        MLPQuantileModel(quantile=0.30, l2=l2).fit(df, feature_cols, target_col),
-        MLPQuantileModel(quantile=0.50, l2=l2).fit(df, feature_cols, target_col),
-        MLPQuantileModel(quantile=0.70, l2=l2).fit(df, feature_cols, target_col),
-        MLPQuantileModel(quantile=0.90, l2=l2).fit(df, feature_cols, target_col),
+    x, y = _prepare_quantile_training_arrays(
+        df,
+        feature_cols=feature_cols,
+        target_col=target_col,
+    )
+    return tuple(
+        MLPQuantileModel(quantile=quantile, l2=l2).fit_prepared(
+            x=x,
+            y=y,
+            feature_cols=feature_cols,
+        )
+        for quantile in QUANTILE_LEVELS
     )
 
 

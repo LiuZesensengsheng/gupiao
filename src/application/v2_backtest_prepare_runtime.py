@@ -72,9 +72,10 @@ def trajectory_cache_key(
     use_us_sector_etf_context: bool,
     use_cn_etf_context: bool,
     cn_etf_source: str,
+    training_window_days: int | None,
 ) -> str:
     payload = {
-        "version": "v2-trajectory-cache-2",
+        "version": "v2-trajectory-cache-3",
         "config_path": str(Path(config_path).resolve()),
         "source": "" if source is None else str(source),
         "universe_file": "" if universe_file is None else str(Path(universe_file).resolve()),
@@ -87,6 +88,7 @@ def trajectory_cache_key(
         "use_us_sector_etf_context": bool(use_us_sector_etf_context),
         "use_cn_etf_context": bool(use_cn_etf_context),
         "cn_etf_source": str(cn_etf_source),
+        "training_window_days": None if training_window_days is None else int(training_window_days),
     }
     raw = json.dumps(payload, sort_keys=True, ensure_ascii=False)
     return hashlib.sha256(raw.encode("utf-8")).hexdigest()[:24]
@@ -196,6 +198,7 @@ def prepare_v2_backtest_data(
     refresh_cache: bool = False,
     use_us_index_context: bool | None = None,
     us_index_source: str | None = None,
+    training_window_days: int | None = None,
     prepared_dataclass: type | None = None,
     deps: BacktestPrepareDependencies,
 ) -> object | None:
@@ -212,6 +215,7 @@ def prepare_v2_backtest_data(
         generator_use_concepts=generator_use_concepts,
         use_us_index_context=use_us_index_context,
         us_index_source=us_index_source,
+        training_window_days=training_window_days,
     )
     settings["refresh_cache"] = bool(refresh_cache)
     settings = deps.resolve_v2_universe_settings(settings=settings, cache_root=cache_root)
@@ -348,6 +352,7 @@ def load_or_build_v2_backtest_trajectory(
     forecast_backend: str = "linear",
     use_us_index_context: bool | None = None,
     us_index_source: str | None = None,
+    training_window_days: int | None = None,
     deps: BacktestPrepareDependencies,
 ) -> object | None:
     backend = deps.make_forecast_backend(forecast_backend)
@@ -364,6 +369,7 @@ def load_or_build_v2_backtest_trajectory(
         generator_use_concepts=generator_use_concepts,
         use_us_index_context=use_us_index_context,
         us_index_source=us_index_source,
+        training_window_days=training_window_days,
     )
     settings["refresh_cache"] = bool(refresh_cache)
     settings = deps.resolve_v2_universe_settings(settings=settings, cache_root=cache_root)
@@ -382,6 +388,11 @@ def load_or_build_v2_backtest_trajectory(
         use_us_sector_etf_context=bool(settings.get("use_us_sector_etf_context", False)),
         use_cn_etf_context=bool(settings.get("use_cn_etf_context", False)),
         cn_etf_source=str(settings.get("cn_etf_source", "akshare")),
+        training_window_days=(
+            int(settings.get("training_window_days"))
+            if settings.get("training_window_days") is not None
+            else None
+        ),
     )
     cache_path = trajectory_cache_path(cache_root=cache_root, cache_key=cache_key)
     if not refresh_cache and cache_path.exists():
@@ -414,6 +425,11 @@ def load_or_build_v2_backtest_trajectory(
         refresh_cache=refresh_cache,
         use_us_index_context=bool(settings.get("use_us_index_context", False)),
         us_index_source=str(settings.get("us_index_source", "akshare")),
+        training_window_days=(
+            int(settings.get("training_window_days"))
+            if settings.get("training_window_days") is not None
+            else training_window_days
+        ),
     )
     if prepared is None:
         return None

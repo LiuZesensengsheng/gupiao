@@ -55,6 +55,7 @@ def daily_result_cache_key(
     run_id: str = "",
     snapshot_path: str = "",
     allow_retrain: bool = False,
+    disable_learned_policy: bool = False,
     deps: DailyCacheKeyDependencies,
 ) -> str:
     policy_path = Path(str(artifact_root)) / str(strategy_id) / "latest_policy_model.json"
@@ -108,6 +109,7 @@ def daily_result_cache_key(
         "run_id": str(run_id),
         "snapshot_path": str(snapshot_path),
         "allow_retrain": bool(allow_retrain),
+        "disable_learned_policy": bool(disable_learned_policy),
         "manifest_path": str(manifest_path.resolve()),
         "manifest_mtime": file_mtime_token(manifest_path),
     }

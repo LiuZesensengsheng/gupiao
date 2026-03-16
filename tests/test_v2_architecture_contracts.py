@@ -160,6 +160,7 @@ def test_runtime_options_are_built_from_cli_namespace() -> None:
     assert research_options.strategy_id == "alpha_v2"
     assert research_options.dynamic_universe is True
     assert research_options.generator_target_size == 120
+    assert research_options.training_window_days == 480
     assert research_options.skip_calibration is True
     assert research_options.skip_learning is True
 
@@ -171,12 +172,14 @@ def test_runtime_options_are_built_from_cli_namespace() -> None:
             "--snapshot-path",
             "artifacts/v2/alpha_v2/latest_research_manifest.json",
             "--allow-retrain",
+            "--disable-learned-policy",
         ]
     )
     daily_options = DailyRunOptions.from_namespace(daily_args)
     assert daily_options.strategy_id == "alpha_v2"
     assert daily_options.snapshot_path
     assert daily_options.allow_retrain is True
+    assert daily_options.disable_learned_policy is True
 
     matrix_args = parser.parse_args(
         [
@@ -190,6 +193,7 @@ def test_runtime_options_are_built_from_cli_namespace() -> None:
     )
     matrix_options = ResearchMatrixOptions.from_namespace(matrix_args)
     assert matrix_options.strategy_id == "alpha_v2"
+    assert matrix_options.training_window_days == 480
     assert matrix_options.universe_tiers == ("favorites_16", "generated_80")
 
 

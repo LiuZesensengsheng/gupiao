@@ -13,6 +13,10 @@ from src.application.v2_contracts import (
     V2PolicyLearningResult,
 )
 
+_COARSE_CALIBRATION_MIN_STEPS = 96
+_COARSE_CALIBRATION_FRACTION = 0.30
+_COARSE_CALIBRATION_KEEP = 6
+
 
 @dataclass(frozen=True)
 class PolicyLearningDependencies:
@@ -40,6 +44,36 @@ def _policy_spec_key(spec: PolicySpec) -> tuple[float, float, float, int, int, i
     )
 
 
+def _trajectory_step_count(trajectory: Any | None) -> int:
+    steps = getattr(trajectory, "steps", None)
+    if steps is None:
+        return 0
+    try:
+        return int(len(steps))
+    except Exception:
+        return 0
+
+
+def _build_coarse_calibration_trajectory(trajectory: Any | None) -> Any | None:
+    if trajectory is None:
+        return None
+    steps = getattr(trajectory, "steps", None)
+    if steps is None:
+        return None
+    rows = list(steps)
+    total_steps = len(rows)
+    if total_steps < _COARSE_CALIBRATION_MIN_STEPS:
+        return None
+    coarse_steps = max(int(np.ceil(total_steps * _COARSE_CALIBRATION_FRACTION)), _COARSE_CALIBRATION_MIN_STEPS // 2)
+    coarse_steps = min(total_steps - 24, coarse_steps)
+    if coarse_steps <= 0 or coarse_steps >= total_steps:
+        return None
+    return type(trajectory)(
+        prepared=getattr(trajectory, "prepared", None),
+        steps=list(rows[:coarse_steps]),
+    )
+
+
 def calibrate_v2_policy(
     *,
     strategy_id: str = "swing_v2",
@@ -55,6 +89,7 @@ def calibrate_v2_policy(
     generator_use_concepts: bool | None = None,
     baseline: V2BacktestSummary | None = None,
     trajectory: Any | None = None,
+    retrain_days: int = 20,
     cache_root: str = "artifacts/v2/cache",
     refresh_cache: bool = False,
     forecast_backend: str = "linear",
@@ -77,6 +112,7 @@ def calibrate_v2_policy(
         generator_use_concepts=generator_use_concepts,
         policy_spec=baseline_spec,
         trajectory=trajectory,
+        retrain_days=retrain_days,
         cache_root=cache_root,
         refresh_cache=refresh_cache,
         forecast_backend=forecast_backend,
@@ -89,6 +125,7 @@ def calibrate_v2_policy(
         (0.90, 0.65, 0.35),
     ]
     position_sets = [
+        (3, 2, 1),
         (4, 3, 2),
         (5, 3, 1),
         (4, 4, 2),
@@ -132,11 +169,52 @@ def calibrate_v2_policy(
     baseline_key = _policy_spec_key(baseline_spec)
     candidate_specs = [spec for spec in candidates if _policy_spec_key(spec) != baseline_key]
     total_candidates = len(candidate_specs)
-    deps.emit_progress("calibration", f"开始参数搜索: candidates={total_candidates}")
-    for idx, spec in enumerate(candidate_specs, start=1):
+    coarse_trajectory = _build_coarse_calibration_trajectory(trajectory)
+    full_candidate_specs = list(candidate_specs)
+    if coarse_trajectory is not None and total_candidates > _COARSE_CALIBRATION_KEEP:
+        coarse_step_count = _trajectory_step_count(coarse_trajectory)
         deps.emit_progress(
             "calibration",
-            f"评估候选 {idx}/{total_candidates}: exposure={spec.risk_on_exposure:.2f}, positions={spec.risk_on_positions}, turnover={spec.risk_on_turnover_cap:.2f}",
+            f"开始参数粗筛: candidates={total_candidates}, coarse_steps={coarse_step_count}",
+        )
+        coarse_ranked: list[tuple[float, PolicySpec]] = []
+        for spec in candidate_specs:
+            coarse_summary = deps.run_v2_backtest_live(
+                strategy_id=strategy_id,
+                config_path=config_path,
+                source=source,
+                universe_file=universe_file,
+                universe_limit=universe_limit,
+                universe_tier=universe_tier,
+                dynamic_universe=dynamic_universe,
+                generator_target_size=generator_target_size,
+                generator_coarse_size=generator_coarse_size,
+                generator_theme_aware=generator_theme_aware,
+                generator_use_concepts=generator_use_concepts,
+                policy_spec=spec,
+                trajectory=coarse_trajectory,
+                retrain_days=retrain_days,
+                cache_root=cache_root,
+                refresh_cache=refresh_cache,
+                forecast_backend=forecast_backend,
+                use_us_index_context=use_us_index_context,
+                us_index_source=us_index_source,
+            )
+            coarse_ranked.append((float(deps.policy_objective_score(coarse_summary)), spec))
+        coarse_ranked.sort(key=lambda item: item[0], reverse=True)
+        full_candidate_specs = [spec for _, spec in coarse_ranked[: min(total_candidates, _COARSE_CALIBRATION_KEEP)]]
+        deps.emit_progress(
+            "calibration",
+            f"粗筛完成: kept={len(full_candidate_specs)}/{total_candidates}",
+        )
+    deps.emit_progress(
+        "calibration",
+        f"开始参数搜索: candidates={total_candidates}, full_eval={len(full_candidate_specs)}",
+    )
+    for idx, spec in enumerate(full_candidate_specs, start=1):
+        deps.emit_progress(
+            "calibration",
+            f"评估候选 {idx}/{len(full_candidate_specs)}: exposure={spec.risk_on_exposure:.2f}, positions={spec.risk_on_positions}, turnover={spec.risk_on_turnover_cap:.2f}",
         )
         summary = deps.run_v2_backtest_live(
             strategy_id=strategy_id,
@@ -152,6 +230,7 @@ def calibrate_v2_policy(
             generator_use_concepts=generator_use_concepts,
             policy_spec=spec,
             trajectory=trajectory,
+            retrain_days=retrain_days,
             cache_root=cache_root,
             refresh_cache=refresh_cache,
             forecast_backend=forecast_backend,
@@ -198,6 +277,7 @@ def learn_v2_policy_model(
     trajectory: Any | None = None,
     fit_trajectory: Any | None = None,
     evaluation_trajectory: Any | None = None,
+    retrain_days: int = 20,
     cache_root: str = "artifacts/v2/cache",
     refresh_cache: bool = False,
     forecast_backend: str = "linear",
@@ -220,6 +300,7 @@ def learn_v2_policy_model(
         generator_theme_aware=generator_theme_aware,
         generator_use_concepts=generator_use_concepts,
         trajectory=evaluation_trajectory,
+        retrain_days=retrain_days,
         cache_root=cache_root,
         refresh_cache=refresh_cache,
         forecast_backend=forecast_backend,
@@ -240,6 +321,7 @@ def learn_v2_policy_model(
         generator_use_concepts=generator_use_concepts,
         capture_learning_rows=True,
         trajectory=fit_trajectory,
+        retrain_days=retrain_days,
         cache_root=cache_root,
         refresh_cache=refresh_cache,
         forecast_backend=forecast_backend,
@@ -275,6 +357,7 @@ def learn_v2_policy_model(
             generator_use_concepts=generator_use_concepts,
             learned_policy=model,
             trajectory=evaluation_trajectory,
+            retrain_days=retrain_days,
             cache_root=cache_root,
             refresh_cache=refresh_cache,
             forecast_backend=forecast_backend,
@@ -324,6 +407,7 @@ def learn_v2_policy_model(
         generator_use_concepts=generator_use_concepts,
         learned_policy=model,
         trajectory=evaluation_trajectory,
+        retrain_days=retrain_days,
         cache_root=cache_root,
         refresh_cache=refresh_cache,
         forecast_backend=forecast_backend,

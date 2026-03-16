@@ -96,7 +96,10 @@ def publish_research_artifacts(
     calibration: V2CalibrationResult,
     learning: V2PolicyLearningResult,
     cache_root: str = "artifacts/v2/cache",
+    retrain_days: int = 20,
     forecast_backend: str = "linear",
+    training_window_days: int | None = 480,
+    trajectory: Any | None = None,
     publish_forecast_models: bool = True,
     split_mode: str = "purged_wf",
     embargo_days: int = 20,
@@ -129,6 +132,7 @@ def publish_research_artifacts(
         macro_file=macro_file,
         use_us_index_context=use_us_index_context,
         us_index_source=us_index_source,
+        training_window_days=training_window_days,
     )
     settings = dependencies.resolve_v2_universe_settings_fn(settings=dict(settings), cache_root=cache_root)
     context = _build_publish_runtime_context(
@@ -151,7 +155,10 @@ def publish_research_artifacts(
         universe_limit=universe_limit,
         universe_tier=universe_tier,
         cache_root=cache_root,
+        retrain_days=retrain_days,
         forecast_backend=forecast_backend,
+        training_window_days=training_window_days,
+        trajectory=trajectory,
         publish_forecast_models=publish_forecast_models,
         split_mode=split_mode,
         embargo_days=embargo_days,
@@ -175,6 +182,7 @@ def publish_research_artifacts(
         universe_limit=universe_limit,
         universe_tier=universe_tier,
         cache_root=cache_root,
+        retrain_days=retrain_days,
         forecast_backend=forecast_backend,
         publish_forecast_models=publish_forecast_models,
         split_mode=split_mode,
@@ -491,13 +499,15 @@ def _build_forecast_publish_artifacts(
     universe_limit: int | None,
     universe_tier: str | None,
     cache_root: str,
+    retrain_days: int,
     forecast_backend: str,
+    training_window_days: int | None,
+    trajectory: Any | None,
     publish_forecast_models: bool,
     split_mode: str,
     embargo_days: int,
 ) -> ForecastPublishArtifacts:
     empty_window = {"start": "", "end": "", "n_steps": 0}
-    trajectory = None
     frozen_daily_state: dict[str, object] = {}
     forecast_models_manifest: dict[str, object] = {}
     frozen_forecast_bundle: dict[str, object] = {}
@@ -506,24 +516,31 @@ def _build_forecast_publish_artifacts(
     holdout_window = empty_window
     regime_counts: dict[str, int] = {}
     if publish_forecast_models:
-        trajectory = dependencies.load_or_build_v2_backtest_trajectory_fn(
-            config_path=str(settings.get("config_path", config_path)),
-            source=str(settings.get("source", source)) if settings.get("source", source) is not None else None,
-            universe_file=str(settings.get("universe_file", universe_file))
-            if settings.get("universe_file", universe_file) is not None
-            else None,
-            universe_limit=(
-                int(settings.get("universe_limit"))
-                if settings.get("universe_limit") is not None
-                else (int(universe_limit) if universe_limit is not None else None)
-            ),
-            universe_tier=str(settings.get("universe_tier", universe_tier)),
-            cache_root=cache_root,
-            refresh_cache=False,
-            forecast_backend=forecast_backend,
-            use_us_index_context=bool(settings.get("use_us_index_context", False)),
-            us_index_source=str(settings.get("us_index_source", "akshare")),
-        )
+        if trajectory is None:
+            trajectory = dependencies.load_or_build_v2_backtest_trajectory_fn(
+                config_path=str(settings.get("config_path", config_path)),
+                source=str(settings.get("source", source)) if settings.get("source", source) is not None else None,
+                universe_file=str(settings.get("universe_file", universe_file))
+                if settings.get("universe_file", universe_file) is not None
+                else None,
+                universe_limit=(
+                    int(settings.get("universe_limit"))
+                    if settings.get("universe_limit") is not None
+                    else (int(universe_limit) if universe_limit is not None else None)
+                ),
+                universe_tier=str(settings.get("universe_tier", universe_tier)),
+                retrain_days=int(retrain_days),
+                cache_root=cache_root,
+                refresh_cache=False,
+                forecast_backend=forecast_backend,
+                training_window_days=(
+                    int(settings.get("training_window_days"))
+                    if settings.get("training_window_days") is not None
+                    else training_window_days
+                ),
+                use_us_index_context=bool(settings.get("use_us_index_context", False)),
+                us_index_source=str(settings.get("us_index_source", "akshare")),
+            )
         if trajectory is not None:
             train_traj, validation_traj, holdout_traj = dependencies.split_research_trajectory_fn(
                 trajectory,
@@ -558,6 +575,12 @@ def _build_forecast_publish_artifacts(
                 "forecast_backend": str(forecast_backend),
                 "split_mode": str(split_mode),
                 "embargo_days": int(embargo_days),
+                "retrain_days": int(retrain_days),
+                "training_window_days": (
+                    int(settings.get("training_window_days"))
+                    if settings.get("training_window_days") is not None
+                    else None
+                ),
                 "use_us_index_context": bool(settings.get("use_us_index_context", False)),
                 "us_index_source": str(settings.get("us_index_source", "akshare")),
                 "use_us_sector_etf_context": bool(settings.get("use_us_sector_etf_context", False)),
@@ -657,6 +680,7 @@ def _build_info_publish_artifacts(
     universe_limit: int | None,
     universe_tier: str | None,
     cache_root: str,
+    retrain_days: int,
     forecast_backend: str,
     publish_forecast_models: bool,
     split_mode: str,
@@ -691,9 +715,15 @@ def _build_info_publish_artifacts(
                 generator_coarse_size=int(settings.get("generator_coarse_size", 0) or 0),
                 generator_theme_aware=dependencies.parse_boolish_fn(settings.get("generator_theme_aware", True), True),
                 generator_use_concepts=dependencies.parse_boolish_fn(settings.get("generator_use_concepts", True), True),
+                retrain_days=int(retrain_days),
                 cache_root=cache_root,
                 refresh_cache=False,
                 forecast_backend=forecast_backend,
+                training_window_days=(
+                    int(settings.get("training_window_days"))
+                    if settings.get("training_window_days") is not None
+                    else training_window_days
+                ),
                 use_us_index_context=bool(settings.get("use_us_index_context", False)),
                 us_index_source=str(settings.get("us_index_source", "akshare")),
             )

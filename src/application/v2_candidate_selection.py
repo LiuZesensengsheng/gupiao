@@ -534,6 +534,9 @@ def candidate_stocks_from_state(state: CompositeState) -> list[StockForecastStat
     symbols = [str(symbol) for symbol in getattr(selection, "shortlisted_symbols", []) if str(symbol).strip()]
     if not symbols:
         return list(getattr(state, "stocks", []))
+    shortlist_size = int(getattr(selection, "shortlist_size", 0) or 0)
+    if shortlist_size > 0:
+        symbols = symbols[:shortlist_size]
     order = {symbol: idx for idx, symbol in enumerate(symbols)}
     shortlist = [stock for stock in getattr(state, "stocks", []) if stock.symbol in order]
     shortlist.sort(key=lambda stock: order.get(stock.symbol, len(order)))

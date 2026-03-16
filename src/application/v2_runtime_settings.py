@@ -134,6 +134,7 @@ def load_v2_runtime_settings(
     generator_use_concepts: bool | None = None,
     use_us_index_context: bool | None = None,
     us_index_source: str | None = None,
+    training_window_days: int | None = None,
 ) -> dict[str, object]:
     payload: dict[str, object] = {}
     path = Path(config_path)
@@ -196,6 +197,19 @@ def load_v2_runtime_settings(
         "end": str(pick("end", "2099-12-31")),
         "min_train_days": int(pick("min_train_days", 240)),
         "step_days": int(pick("step_days", 20)),
+        "training_window_days": (
+            int(training_window_days)
+            if training_window_days is not None and int(training_window_days) > 0
+            else (
+                None
+                if training_window_days is not None
+                else (
+                    int(pick("training_window_days", pick("backtest_training_window_days", 0)))
+                    if int(pick("training_window_days", pick("backtest_training_window_days", 0))) > 0
+                    else None
+                )
+            )
+        ),
         "l2": float(pick("l2", 0.8)),
         "max_positions": int(pick("max_positions", 5)),
         "use_margin_features": bool(pick("use_margin_features", True)),

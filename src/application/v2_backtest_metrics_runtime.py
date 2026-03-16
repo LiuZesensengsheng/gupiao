@@ -37,31 +37,31 @@ def distributional_score(
     mid_expected_ret: float,
 ) -> float:
     base_score = float(
-        0.14 * float(short_prob)
-        + 0.18 * float(two_prob)
-        + 0.22 * float(three_prob)
-        + 0.28 * float(five_prob)
-        + 0.18 * float(mid_prob)
+        0.10 * float(short_prob)
+        + 0.14 * float(two_prob)
+        + 0.28 * float(three_prob)
+        + 0.32 * float(five_prob)
+        + 0.16 * float(mid_prob)
     )
     short_ret_score = float(np.clip(0.5 + float(short_expected_ret) / 0.06, 0.0, 1.0))
     two_ret_score = float(
-        np.clip(0.5 + (0.75 * float(short_expected_ret) + 0.25 * float(mid_expected_ret)) / 0.08, 0.0, 1.0)
+        np.clip(0.5 + (0.65 * float(short_expected_ret) + 0.35 * float(mid_expected_ret)) / 0.08, 0.0, 1.0)
     )
     three_ret_score = float(
-        np.clip(0.5 + (0.60 * float(short_expected_ret) + 0.40 * float(mid_expected_ret)) / 0.10, 0.0, 1.0)
+        np.clip(0.5 + (0.45 * float(short_expected_ret) + 0.55 * float(mid_expected_ret)) / 0.10, 0.0, 1.0)
     )
     five_ret_score = float(
-        np.clip(0.5 + (0.35 * float(short_expected_ret) + 0.65 * float(mid_expected_ret)) / 0.12, 0.0, 1.0)
+        np.clip(0.5 + (0.25 * float(short_expected_ret) + 0.75 * float(mid_expected_ret)) / 0.12, 0.0, 1.0)
     )
     mid_ret_score = float(np.clip(0.5 + float(mid_expected_ret) / 0.20, 0.0, 1.0))
     dist_score = float(
-        0.14 * short_ret_score
-        + 0.18 * two_ret_score
-        + 0.22 * three_ret_score
-        + 0.24 * five_ret_score
-        + 0.22 * mid_ret_score
+        0.08 * short_ret_score
+        + 0.12 * two_ret_score
+        + 0.28 * three_ret_score
+        + 0.34 * five_ret_score
+        + 0.18 * mid_ret_score
     )
-    return float(0.4 * base_score + 0.6 * dist_score)
+    return float(0.35 * base_score + 0.65 * dist_score)
 
 
 def panel_slice_metrics(
@@ -75,7 +75,12 @@ def panel_slice_metrics(
     frame = scored_rows.dropna(subset=["score", realized_col]).copy()
     if len(frame) < 2:
         return 0.0, 0.0, 0.0, 0.0
-    rank_ic = float(frame["score"].corr(frame[realized_col], method="spearman"))
+    score_values = frame["score"].to_numpy(dtype=float, copy=False)
+    realized_values = frame[realized_col].to_numpy(dtype=float, copy=False)
+    if np.nanstd(score_values) <= 1e-12 or np.nanstd(realized_values) <= 1e-12:
+        rank_ic = 0.0
+    else:
+        rank_ic = float(frame["score"].corr(frame[realized_col], method="spearman"))
     if rank_ic != rank_ic:
         rank_ic = 0.0
     bucket_n = max(1, int(np.ceil(len(frame) * 0.1)))

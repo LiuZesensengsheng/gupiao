@@ -168,6 +168,7 @@ def test_daily_cache_runtime_keeps_facade_contract(tmp_path: Path) -> None:
         run_id="20260315_010203",
         snapshot_path="",
         allow_retrain=False,
+        disable_learned_policy=True,
         deps=DailyCacheKeyDependencies(
             resolve_manifest_path=legacy._resolve_manifest_path,
             resolve_info_file_from_settings=legacy._resolve_info_file_from_settings,
@@ -180,6 +181,7 @@ def test_daily_cache_runtime_keeps_facade_contract(tmp_path: Path) -> None:
         run_id="20260315_010203",
         snapshot_path="",
         allow_retrain=False,
+        disable_learned_policy=True,
     )
     assert facade_key == runtime_key
     assert file_mtime_token_runtime(info_file) == legacy._file_mtime_token(info_file)

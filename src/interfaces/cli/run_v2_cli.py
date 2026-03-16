@@ -24,7 +24,7 @@ from src.infrastructure.market_data import set_tushare_token
 from src.interfaces.presenters.html_dashboard import write_v2_daily_dashboard, write_v2_research_dashboard
 from src.interfaces.presenters.markdown_reports import write_v2_daily_report, write_v2_research_report
 from src.workflows.daily_workflow import run_daily_v2_live
-from src.workflows.research_workflow import run_v2_research_matrix, run_v2_research_workflow
+from src.workflows.research_workflow import last_research_trajectory, run_v2_research_matrix, run_v2_research_workflow
 
 
 def _add_runtime_identity_args(parser: argparse.ArgumentParser, *, strategy_help: str) -> None:
@@ -100,6 +100,11 @@ def build_parser() -> argparse.ArgumentParser:
     daily.add_argument("--run-id", default=None, help="Pinned research run_id to consume")
     daily.add_argument("--snapshot-path", default=None, help="Pinned research manifest path (file or directory)")
     daily.add_argument("--allow-retrain", action="store_true", help="Allow daily-run to retrain forecasts (default: false)")
+    daily.add_argument(
+        "--disable-learned-policy",
+        action="store_true",
+        help="Use the rule-based policy only and ignore published learned policy models",
+    )
 
     research = sub.add_parser("research-run", help="Print the V2 research workflow stages")
     _add_runtime_identity_args(research, strategy_help="Target strategy id")
@@ -115,7 +120,9 @@ def build_parser() -> argparse.ArgumentParser:
     research.add_argument("--artifact-root", default="artifacts/v2", help="Artifact output root for research runs")
     research.add_argument("--cache-root", default="artifacts/v2/cache", help="On-disk cache root for prepared data and trajectories")
     research.add_argument("--refresh-cache", action="store_true", help="Ignore existing cached trajectory and rebuild it")
-    research.add_argument("--forecast-backend", default="linear", help="Forecast backend id for research backtests (linear/deep)")
+    research.add_argument("--retrain-days", type=int, default=20, help="Trajectory retraining cadence in trading days")
+    research.add_argument("--forecast-backend", default="linear", help="Forecast backend id for research backtests (linear/deep/hybrid)")
+    research.add_argument("--training-window-days", type=int, default=480, help="Rolling training window in trading days; use 0 to keep expanding history")
     research.add_argument("--light", action="store_true", help="Run baseline-only light research mode")
     research.add_argument("--skip-calibration", action="store_true", help="Skip policy calibration stage")
     research.add_argument("--skip-learning", action="store_true", help="Skip learned policy stage")
@@ -135,7 +142,9 @@ def build_parser() -> argparse.ArgumentParser:
     matrix.add_argument("--artifact-root", default="artifacts/v2", help="Artifact output root for research runs")
     matrix.add_argument("--cache-root", default="artifacts/v2/cache", help="On-disk cache root for prepared data and trajectories")
     matrix.add_argument("--refresh-cache", action="store_true", help="Ignore existing cached trajectory and rebuild it")
-    matrix.add_argument("--forecast-backend", default="linear", help="Forecast backend id for research backtests (linear/deep)")
+    matrix.add_argument("--retrain-days", type=int, default=20, help="Trajectory retraining cadence in trading days")
+    matrix.add_argument("--forecast-backend", default="linear", help="Forecast backend id for research backtests (linear/deep/hybrid)")
+    matrix.add_argument("--training-window-days", type=int, default=480, help="Rolling training window in trading days; use 0 to keep expanding history")
     matrix.add_argument("--split-mode", default="purged_wf", choices=["purged_wf", "simple"], help="Research split mode")
     matrix.add_argument("--embargo-days", type=int, default=20, help="Embargo days for purged walk-forward split")
     matrix.add_argument("--tiers", nargs="*", default=["favorites_16", "generated_80", "generated_150", "generated_300"], help="Universe tiers to evaluate")
@@ -202,6 +211,7 @@ def main() -> int:
                 baseline=baseline,
                 calibration=calibration,
                 learning=learning,
+                trajectory=last_research_trajectory(),
             )
         report_path = write_v2_research_report(
             str(args.report),

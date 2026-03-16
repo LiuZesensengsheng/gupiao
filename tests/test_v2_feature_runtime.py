@@ -14,11 +14,20 @@ from src.application.v2_contracts import (
     StockForecastState,
 )
 from src.application.v2_feature_runtime import (
+    BlendedBinaryModel,
+    BlendedQuantileModel,
     ForecastRuntimeDependencies,
+    _fit_quantile_model_family,
+    _prepare_target_arrays,
+    _resolve_training_window_days,
+    _slice_prepared_target_arrays,
+    _should_emit_block_progress,
+    _training_row_window,
     make_forecast_backend,
     tensorize_temporal_frame,
 )
-from src.application.v2_forecast_model_runtime import ReturnQuantileProfile
+from src.application.v2_forecast_model_runtime import ReturnQuantileProfile, fit_quantile_quintet
+from src.infrastructure.modeling import QuantileLinearModel
 from src.application.v2_learning_target_runtime import (
     LearningTargetDependencies,
     derive_learning_targets,
@@ -40,6 +49,8 @@ def _forecast_runtime_dependencies() -> ForecastRuntimeDependencies:
         fit_mlp_quantile_quintet=lambda *_args, **_kwargs: None,
         logistic_model_cls=object,
         mlp_model_cls=object,
+        quantile_model_cls=object,
+        mlp_quantile_model_cls=object,
         trajectory_step_cls=SimpleNamespace,
         backtest_trajectory_cls=SimpleNamespace,
     )
@@ -84,12 +95,170 @@ def test_make_forecast_backend_selects_supported_backend() -> None:
 
     linear_backend = make_forecast_backend("linear", deps=deps)
     deep_backend = make_forecast_backend("deep", deps=deps)
+    hybrid_backend = make_forecast_backend("hybrid", deps=deps)
 
     assert linear_backend.name == "linear"
     assert deep_backend.name == "deep"
+    assert hybrid_backend.name == "hybrid"
 
     with pytest.raises(ValueError, match="Unsupported forecast backend"):
         make_forecast_backend("unknown", deps=deps)
+
+
+def test_blended_binary_model_averages_different_feature_views() -> None:
+    class _StubBinaryModel:
+        def __init__(self, value: float) -> None:
+            self.value = float(value)
+            self.calls: list[list[str]] = []
+
+        def predict_proba(self, df: pd.DataFrame, feature_cols: list[str] | None = None) -> np.ndarray:
+            self.calls.append([] if feature_cols is None else list(feature_cols))
+            return np.full(len(df), self.value, dtype=float)
+
+    primary = _StubBinaryModel(0.60)
+    secondary = _StubBinaryModel(0.40)
+    model = BlendedBinaryModel(
+        primary_model=primary,
+        primary_feature_cols=["f_raw"],
+        secondary_model=secondary,
+        secondary_feature_cols=["f_tensor"],
+        primary_weight=0.65,
+        secondary_weight=0.35,
+    )
+
+    got = model.predict_proba(pd.DataFrame({"f_raw": [1.0, 2.0], "f_tensor": [3.0, 4.0]}))
+
+    assert got == pytest.approx(np.array([0.53, 0.53]))
+    assert primary.calls == [["f_raw"]]
+    assert secondary.calls == [["f_tensor"]]
+
+
+def test_blended_quantile_model_averages_different_feature_views() -> None:
+    class _StubQuantileModel:
+        def __init__(self, value: float) -> None:
+            self.value = float(value)
+            self.calls: list[list[str]] = []
+
+        def predict(self, df: pd.DataFrame, feature_cols: list[str] | None = None) -> np.ndarray:
+            self.calls.append([] if feature_cols is None else list(feature_cols))
+            return np.full(len(df), self.value, dtype=float)
+
+    primary = _StubQuantileModel(0.03)
+    secondary = _StubQuantileModel(0.01)
+    model = BlendedQuantileModel(
+        primary_model=primary,
+        primary_feature_cols=["f_raw"],
+        secondary_model=secondary,
+        secondary_feature_cols=["f_tensor"],
+        primary_weight=0.65,
+        secondary_weight=0.35,
+    )
+
+    got = model.predict(pd.DataFrame({"f_raw": [1.0], "f_tensor": [2.0]}))
+
+    assert got == pytest.approx(np.array([0.023]))
+    assert primary.calls == [["f_raw"]]
+    assert secondary.calls == [["f_tensor"]]
+
+
+def test_should_emit_block_progress_throttles_large_runs() -> None:
+    emitted = [idx for idx in range(1, 13) if _should_emit_block_progress(block_idx=idx, total_blocks=12)]
+
+    assert emitted == [1, 5, 10, 12]
+
+
+def test_should_emit_block_progress_keeps_small_runs_verbose() -> None:
+    emitted = [idx for idx in range(1, 6) if _should_emit_block_progress(block_idx=idx, total_blocks=5)]
+
+    assert emitted == [1, 2, 3, 4, 5]
+
+
+def test_slice_prepared_target_arrays_matches_prefix_filtering() -> None:
+    frame = pd.DataFrame(
+        {
+            "f1": [1.0, np.nan, 3.0, 4.0],
+            "f2": [10.0, 20.0, 30.0, 40.0],
+            "target_a": [1.0, 0.0, np.nan, 1.0],
+            "target_b": [0.5, np.nan, 0.7, 0.8],
+        }
+    )
+
+    prepared = _prepare_target_arrays(
+        frame,
+        feature_cols=["f1", "f2"],
+        target_cols=["target_a", "target_b"],
+    )
+
+    x_a, y_a = _slice_prepared_target_arrays(prepared, end=3, target_col="target_a")
+    x_b, y_b = _slice_prepared_target_arrays(prepared, end=3, target_col="target_b")
+
+    expected_a = frame.iloc[:3].dropna(subset=["f1", "f2", "target_a"])
+    expected_b = frame.iloc[:3].dropna(subset=["f1", "f2", "target_b"])
+
+    assert np.array_equal(x_a, expected_a[["f1", "f2"]].astype(float).to_numpy())
+    assert np.array_equal(y_a, expected_a["target_a"].astype(float).to_numpy())
+    assert np.array_equal(x_b, expected_b[["f1", "f2"]].astype(float).to_numpy())
+    assert np.array_equal(y_b, expected_b["target_b"].astype(float).to_numpy())
+
+
+def test_fit_quantile_model_family_matches_dataframe_training_path() -> None:
+    frame = pd.DataFrame(
+        {
+            "f1": [1.0, 2.0, 3.5, 4.2, 5.1, 6.3, 7.4, 8.0],
+            "f2": [0.5, 1.2, 1.8, 2.6, 3.1, 3.7, 4.4, 4.9],
+            "target": [0.02, 0.01, 0.03, 0.025, 0.04, 0.038, 0.05, 0.048],
+        }
+    )
+
+    prepared = _prepare_target_arrays(
+        frame,
+        feature_cols=["f1", "f2"],
+        target_cols=["target"],
+    )
+    x, y = _slice_prepared_target_arrays(prepared, end=len(frame), target_col="target")
+
+    fitted_from_arrays = _fit_quantile_model_family(
+        model_cls=QuantileLinearModel,
+        l2=0.8,
+        feature_cols=["f1", "f2"],
+        x=x,
+        y=y,
+    )
+    fitted_from_frame = fit_quantile_quintet(
+        frame,
+        feature_cols=["f1", "f2"],
+        target_col="target",
+        l2=0.8,
+    )
+
+    probe = frame.iloc[[1, 5, 7]]
+    for prepared_model, frame_model in zip(fitted_from_arrays, fitted_from_frame):
+        assert prepared_model.predict(probe, ["f1", "f2"]) == pytest.approx(
+            frame_model.predict(probe, ["f1", "f2"])
+        )
+
+
+def test_resolve_training_window_days_enforces_minimum_train_window() -> None:
+    settings = {"training_window_days": 120}
+
+    assert _resolve_training_window_days(settings=settings, min_train_days=240) == 240
+    assert _resolve_training_window_days(settings={"training_window_days": 480}, min_train_days=240) == 480
+    assert _resolve_training_window_days(settings={"training_window_days": 0}, min_train_days=240) is None
+
+
+def test_training_row_window_uses_expanding_or_rolling_bounds() -> None:
+    dates = [pd.Timestamp("2024-01-01") + pd.Timedelta(days=idx) for idx in range(6)]
+    bounds = {
+        dates[0]: (0, 2),
+        dates[1]: (2, 4),
+        dates[2]: (4, 6),
+        dates[3]: (6, 8),
+        dates[4]: (8, 10),
+        dates[5]: (10, 12),
+    }
+
+    assert _training_row_window(bounds=bounds, dates=dates, block_start=4, training_window_days=None) == (0, 8)
+    assert _training_row_window(bounds=bounds, dates=dates, block_start=4, training_window_days=3) == (2, 8)
 
 
 def test_derive_learning_targets_uses_generated_universe_path() -> None:

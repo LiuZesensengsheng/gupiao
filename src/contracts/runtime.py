@@ -77,7 +77,9 @@ class ResearchRunOptions(_BaseRuntimeOptions):
     artifact_root: str = "artifacts/v2"
     cache_root: str = "artifacts/v2/cache"
     refresh_cache: bool = False
+    retrain_days: int = 20
     forecast_backend: str = "linear"
+    training_window_days: int | None = 480
     skip_calibration: bool = False
     skip_learning: bool = False
     split_mode: str = "purged_wf"
@@ -115,7 +117,9 @@ class ResearchRunOptions(_BaseRuntimeOptions):
             artifact_root=str(args.artifact_root),
             cache_root=str(args.cache_root),
             refresh_cache=bool(args.refresh_cache),
+            retrain_days=int(args.retrain_days),
             forecast_backend=str(args.forecast_backend),
+            training_window_days=args.training_window_days,
             skip_calibration=bool(getattr(args, "light", False) or args.skip_calibration),
             skip_learning=bool(getattr(args, "light", False) or args.skip_learning),
             split_mode=str(args.split_mode),
@@ -129,7 +133,9 @@ class ResearchRunOptions(_BaseRuntimeOptions):
             {
                 "cache_root": self.cache_root,
                 "refresh_cache": self.refresh_cache,
+                "retrain_days": self.retrain_days,
                 "forecast_backend": self.forecast_backend,
+                "training_window_days": self.training_window_days,
                 "skip_calibration": self.skip_calibration,
                 "skip_learning": self.skip_learning,
                 "split_mode": self.split_mode,
@@ -144,7 +150,9 @@ class ResearchRunOptions(_BaseRuntimeOptions):
             {
                 "artifact_root": self.artifact_root,
                 "cache_root": self.cache_root,
+                "retrain_days": self.retrain_days,
                 "forecast_backend": self.forecast_backend,
+                "training_window_days": self.training_window_days,
                 "publish_forecast_models": self.publish_forecast_models,
                 "split_mode": self.split_mode,
                 "embargo_days": self.embargo_days,
@@ -161,6 +169,7 @@ class DailyRunOptions(_BaseRuntimeOptions):
     run_id: str | None = None
     snapshot_path: str | None = None
     allow_retrain: bool = False
+    disable_learned_policy: bool = False
 
     @classmethod
     def from_namespace(cls, args: argparse.Namespace) -> Self:
@@ -196,6 +205,7 @@ class DailyRunOptions(_BaseRuntimeOptions):
             run_id=args.run_id,
             snapshot_path=args.snapshot_path,
             allow_retrain=bool(args.allow_retrain),
+            disable_learned_policy=bool(getattr(args, "disable_learned_policy", False)),
         )
 
     def workflow_kwargs(self) -> dict[str, object]:
@@ -208,6 +218,7 @@ class DailyRunOptions(_BaseRuntimeOptions):
                 "run_id": self.run_id,
                 "snapshot_path": self.snapshot_path,
                 "allow_retrain": self.allow_retrain,
+                "disable_learned_policy": self.disable_learned_policy,
             }
         )
         return payload
@@ -221,7 +232,9 @@ class ResearchMatrixOptions:
     artifact_root: str = "artifacts/v2"
     cache_root: str = "artifacts/v2/cache"
     refresh_cache: bool = False
+    retrain_days: int = 20
     forecast_backend: str = "linear"
+    training_window_days: int | None = 480
     split_mode: str = "purged_wf"
     embargo_days: int = 20
     universe_tiers: tuple[str, ...] = ("favorites_16", "generated_80", "generated_150", "generated_300")
@@ -242,7 +255,9 @@ class ResearchMatrixOptions:
             artifact_root=str(args.artifact_root),
             cache_root=str(args.cache_root),
             refresh_cache=bool(args.refresh_cache),
+            retrain_days=int(args.retrain_days),
             forecast_backend=str(args.forecast_backend),
+            training_window_days=args.training_window_days,
             split_mode=str(args.split_mode),
             embargo_days=int(args.embargo_days),
             universe_tiers=tuple(str(item) for item in args.tiers),
@@ -256,7 +271,9 @@ class ResearchMatrixOptions:
             "artifact_root": self.artifact_root,
             "cache_root": self.cache_root,
             "refresh_cache": self.refresh_cache,
+            "retrain_days": self.retrain_days,
             "forecast_backend": self.forecast_backend,
+            "training_window_days": self.training_window_days,
             "split_mode": self.split_mode,
             "embargo_days": self.embargo_days,
             "universe_tiers": list(self.universe_tiers),

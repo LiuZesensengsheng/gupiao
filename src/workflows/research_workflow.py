@@ -6,6 +6,8 @@ from typing import Callable, Iterable
 from src.application.v2_contracts import V2BacktestSummary, V2CalibrationResult, V2PolicyLearningResult
 from src.contracts.runtime import ResearchMatrixOptions, ResearchRunOptions
 
+_LAST_RESEARCH_TRAJECTORY: object | None = None
+
 
 @dataclass(frozen=True)
 class ResearchWorkflowDependencies:
@@ -20,6 +22,10 @@ class ResearchWorkflowDependencies:
     learn_v2_policy_model_fn: Callable[..., V2PolicyLearningResult]
     normalize_universe_tier_fn: Callable[[str], str]
     publish_v2_research_artifacts_fn: Callable[..., dict[str, str]]
+
+
+def last_research_trajectory() -> object | None:
+    return _LAST_RESEARCH_TRAJECTORY
 
 
 def run_v2_research_workflow_impl(
@@ -54,10 +60,14 @@ def run_v2_research_workflow_impl(
     skip_learning: bool = False,
     cache_root: str = "artifacts/v2/cache",
     refresh_cache: bool = False,
+    retrain_days: int = 20,
     forecast_backend: str = "linear",
+    training_window_days: int | None = 480,
     split_mode: str = "purged_wf",
     embargo_days: int = 20,
 ) -> tuple[V2BacktestSummary, V2CalibrationResult, V2PolicyLearningResult]:
+    global _LAST_RESEARCH_TRAJECTORY
+    _LAST_RESEARCH_TRAJECTORY = None
     _ = (external_signals, event_file, capital_flow_file, macro_file, info_file, info_lookback_days, info_half_life_days, use_info_fusion, info_shadow_only, info_types, info_source_mode, info_subsets)
     dependencies.emit_progress_fn("research", f"载入研究轨迹: backend={forecast_backend}")
     trajectory = dependencies.load_or_build_v2_backtest_trajectory_fn(
@@ -71,12 +81,15 @@ def run_v2_research_workflow_impl(
         generator_coarse_size=generator_coarse_size,
         generator_theme_aware=generator_theme_aware,
         generator_use_concepts=generator_use_concepts,
+        retrain_days=retrain_days,
         cache_root=cache_root,
         refresh_cache=refresh_cache,
         forecast_backend=forecast_backend,
+        training_window_days=training_window_days,
         use_us_index_context=use_us_index_context,
         us_index_source=us_index_source,
     )
+    _LAST_RESEARCH_TRAJECTORY = trajectory
     if trajectory is None:
         empty_summary = dependencies.run_v2_backtest_live_fn(
             strategy_id=strategy_id,
@@ -90,6 +103,7 @@ def run_v2_research_workflow_impl(
             generator_coarse_size=generator_coarse_size,
             generator_theme_aware=generator_theme_aware,
             generator_use_concepts=generator_use_concepts,
+            retrain_days=retrain_days,
             trajectory=None,
             cache_root=cache_root,
             refresh_cache=refresh_cache,
@@ -125,6 +139,7 @@ def run_v2_research_workflow_impl(
         generator_theme_aware=generator_theme_aware,
         generator_use_concepts=generator_use_concepts,
         trajectory=holdout_trajectory,
+        retrain_days=retrain_days,
         cache_root=cache_root,
         refresh_cache=refresh_cache,
         forecast_backend=forecast_backend,
@@ -147,6 +162,7 @@ def run_v2_research_workflow_impl(
             generator_theme_aware=generator_theme_aware,
             generator_use_concepts=generator_use_concepts,
             trajectory=validation_trajectory,
+            retrain_days=retrain_days,
             cache_root=cache_root,
             refresh_cache=refresh_cache,
             forecast_backend=forecast_backend,
@@ -170,6 +186,7 @@ def run_v2_research_workflow_impl(
             generator_use_concepts=generator_use_concepts,
             baseline=validation_baseline if validation_baseline is not None else baseline,
             trajectory=validation_trajectory,
+            retrain_days=retrain_days,
             cache_root=cache_root,
             refresh_cache=refresh_cache,
             forecast_backend=forecast_backend,
@@ -188,6 +205,7 @@ def run_v2_research_workflow_impl(
             universe_tier=universe_tier,
             policy_spec=calibration.best_policy,
             trajectory=holdout_trajectory,
+            retrain_days=retrain_days,
             cache_root=cache_root,
             refresh_cache=refresh_cache,
             forecast_backend=forecast_backend,
@@ -222,6 +240,7 @@ def run_v2_research_workflow_impl(
             trajectory=holdout_trajectory,
             fit_trajectory=validation_trajectory,
             evaluation_trajectory=holdout_trajectory,
+            retrain_days=retrain_days,
             cache_root=cache_root,
             refresh_cache=refresh_cache,
             forecast_backend=forecast_backend,
@@ -245,7 +264,9 @@ def run_v2_research_matrix_impl(
     artifact_root: str = "artifacts/v2",
     cache_root: str = "artifacts/v2/cache",
     refresh_cache: bool = False,
+    retrain_days: int = 20,
     forecast_backend: str = "linear",
+    training_window_days: int | None = 480,
     use_us_index_context: bool | None = None,
     us_index_source: str | None = None,
     split_mode: str = "purged_wf",
@@ -260,11 +281,13 @@ def run_v2_research_matrix_impl(
             dependencies=dependencies,
             strategy_id=strategy_id,
             config_path=config_path,
-            source=source,
-            universe_tier=tier_id,
-            cache_root=cache_root,
-            refresh_cache=refresh_cache,
-            forecast_backend=forecast_backend,
+                source=source,
+                universe_tier=tier_id,
+                retrain_days=retrain_days,
+                cache_root=cache_root,
+                refresh_cache=refresh_cache,
+                forecast_backend=forecast_backend,
+            training_window_days=training_window_days,
             use_us_index_context=use_us_index_context,
             us_index_source=us_index_source,
             split_mode=split_mode,
@@ -281,9 +304,11 @@ def run_v2_research_matrix_impl(
             learning=learning,
             cache_root=cache_root,
             forecast_backend=forecast_backend,
+            training_window_days=training_window_days,
             split_mode=split_mode,
             embargo_days=embargo_days,
             publish_forecast_models=True,
+            trajectory=last_research_trajectory(),
         )
         rows.append(
             {
@@ -309,6 +334,7 @@ def run_v2_research_matrix_impl(
         "split_mode": str(split_mode),
         "embargo_days": int(embargo_days),
         "forecast_backend": str(forecast_backend),
+        "training_window_days": None if training_window_days is None else int(training_window_days),
         "rows": rows,
     }
 

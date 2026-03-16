@@ -11,6 +11,7 @@ from src.application.v2_contracts import DailyRunResult, StrategySnapshot
 from src.application.v2_contracts import PolicyInput
 from src.application.v2_sector_support import build_sector_states
 from src.application.v2_candidate_selection import build_candidate_selection_state
+from src.application.v2_candidate_selection import candidate_stocks_from_state
 from src.application.v2_services import (
     _decode_composite_state,
     _serialize_composite_state,
@@ -245,6 +246,35 @@ def test_stock_policy_score_improves_when_two_and_three_day_signal_improve() -> 
         tradeability_score=0.86,
         up_2d_prob=0.62,
         up_3d_prob=0.66,
+    )
+
+    assert _policy_score(strong) > _policy_score(weak)
+
+
+def test_stock_policy_score_rewards_five_day_continuation_and_sector_edge() -> None:
+    weak = StockForecastState(
+        symbol="AAA",
+        sector="科技",
+        up_1d_prob=0.54,
+        up_5d_prob=0.56,
+        up_20d_prob=0.61,
+        excess_vs_sector_prob=0.53,
+        event_impact_score=0.08,
+        tradeability_score=0.87,
+        up_2d_prob=0.55,
+        up_3d_prob=0.57,
+    )
+    strong = StockForecastState(
+        symbol="AAA",
+        sector="科技",
+        up_1d_prob=0.54,
+        up_5d_prob=0.67,
+        up_20d_prob=0.63,
+        excess_vs_sector_prob=0.61,
+        event_impact_score=0.08,
+        tradeability_score=0.87,
+        up_2d_prob=0.57,
+        up_3d_prob=0.63,
     )
 
     assert _policy_score(strong) > _policy_score(weak)
@@ -562,6 +592,44 @@ def test_apply_policy_prefers_candidate_shortlist_pool() -> None:
 
     assert set(decision.desired_symbol_target_weights).issubset({"000630.SZ"})
     assert any("Candidate shortlist active" in note for note in decision.risk_notes)
+
+
+def test_candidate_stocks_from_state_only_uses_shortlist_core() -> None:
+    market, sectors, stocks, cross_section = _make_demo_state()
+    composite_state = compose_state(
+        market=market,
+        sectors=sectors,
+        stocks=stocks,
+        cross_section=cross_section,
+    )
+    narrowed_state = composite_state.__class__(
+        market=composite_state.market,
+        cross_section=composite_state.cross_section,
+        sectors=composite_state.sectors,
+        stocks=composite_state.stocks,
+        strategy_mode=composite_state.strategy_mode,
+        risk_regime=composite_state.risk_regime,
+        candidate_selection=CandidateSelectionState(
+            shortlisted_symbols=["600160.SH", "000630.SZ", "603619.SH", "603516.SH"],
+            shortlisted_sectors=["鍖栧伐", "鏈夎壊"],
+            sector_slots={"鍖栧伐": 1, "鏈夎壊": 1},
+            total_scored=len(composite_state.stocks),
+            shortlist_size=2,
+            shortlist_ratio=0.5,
+            selection_mode="macro_sector_shortlist",
+            selection_notes=["Shortlist core should constrain downstream policy inputs."],
+        ),
+        mainlines=composite_state.mainlines,
+        market_info_state=composite_state.market_info_state,
+        sector_info_states=composite_state.sector_info_states,
+        stock_info_states=composite_state.stock_info_states,
+        capital_flow_state=composite_state.capital_flow_state,
+        macro_context_state=composite_state.macro_context_state,
+    )
+
+    candidate_symbols = [stock.symbol for stock in candidate_stocks_from_state(narrowed_state)]
+
+    assert candidate_symbols == ["600160.SH", "000630.SZ"]
 
 
 def test_compose_state_builds_explicit_mainline_layer() -> None:
@@ -979,6 +1047,110 @@ def test_large_universe_shortlist_spreads_concentration() -> None:
     assert decision.target_position_count >= 3
     assert all(weight <= 0.18 + 1e-9 for weight in decision.desired_symbol_target_weights.values())
     assert any("Large-universe shortlist" in note for note in decision.risk_notes)
+
+
+def test_large_universe_shortlist_allows_selective_concentration_for_dominant_alpha() -> None:
+    market = MarketForecastState(
+        as_of_date="2026-03-01",
+        up_1d_prob=0.57,
+        up_5d_prob=0.63,
+        up_20d_prob=0.66,
+        trend_state="trend",
+        drawdown_risk=0.18,
+        volatility_regime="normal",
+        liquidity_stress=0.16,
+    )
+    cross_section = CrossSectionForecastState(
+        as_of_date="2026-03-01",
+        large_vs_small_bias=0.03,
+        growth_vs_value_bias=0.01,
+        fund_flow_strength=0.12,
+        margin_risk_on_score=0.11,
+        breadth_strength=0.12,
+        leader_participation=0.60,
+        weak_stock_ratio=0.24,
+    )
+    sectors = [
+        SectorForecastState("Alpha", 0.63, 0.69, 0.22, 0.18, 0.16),
+        SectorForecastState("Beta", 0.55, 0.60, 0.10, 0.16, 0.18),
+    ]
+    stocks: list[StockForecastState] = [
+        StockForecastState("A1", "Alpha", 0.60, 0.72, 0.71, 0.66, 0.18, 0.93, alpha_score=0.76, up_2d_prob=0.63, up_3d_prob=0.69),
+        StockForecastState("A2", "Alpha", 0.59, 0.69, 0.69, 0.63, 0.16, 0.92, alpha_score=0.72, up_2d_prob=0.62, up_3d_prob=0.66),
+        StockForecastState("A3", "Alpha", 0.55, 0.58, 0.60, 0.55, 0.10, 0.89, alpha_score=0.55, up_2d_prob=0.56, up_3d_prob=0.57),
+    ]
+    for idx in range(4, 9):
+        stocks.append(
+            StockForecastState(
+                f"A{idx}",
+                "Alpha",
+                0.51,
+                0.53,
+                0.56,
+                0.51,
+                0.06,
+                0.86,
+                alpha_score=0.50,
+                up_2d_prob=0.51,
+                up_3d_prob=0.52,
+            )
+        )
+    for idx in range(1, 7):
+        stocks.append(
+            StockForecastState(
+                f"B{idx}",
+                "Beta",
+                0.50,
+                0.52,
+                0.55,
+                0.50,
+                0.05,
+                0.85,
+                alpha_score=0.49,
+                up_2d_prob=0.50,
+                up_3d_prob=0.51,
+            )
+        )
+
+    composite_state = compose_state(
+        market=market,
+        sectors=sectors,
+        stocks=stocks,
+        cross_section=cross_section,
+    )
+    concentrated_state = composite_state.__class__(
+        market=composite_state.market,
+        cross_section=composite_state.cross_section,
+        sectors=composite_state.sectors,
+        stocks=composite_state.stocks,
+        strategy_mode=composite_state.strategy_mode,
+        risk_regime=composite_state.risk_regime,
+        candidate_selection=CandidateSelectionState(
+            shortlisted_symbols=[stock.symbol for stock in composite_state.stocks],
+            shortlisted_sectors=["Alpha", "Beta"],
+            sector_slots={"Alpha": 2, "Beta": 1},
+            total_scored=300,
+            shortlist_size=14,
+            shortlist_ratio=14 / 300.0,
+            selection_mode="macro_sector_shortlist",
+            selection_notes=["Large universe shortlist with dominant top alpha."],
+        ),
+        mainlines=composite_state.mainlines,
+        market_info_state=composite_state.market_info_state,
+        sector_info_states=composite_state.sector_info_states,
+        stock_info_states=composite_state.stock_info_states,
+        capital_flow_state=composite_state.capital_flow_state,
+        macro_context_state=composite_state.macro_context_state,
+    )
+
+    decision = apply_policy(
+        PolicyInput(composite_state=concentrated_state, current_weights={}, current_cash=1.0, total_equity=1.0)
+    )
+
+    assert decision.target_position_count <= 3
+    assert max(decision.desired_symbol_target_weights.values()) > 0.18
+    assert any("Top alpha concentrated and durable" in note for note in decision.risk_notes)
+    assert any("selective concentration" in note for note in decision.risk_notes)
 
 
 def test_composite_state_roundtrip_preserves_candidate_selection() -> None:
