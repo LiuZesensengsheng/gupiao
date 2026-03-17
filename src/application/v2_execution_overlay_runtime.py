@@ -39,6 +39,18 @@ def build_execution_plans(
     stock_map = {str(item.symbol): item for item in getattr(state, "stocks", []) or []}
     role_map = dict(getattr(state, "stock_role_states", {}) or {})
     theme_episodes = list(getattr(state, "theme_episodes", []) or [])
+    trim_scores = {
+        str(symbol): float(score)
+        for symbol, score in getattr(policy_decision, "trim_candidate_scores", {}).items()
+    }
+    trim_ranks = {
+        str(symbol): int(rank)
+        for symbol, rank in getattr(policy_decision, "trim_candidate_ranks", {}).items()
+    }
+    trim_labels = {
+        str(symbol): str(label)
+        for symbol, label in getattr(policy_decision, "trim_candidate_labels", {}).items()
+    }
     all_symbols = sorted(
         {
             symbol
@@ -57,6 +69,9 @@ def build_execution_plans(
         current_weight = max(0.0, float(current_weights.get(symbol, 0.0)))
         target_weight = max(0.0, float(policy_decision.symbol_target_weights.get(symbol, 0.0)))
         role_state = role_map.get(symbol)
+        trim_score = float(trim_scores.get(symbol, 0.0))
+        trim_rank = int(trim_ranks.get(symbol, 0))
+        trim_label = str(trim_labels.get(symbol, ""))
         theme_episode = _theme_for_symbol(
             symbol=symbol,
             sector=str(getattr(stock, "sector", "")),
@@ -100,6 +115,15 @@ def build_execution_plans(
                 avoid_zone = "avoid chasing strength into a crowded tape"
             elif theme_episode.phase == "strengthening" and role_state is not None and role_state.role in {"leader", "core"}:
                 reduce_if = "only trim if breakout fails with weaker follow-through"
+        if trim_rank > 0:
+            reasons.append(f"trim rank #{trim_rank} ({trim_label or 'watch'} {trim_score:.2f})")
+            if trim_label == "exit_fast":
+                reduce_if = f"{reduce_if}; exit overlay ranks this as the highest-priority defensive candidate"
+                exit_if = f"{exit_if}; predicted drag stays in exit-fast zone and price follow-through weakens"
+            elif trim_label == "reduce":
+                reduce_if = f"{reduce_if}; exit overlay keeps this in the reduce-candidate bucket"
+            elif trim_label == "watch":
+                reduce_if = f"{reduce_if}; watch for weaker follow-through before trimming"
         if float(getattr(stock, "excess_vs_sector_prob", 0.5)) < 0.50:
             reasons.append("relative edge is no longer strong")
         if current_holding_days.get(symbol, 0) > 0:
@@ -117,6 +141,9 @@ def build_execution_plans(
                 reduce_if=reduce_if,
                 exit_if=exit_if,
                 reason="; ".join(reasons) or "daily execution overlay",
+                trim_score=trim_score,
+                trim_rank=trim_rank,
+                trim_label=trim_label,
             )
         )
     plans.sort(

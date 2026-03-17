@@ -99,6 +99,11 @@ def build_backtest_prepare_dependencies(module: ModuleType) -> _v2_backtest_prep
         prepare_v2_backtest_data=module._prepare_v2_backtest_data,
         build_v2_backtest_trajectory_from_prepared=module._build_v2_backtest_trajectory_from_prepared,
         parse_boolish=module._parse_boolish,
+        load_v2_info_items_for_date=module._load_v2_info_items_for_date,
+        enrich_state_with_info=module._enrich_state_with_info,
+        attach_external_signals_to_composite_state=module._attach_external_signals_to_composite_state,
+        attach_insight_memory_to_state=module._attach_insight_memory_to_state,
+        sha256_file=module._sha256_file,
     )
 
 
@@ -336,6 +341,7 @@ def build_daily_workflow_dependencies(module: ModuleType) -> DailyWorkflowDepend
         apply_leader_candidate_overlay_fn=module._apply_leader_candidate_overlay,
         parse_boolish_fn=module._parse_boolish,
         resolve_daily_policy_model_fn=module._resolve_daily_policy_model,
+        resolve_daily_exit_behavior_model_fn=module._resolve_daily_exit_behavior_model,
         policy_spec_from_model_fn=module._policy_spec_from_model,
         apply_policy_fn=module.apply_policy,
         build_execution_plans_fn=module._build_execution_plans,

@@ -16,6 +16,10 @@ from src.application.v2_contracts import (
     SectorForecastState,
     StrategySnapshot,
 )
+from src.application.v2_info_shadow_runtime import (
+    info_payload_enabled as info_payload_enabled_for_settings,
+    info_shadow_enabled as info_shadow_enabled_for_settings,
+)
 
 
 @dataclass(frozen=True)
@@ -256,6 +260,7 @@ def attach_daily_info_overlay(
     list[InfoSignalRecord],
     list[InfoDivergenceRecord],
     list[InfoItem],
+    CompositeState | None,
 ]:
     info_hash = str(snapshot.info_hash or settings.get("info_hash", ""))
     info_manifest_path = str(snapshot.info_manifest_path or settings.get("info_manifest_path", ""))
@@ -265,34 +270,39 @@ def attach_daily_info_overlay(
     top_positive_info_signals: list[InfoSignalRecord] = []
     quant_info_divergence: list[InfoDivergenceRecord] = []
     info_items: list[InfoItem] = []
-    if bool(settings.get("use_info_fusion", False)):
+    shadow_state: CompositeState | None = None
+    info_payload_requested = info_payload_enabled_for_settings(settings)
+    info_shadow_requested = info_shadow_enabled_for_settings(settings)
+    if info_payload_requested:
         info_file_path, info_items = deps.load_v2_info_items_for_date(
             settings=settings,
             as_of_date=pd.Timestamp(composite_state.market.as_of_date),
             learned_window=False,
         )
         if info_items:
-            composite_state = deps.enrich_state_with_info(
+            info_item_count = len(info_items)
+            if not info_hash:
+                info_hash = deps.sha256_file(info_file_path) or deps.stable_json_hash([asdict(item) for item in info_items])
+            shadow_state = deps.enrich_state_with_info(
                 state=composite_state,
                 as_of_date=pd.Timestamp(composite_state.market.as_of_date),
                 info_items=info_items,
                 settings=settings,
             )
-            info_shadow_enabled = True
-            info_item_count = len(info_items)
-            if not info_hash:
-                info_hash = deps.sha256_file(info_file_path) or deps.stable_json_hash([asdict(item) for item in info_items])
+            if bool(settings.get("use_info_fusion", False)):
+                composite_state = shadow_state
+            info_shadow_enabled = bool(info_shadow_enabled or info_shadow_requested)
             top_negative_info_events = deps.top_negative_events(
                 info_items,
                 as_of_date=pd.Timestamp(composite_state.market.as_of_date),
                 half_life_days=float(settings.get("info_half_life_days", 10.0)),
             )
             top_positive_info_signals = deps.top_positive_stock_signals(
-                composite_state,
+                shadow_state,
                 symbol_names=symbol_names,
             )
             quant_info_divergence = deps.quant_info_divergence_rows(
-                composite_state,
+                shadow_state,
                 symbol_names=symbol_names,
             )
     return (
@@ -305,6 +315,7 @@ def attach_daily_info_overlay(
         top_positive_info_signals,
         quant_info_divergence,
         info_items,
+        shadow_state,
     )
 
 

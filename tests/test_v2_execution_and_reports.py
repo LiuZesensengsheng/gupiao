@@ -1005,9 +1005,12 @@ def test_v2_presenters_can_render_from_view_models(tmp_path: Path) -> None:
     daily_html = write_v2_daily_dashboard_from_view_model(tmp_path / "daily_vm.html", daily_view_model).read_text(encoding="utf-8")
 
     assert "市场总览" in daily_md
-    assert "Top20 推荐" in daily_md
+    assert "预测监控榜" in daily_md
+    assert "可执行候选榜" in daily_md
     assert "generator manifest path" in daily_md
+    assert "info shadow enabled" in daily_md
     assert "Dynamic Universe Funnel" in daily_html
+    assert "info shadow enabled" in daily_html
     assert "Mainline Radar" in daily_html
     assert "AAA, BBB" in daily_html
 
@@ -1082,11 +1085,13 @@ def test_v2_decision_outputs_include_new_forecast_sections(tmp_path: Path) -> No
 
     assert "市场总览" in daily_md
     assert "大盘多周期预测" in daily_md
-    assert "Top20 推荐" in daily_md
+    assert "预测监控榜" in daily_md
+    assert "可执行候选榜" in daily_md
     assert "推荐解释卡" in daily_md
     assert "预测复盘" in daily_md
 
     assert "次日决策面板" in daily_html
-    assert "Top20 推荐" in daily_html
+    assert "预测监控榜" in daily_html
+    assert "可执行候选榜" in daily_html
     assert "预测复盘" in daily_html
 

@@ -69,6 +69,22 @@ def resolve_info_file_from_settings(settings: dict[str, object]) -> str:
     return info_file or news_file
 
 
+def info_shadow_enabled(settings: dict[str, object]) -> bool:
+    return bool(
+        settings.get("use_info_fusion", False)
+        or settings.get("use_learned_info_fusion", settings.get("use_learned_news_fusion", False))
+        or settings.get("info_shadow_only", False)
+    )
+
+
+def info_payload_enabled(settings: dict[str, object]) -> bool:
+    return bool(
+        info_shadow_enabled(settings)
+        or settings.get("external_signals", True)
+        or settings.get("enable_insight_memory", True)
+    )
+
+
 def load_v2_info_items_for_date(
     *,
     settings: dict[str, object],

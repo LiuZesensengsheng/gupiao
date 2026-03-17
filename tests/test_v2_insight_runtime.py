@@ -12,6 +12,8 @@ from src.application.v2_contracts import (
     ExecutionPlan,
     HorizonForecast,
     InfoAggregateState,
+    InfoDivergenceRecord,
+    InfoSignalRecord,
     LearnedPolicyModel,
     MainlineState,
     MarketForecastState,
@@ -313,6 +315,13 @@ def test_build_execution_plans_uses_theme_phase_and_role_downgrade() -> None:
         ],
         strategy_mode="trend_follow",
         risk_regime="risk_on",
+        market_info_state=InfoAggregateState(
+            item_count=4,
+            catalyst_strength=0.28,
+            event_risk_level=0.14,
+            negative_event_risk=0.10,
+            coverage_confidence=0.75,
+        ),
         theme_episodes=[
             ThemeEpisode(
                 theme="chips",
@@ -340,6 +349,9 @@ def test_build_execution_plans_uses_theme_phase_and_role_downgrade() -> None:
         intraday_t_allowed=False,
         turnover_cap=0.20,
         symbol_target_weights={"AAA": 0.05},
+        trim_candidate_scores={"AAA": 0.81},
+        trim_candidate_ranks={"AAA": 1},
+        trim_candidate_labels={"AAA": "reduce"},
     )
 
     plans = build_execution_plans(
@@ -359,6 +371,9 @@ def test_build_execution_plans_uses_theme_phase_and_role_downgrade() -> None:
     assert "laggard in chips" in plan.reason
     assert "role downgrade active" in plan.reason
     assert "held 7d" in plan.reason
+    assert plan.trim_rank == 1
+    assert plan.trim_label == "reduce"
+    assert plan.trim_score == 0.81
 
 
 def test_snapshot_round_trip_preserves_insight_fields() -> None:
@@ -429,6 +444,13 @@ def test_write_and_report_view_models_surface_insight_outputs(tmp_path) -> None:
         stocks=[StockForecastState("AAA", "chips", 0.56, 0.62, 0.67, 0.58, 0.03, 0.88)],
         strategy_mode="trend_follow",
         risk_regime="risk_on",
+        market_info_state=InfoAggregateState(
+            item_count=4,
+            catalyst_strength=0.28,
+            event_risk_level=0.14,
+            negative_event_risk=0.10,
+            coverage_confidence=0.75,
+        ),
         theme_episodes=[
             ThemeEpisode(
                 theme="chips",
@@ -498,6 +520,40 @@ def test_write_and_report_view_models_surface_insight_outputs(tmp_path) -> None:
             )
         ],
         symbol_names={"AAA": "Alpha"},
+        info_shadow_enabled=True,
+        info_item_count=4,
+        top_negative_info_events=[
+            InfoSignalRecord(
+                target="AAA",
+                target_name="Alpha",
+                title="earnings delay",
+                info_type="announcement",
+                direction="bearish",
+                horizon="short",
+                negative_event_risk=0.62,
+            )
+        ],
+        top_positive_info_signals=[
+            InfoSignalRecord(
+                target="AAA",
+                target_name="Alpha",
+                title="new contract",
+                info_type="announcement",
+                direction="bullish",
+                horizon="mid",
+                score=0.58,
+            )
+        ],
+        quant_info_divergence=[
+            InfoDivergenceRecord(
+                symbol="AAA",
+                name="Alpha",
+                quant_prob_20d=0.52,
+                info_prob_20d=0.66,
+                shadow_prob_20d=0.63,
+                gap=0.11,
+            )
+        ],
         run_id="run_1",
     )
     daily_view_model = build_daily_report_view_model(result)
@@ -506,6 +562,9 @@ def test_write_and_report_view_models_surface_insight_outputs(tmp_path) -> None:
     assert daily_view_model.leader_candidates[0]["symbol"] == "AAA"
     assert daily_view_model.holding_role_changes[0]["symbol"] == "AAA"
     assert daily_view_model.execution_plans[0]["symbol"] == "AAA"
+    assert daily_view_model.info_summary["item_count"] == 4
+    assert daily_view_model.info_summary["market_info_state"]["catalyst_strength"] == 0.28
+    assert daily_view_model.info_summary["top_negative_events"][0]["title"] == "earnings delay"
 
     insight_dir = tmp_path / "insight"
     payloads = {

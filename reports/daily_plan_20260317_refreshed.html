@@ -1,0 +1,91 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>次日决策面板</title>
+  <style>
+    :root {
+      --bg: #f4efe6;
+      --panel: #fffaf2;
+      --ink: #1e2730;
+      --muted: #6f766d;
+      --line: #ddd1bc;
+      --shadow: 0 18px 46px rgba(45, 33, 12, 0.08);
+    }
+    * { box-sizing: border-box; }
+    body { margin: 0; color: var(--ink); font-family: "Avenir Next", "PingFang SC", "Microsoft YaHei", sans-serif; background: radial-gradient(circle at top right, rgba(197, 91, 53, 0.10), transparent 26%), radial-gradient(circle at left top, rgba(31, 111, 120, 0.10), transparent 24%), linear-gradient(180deg, #faf5ec 0%, var(--bg) 100%); }
+    .page { max-width: 1380px; margin: 0 auto; padding: 24px 18px 40px; }
+    .hero, .panel { background: var(--panel); border: 1px solid var(--line); border-radius: 24px; box-shadow: var(--shadow); }
+    .hero { padding: 24px; }
+    .hero-grid, .triple, .stock-grid { display: grid; gap: 16px; }
+    .hero-grid { grid-template-columns: 1.2fr 1fr; align-items: start; }
+    .triple { grid-template-columns: repeat(3, minmax(0, 1fr)); margin-top: 18px; }
+    .stock-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); margin-top: 18px; }
+    .panel { padding: 18px; margin-top: 18px; }
+    h1 { margin: 0; font-size: 36px; line-height: 1; }
+    h2 { margin: 0 0 12px; font-size: 18px; }
+    h3 { margin: 0 0 8px; font-size: 18px; }
+    h3 span { color: var(--muted); font-size: 12px; font-weight: 600; }
+    p, li { line-height: 1.6; }
+    .muted { color: var(--muted); }
+    .facts { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; }
+    .fact { padding: 14px; border: 1px solid var(--line); border-radius: 18px; background: rgba(255,255,255,0.52); }
+    .fact .eyebrow { font-size: 11px; text-transform: uppercase; color: var(--muted); letter-spacing: .08em; }
+    .fact strong { display: block; margin-top: 8px; font-size: 28px; }
+    .pill { display: inline-flex; padding: 7px 12px; border-radius: 999px; border: 1px solid rgba(0,0,0,.08); background: rgba(255,255,255,.72); margin-right: 8px; font-size: 12px; font-weight: 700; }
+    .list { margin: 10px 0 0; padding-left: 18px; }
+    table { width: 100%; border-collapse: collapse; }
+    th, td { padding: 10px; border-bottom: 1px solid #e9dece; font-size: 13px; text-align: left; vertical-align: top; }
+    th { background: #faf5eb; font-size: 11px; text-transform: uppercase; color: #67706a; letter-spacing: .06em; }
+    .table-wrap { overflow: auto; border: 1px solid var(--line); border-radius: 18px; background: rgba(255,255,255,.55); }
+    .ticker { font-weight: 800; }
+    .ticker-sub { color: var(--muted); font-size: 12px; margin-top: 2px; }
+    .stock-card { border: 1px solid var(--line); border-radius: 18px; background: rgba(255,255,255,.62); padding: 16px; }
+    .stock-card .meta { color: var(--muted); margin-top: 0; }
+    @media (max-width: 1080px) { .hero-grid, .triple, .stock-grid, .facts { grid-template-columns: 1fr; } }
+  </style>
+</head>
+<body>
+  <main class="page">
+    <section class="hero">
+      <div class="hero-grid">
+        <div>
+          <h1>次日决策面板</h1>
+          <p class="muted">数据日期 2026-03-16，下一交易日 2026-03-17。当前为 defensive / risk_off。</p>
+          <p class="muted">strategy swing_v2 | universe universe_ml_80 | generator  | source akshare</p>
+          <p class="muted">4/79 shortlisted | Macro shortlist active: 2 sectors prioritized before fine ranking. | Quant breadth fill added 2 names beyond macro-sector core to avoid an over-compressed shortlist.</p>
+          <div>
+            <span class="pill">情绪阶段: 修复</span>
+            <span class="pill">情绪分: 43.2/100</span>
+            <span class="pill">目标仓位: 25.0%</span>
+            <span class="pill">目标持仓: 1</span>
+          </div>
+          <ul class="list"><li>市场宽度强度 -43.9%</li><li>新高/新低 48/82</li><li>涨跌停差 9/1</li><li>涨跌家数差 372/367</li></ul>
+        </div>
+        <div class="facts">
+          <div class="fact"><div class="eyebrow">涨跌家数</div><strong>372/367</strong><div class="muted">平家数 25</div></div>
+          <div class="fact"><div class="eyebrow">涨停 / 跌停</div><strong>9/1</strong><div class="muted">新高/新低 48/82</div></div>
+          <div class="fact"><div class="eyebrow">样本中位涨跌幅</div><strong>0.0%</strong><div class="muted">样本覆盖 764</div></div>
+        </div>
+      </div>
+      <div class="triple">
+        <div class="panel"><h2>大盘情绪</h2><p>修复阶段，下一交易日情绪分 43/100。</p><p class="muted">样本成交额 15,257,480,875，成交热度 50.0%，两融变化 0.000</p></div>
+        <div class="panel"><h2>外部信号</h2><p>资金状态 neutral，北向强度 0.000，大单偏向 0.000</p><p class="muted">宏观风险 neutral，风格 balanced</p></div>
+        <div class="panel"><h2>策略记忆</h2><p>最近一次研究 run_id=20260317_004014，超额年化 18.9%，IR 1.28，release gate 通过。；近 5 次日运行平均目标仓位 30.2%，调仓触发占比 100.0%，近几次仓位有下调倾向。</p><p class="muted">高频标的: 002163.SZ, 000006.SZ, 601328.SH</p></div>
+      </div>
+    </section>
+    <section class="panel"><h2>大盘多周期预测</h2><div class="table-wrap"><table><thead><tr><th>周期</th><th>上涨概率</th><th>预期区间</th><th>中位预期</th><th>置信度</th></tr></thead><tbody><tr><td>未来1日</td><td>44.0%</td><td>-0.7% ~ 0.9%</td><td>-0.1%</td><td>57.9%</td></tr><tr><td>未来2日</td><td>43.6%</td><td>-1.2% ~ 1.4%</td><td>-0.1%</td><td>58.5%</td></tr><tr><td>未来3日</td><td>45.3%</td><td>-1.6% ~ 1.7%</td><td>-0.0%</td><td>57.5%</td></tr><tr><td>未来5日</td><td>44.8%</td><td>-3.0% ~ 2.8%</td><td>0.1%</td><td>58.5%</td></tr><tr><td>未来10日</td><td>42.2%</td><td>-3.7% ~ 3.4%</td><td>0.2%</td><td>60.5%</td></tr><tr><td>未来20日</td><td>40.0%</td><td>-4.3% ~ 3.9%</td><td>0.2%</td><td>62.1%</td></tr></tbody></table></div></section>
+    <section class="panel"><h2>Dynamic Universe Funnel</h2><p class="muted">coarse 0 | refined 0 | selected 0</p><p class="muted"> | 4/79 shortlisted</p><p class="muted">Macro shortlist active: 2 sectors prioritized before fine ranking. | Quant breadth fill added 2 names beyond macro-sector core to avoid an over-compressed shortlist.</p></section>
+    <section class="panel"><h2>当日主线列表</h2><div class="table-wrap"><table><thead><tr><th>主线</th><th>phase</th><th>conviction</th><th>breadth</th><th>leadership</th><th>event_risk</th><th>说明</th></tr></thead><tbody><tr><td colspan='7'>暂无 insight 主线</td></tr></tbody></table></div></section>
+    <section class="panel"><h2>龙头候选</h2><div class="table-wrap"><table><thead><tr><th>股票</th><th>主线</th><th>phase</th><th>role</th><th>candidate</th><th>conviction</th><th>negative</th><th>说明</th></tr></thead><tbody><tr><td>海南发展 (002163.SZ)</td><td>新能源电力</td><td></td><td>leader</td><td>60.7%</td><td>44.0%</td><td>19.2%</td><td>theme role leader | theme rank 1/11 | tradeability supportive</td></tr><tr><td>深康佳Ａ (000016.SZ)</td><td>消费</td><td></td><td>leader</td><td>57.7%</td><td>42.8%</td><td>21.2%</td><td>theme role leader | theme rank 1/2 | tradeability supportive</td></tr><tr><td>方正电机 (002196.SZ)</td><td>新能源电力</td><td></td><td>leader</td><td>59.1%</td><td>42.7%</td><td>21.5%</td><td>theme role leader | theme rank 2/11 | tradeability supportive</td></tr><tr><td>甘咨询 (000779.SZ)</td><td>建筑工程</td><td></td><td>leader</td><td>58.5%</td><td>40.9%</td><td>21.5%</td><td>theme role leader | theme rank 1/4 | strong excess vs sector</td></tr><tr><td>保隆科技 (603197.SH)</td><td>汽车</td><td></td><td>leader</td><td>58.6%</td><td>40.5%</td><td>19.5%</td><td>theme role leader | theme rank 1/7 | tradeability supportive</td></tr><tr><td>千里科技 (601777.SH)</td><td>新能源电力</td><td></td><td>core</td><td>53.2%</td><td>38.4%</td><td>26.4%</td><td>theme role core | theme rank 3/11 | tradeability supportive</td></tr><tr><td>天奇股份 (002009.SZ)</td><td>新能源电力</td><td></td><td>core</td><td>52.1%</td><td>37.8%</td><td>27.9%</td><td>theme role core | theme rank 4/11 | tradeability supportive</td></tr><tr><td>中锐股份 (002374.SZ)</td><td>广告包装</td><td></td><td>core</td><td>50.7%</td><td>36.7%</td><td>29.4%</td><td>theme role core | theme rank 1/2 | tradeability supportive</td></tr></tbody></table></div></section>
+    <section class="panel"><h2>Top20 推荐</h2><div class="table-wrap"><table><thead><tr><th>排名</th><th>股票</th><th>行业</th><th>下一交易日区间</th><th>5日中位预期</th><th>20日中位预期</th><th>1日上涨概率</th><th>置信度</th></tr></thead><tbody><tr><td>1</td><td><div class='ticker'>海南发展</div><div class='ticker-sub'>002163.SZ</div></td><td>新能源电力</td><td>13.39 ~ 14.09</td><td>-0.1%</td><td>0.0%</td><td>46.4%</td><td>46.2%</td></tr><tr><td>2</td><td><div class='ticker'>方正电机</div><div class='ticker-sub'>002196.SZ</div></td><td>新能源电力</td><td>13.94 ~ 14.68</td><td>-0.1%</td><td>0.0%</td><td>46.5%</td><td>46.0%</td></tr><tr><td>3</td><td><div class='ticker'>甘咨询</div><div class='ticker-sub'>000779.SZ</div></td><td>建筑工程</td><td>9.07 ~ 9.46</td><td>-0.0%</td><td>0.0%</td><td>47.1%</td><td>45.9%</td></tr><tr><td>4</td><td><div class='ticker'>中锐股份</div><div class='ticker-sub'>002374.SZ</div></td><td>广告包装</td><td>3.42 ~ 3.63</td><td>-0.1%</td><td>0.0%</td><td>47.0%</td><td>45.2%</td></tr><tr><td>5</td><td><div class='ticker'>深康佳Ａ</div><div class='ticker-sub'>000016.SZ</div></td><td>消费</td><td>3.32 ~ 3.46</td><td>0.1%</td><td>0.3%</td><td>48.0%</td><td>43.3%</td></tr><tr><td>6</td><td><div class='ticker'>保隆科技</div><div class='ticker-sub'>603197.SH</div></td><td>汽车</td><td>33.91 ~ 34.90</td><td>-0.1%</td><td>0.0%</td><td>46.0%</td><td>47.3%</td></tr><tr><td>7</td><td><div class='ticker'>千里科技</div><div class='ticker-sub'>601777.SH</div></td><td>新能源电力</td><td>10.04 ~ 10.49</td><td>-0.2%</td><td>0.0%</td><td>46.0%</td><td>47.6%</td></tr><tr><td>8</td><td><div class='ticker'>天奇股份</div><div class='ticker-sub'>002009.SZ</div></td><td>新能源电力</td><td>24.79 ~ 26.65</td><td>-0.1%</td><td>0.0%</td><td>46.8%</td><td>46.3%</td></tr><tr><td>9</td><td><div class='ticker'>五洲新春</div><div class='ticker-sub'>603667.SH</div></td><td>航天军工</td><td>69.51 ~ 73.91</td><td>-0.1%</td><td>0.0%</td><td>46.6%</td><td>47.2%</td></tr><tr><td>10</td><td><div class='ticker'>宏盛股份</div><div class='ticker-sub'>603090.SH</div></td><td>煤化工</td><td>63.42 ~ 68.02</td><td>-0.1%</td><td>0.0%</td><td>46.5%</td><td>46.9%</td></tr><tr><td>11</td><td><div class='ticker'>人民网</div><div class='ticker-sub'>603000.SH</div></td><td>通信设备</td><td>20.00 ~ 20.99</td><td>-0.1%</td><td>0.0%</td><td>46.8%</td><td>45.0%</td></tr><tr><td>12</td><td><div class='ticker'>豪美新材</div><div class='ticker-sub'>002988.SZ</div></td><td>资源</td><td>32.40 ~ 34.17</td><td>-0.1%</td><td>0.0%</td><td>46.1%</td><td>44.4%</td></tr><tr><td>13</td><td><div class='ticker'>博云新材</div><div class='ticker-sub'>002297.SZ</div></td><td>航天军工</td><td>11.34 ~ 12.16</td><td>-0.2%</td><td>0.0%</td><td>45.9%</td><td>47.9%</td></tr><tr><td>14</td><td><div class='ticker'>上海电影</div><div class='ticker-sub'>601595.SH</div></td><td>影视音像</td><td>25.24 ~ 26.52</td><td>-0.0%</td><td>0.0%</td><td>47.7%</td><td>43.2%</td></tr><tr><td>15</td><td><div class='ticker'>中国电影</div><div class='ticker-sub'>600977.SH</div></td><td>影视音像</td><td>13.38 ~ 13.97</td><td>-0.0%</td><td>0.0%</td><td>48.0%</td><td>42.1%</td></tr><tr><td>16</td><td><div class='ticker'>银河电子</div><div class='ticker-sub'>002519.SZ</div></td><td>航天军工</td><td>7.93 ~ 8.56</td><td>-0.2%</td><td>0.0%</td><td>46.4%</td><td>48.0%</td></tr><tr><td>17</td><td><div class='ticker'>万向钱潮</div><div class='ticker-sub'>000559.SZ</div></td><td>新能源电力</td><td>16.15 ~ 17.19</td><td>-0.2%</td><td>0.0%</td><td>45.9%</td><td>46.8%</td></tr><tr><td>18</td><td><div class='ticker'>航发控制</div><div class='ticker-sub'>000738.SZ</div></td><td>航天军工</td><td>22.87 ~ 24.33</td><td>-0.2%</td><td>0.0%</td><td>46.0%</td><td>48.5%</td></tr><tr><td>19</td><td><div class='ticker'>共达电声</div><div class='ticker-sub'>002655.SZ</div></td><td>元器件</td><td>16.99 ~ 18.76</td><td>-0.2%</td><td>0.0%</td><td>44.0%</td><td>49.9%</td></tr><tr><td>20</td><td><div class='ticker'>掌阅科技</div><div class='ticker-sub'>603533.SH</div></td><td>科技软件</td><td>25.41 ~ 27.66</td><td>-0.1%</td><td>0.0%</td><td>46.3%</td><td>44.4%</td></tr></tbody></table></div></section>
+    <section class="panel"><h2>实际操作</h2><div class="table-wrap"><table><thead><tr><th>股票</th><th>动作</th><th>当前权重</th><th>目标权重</th><th>权重变化</th><th>操作理由</th></tr></thead><tbody><tr><td><div class='ticker'>海南发展</div><div class='ticker-sub'>002163.SZ</div></td><td>BUY</td><td>0.0%</td><td>25.0%</td><td>25.0%</td><td>排序第 1，进入当前 1 个目标持仓。</td></tr></tbody></table></div></section>
+    <section class="panel"><h2>持仓角色变化</h2><div class="table-wrap"><table><thead><tr><th>股票</th><th>主线</th><th>当前角色</th><th>前序角色</th><th>角色降级</th><th>备注</th></tr></thead><tbody><tr><td colspan='6'>暂无角色变化</td></tr></tbody></table></div></section>
+    <section class="panel"><h2>次日执行计划</h2><div class="table-wrap"><table><thead><tr><th>股票</th><th>bias</th><th>buy_zone</th><th>avoid_zone</th><th>reduce_if</th><th>exit_if</th><th>reason</th></tr></thead><tbody><tr><td><div class='ticker'>海南发展</div><div class='ticker-sub'>002163.SZ</div></td><td>buy_on_pullback</td><td>13.39 ~ 14.09</td><td>gap-up chase above forecast range</td><td>near-term edge weakens</td><td>20d probability breaks below 0.48</td><td>daily execution overlay</td></tr></tbody></table></div></section>
+    <section class="stock-grid"><article class='stock-card'><h3>海南发展 <span>002163.SZ</span></h3><p class='meta'>新能源电力 | 最新收盘 13.74</p><p><strong>下一交易日(2026-03-17)</strong>: 13.39 ~ 14.09，上涨概率 46.4%，置信度 46.2%</p><p><strong>入池原因</strong>: 行业内相对强度 57.2%，位于板块前列。；量价结构稳定，交易一致性 98.6%。</p><p><strong>排名原因</strong>: 趋势延续与稳定性加分较高。；行业内相对强度为排名提供支撑。；多周期信号一致，分歧不大。</p><p><strong>操作原因</strong>: 排序第 1，进入当前 1 个目标持仓。</p><p><strong>风险点</strong>: 当前未见明显硬性风险，但仍需服从仓位纪律。</p><p><strong>失效条件</strong>: 若下一交易日收盘跌破 13.39，且 5 日上涨概率回落到 50% 下方，则本次信号失效。</p></article><article class='stock-card'><h3>方正电机 <span>002196.SZ</span></h3><p class='meta'>新能源电力 | 最新收盘 14.31</p><p><strong>下一交易日(2026-03-17)</strong>: 13.94 ~ 14.68，上涨概率 46.5%，置信度 46.0%</p><p><strong>入池原因</strong>: 行业内相对强度 56.4%，位于板块前列。；量价结构稳定，交易一致性 98.3%。</p><p><strong>排名原因</strong>: 趋势延续与稳定性加分较高。；行业内相对强度为排名提供支撑。；多周期信号一致，分歧不大。</p><p><strong>未入组合原因</strong>: 当前只开 1 个仓位，这只排位靠前但未进入前 1。</p><p><strong>风险点</strong>: 当前未见明显硬性风险，但仍需服从仓位纪律。</p><p><strong>失效条件</strong>: 若下一交易日收盘跌破 13.94，且 5 日上涨概率回落到 50% 下方，则本次信号失效。</p></article><article class='stock-card'><h3>甘咨询 <span>000779.SZ</span></h3><p class='meta'>建筑工程 | 最新收盘 9.26</p><p><strong>下一交易日(2026-03-17)</strong>: 9.07 ~ 9.46，上涨概率 47.1%，置信度 45.9%</p><p><strong>入池原因</strong>: 行业内相对强度 58.4%，位于板块前列。；量价结构稳定，交易一致性 98.5%。</p><p><strong>排名原因</strong>: 趋势延续与稳定性加分较高。；行业内相对强度为排名提供支撑。；多周期信号一致，分歧不大。</p><p><strong>未入组合原因</strong>: 当前只开 1 个仓位，这只排位靠前但未进入前 1。</p><p><strong>风险点</strong>: 当前未见明显硬性风险，但仍需服从仓位纪律。</p><p><strong>失效条件</strong>: 若下一交易日收盘跌破 9.07，且 5 日上涨概率回落到 50% 下方，则本次信号失效。</p></article><article class='stock-card'><h3>中锐股份 <span>002374.SZ</span></h3><p class='meta'>广告包装 | 最新收盘 3.51</p><p><strong>下一交易日(2026-03-17)</strong>: 3.42 ~ 3.63，上涨概率 47.0%，置信度 45.2%</p><p><strong>入池原因</strong>: 行业内相对强度 55.6%，位于板块前列。；量价结构稳定，交易一致性 98.2%。</p><p><strong>排名原因</strong>: 趋势延续与稳定性加分较高。；行业内相对强度为排名提供支撑。；多周期信号一致，分歧不大。</p><p><strong>未入组合原因</strong>: 当前只开 1 个仓位，这只排位靠前但未进入前 1。</p><p><strong>风险点</strong>: 当前未见明显硬性风险，但仍需服从仓位纪律。</p><p><strong>失效条件</strong>: 若下一交易日收盘跌破 3.42，且 5 日上涨概率回落到 50% 下方，则本次信号失效。</p></article><article class='stock-card'><h3>深康佳Ａ <span>000016.SZ</span></h3><p class='meta'>消费 | 最新收盘 3.38</p><p><strong>下一交易日(2026-03-17)</strong>: 3.32 ~ 3.46，上涨概率 48.0%，置信度 43.3%</p><p><strong>入池原因</strong>: 行业内相对强度 56.1%，位于板块前列。；量价结构稳定，交易一致性 97.6%。</p><p><strong>排名原因</strong>: 趋势延续与稳定性加分较高。；行业内相对强度为排名提供支撑。；多周期信号一致，分歧不大。</p><p><strong>未入组合原因</strong>: 当前只开 1 个仓位，这只排位靠前但未进入前 1。</p><p><strong>风险点</strong>: 当前未见明显硬性风险，但仍需服从仓位纪律。</p><p><strong>失效条件</strong>: 若下一交易日收盘跌破 3.32，且 5 日上涨概率回落到 50% 下方，则本次信号失效。</p></article><article class='stock-card'><h3>保隆科技 <span>603197.SH</span></h3><p class='meta'>汽车 | 最新收盘 34.42</p><p><strong>下一交易日(2026-03-17)</strong>: 33.91 ~ 34.90，上涨概率 46.0%，置信度 47.3%</p><p><strong>入池原因</strong>: 行业内相对强度 57.0%，位于板块前列。；量价结构稳定，交易一致性 99.1%。</p><p><strong>排名原因</strong>: 趋势延续与稳定性加分较高。；行业内相对强度为排名提供支撑。；多周期信号一致，分歧不大。</p><p><strong>未入组合原因</strong>: 当前只开 1 个仓位，这只排位靠前但未进入前 1。</p><p><strong>风险点</strong>: 当前未见明显硬性风险，但仍需服从仓位纪律。</p><p><strong>失效条件</strong>: 若下一交易日收盘跌破 33.91，且 5 日上涨概率回落到 50% 下方，则本次信号失效。</p></article></section>
+    <section class="panel"><h2>Mainline Radar</h2><ul class="list"><li>新能源电力 | conviction 18.3% | sectors 新能源电力</li><li>消费 | conviction 15.5% | sectors 消费</li><li>广告包装 | conviction 14.9% | sectors 广告包装</li></ul></section>
+    <section class="panel"><h2>预测复盘</h2><div class="table-wrap"><table><thead><tr><th>窗口</th><th>命中参考</th><th>平均边际</th><th>近窗表现</th><th>样本数</th><th>说明</th></tr></thead><tbody><tr><td>5日预测命中参考</td><td>56.5%</td><td>0.3%</td><td>0.0%</td><td>314</td><td>研究期内 5 日横截面命中率与头尾价差。</td></tr><tr><td>20日预测命中参考</td><td>55.3%</td><td>1.2%</td><td>0.0%</td><td>314</td><td>研究期内 20 日横截面命中率与头尾价差。</td></tr><tr><td>60日策略表现</td><td>53.3%</td><td>2.8%</td><td>2.8%</td><td>60</td><td>截至 2026-02-06 的滚动净值表现。</td></tr></tbody></table></div><p class="muted">复盘参考来自研究 run_id=20260317_004014</p></section>
+  </main>
+</body>
+</html>

@@ -88,6 +88,7 @@ from src.application.v2_daily_snapshot_runtime import (
 )
 from src.application.v2_artifact_runtime import (
     load_published_v2_policy_model as _load_published_v2_policy_model_external,
+    resolve_manifest_json_artifact as _resolve_manifest_json_artifact_external,
     resolve_daily_policy_model as _resolve_daily_policy_model_external,
 )
 from src.application.v2_research_publish_runtime import (
@@ -1116,6 +1117,14 @@ _resolve_daily_policy_model = _with_injected_kwargs(
         "path_from_manifest_entry": _path_from_manifest_entry,
         "load_policy_model_from_path_fn": _load_policy_model_from_path,
         "load_published_v2_policy_model_fn": _load_published_v2_policy_model_impl,
+    },
+)
+_resolve_daily_exit_behavior_model = _with_injected_kwargs(
+    _resolve_manifest_json_artifact_external,
+    lambda *args, **kwargs: {
+        "manifest_key": "exit_behavior_model",
+        "path_from_manifest_entry": _path_from_manifest_entry,
+        "load_json_dict": _load_json_dict,
     },
 )
 

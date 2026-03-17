@@ -6,6 +6,7 @@ from typing import Any, Callable, Iterable
 import numpy as np
 
 from src.application.v2_contracts import InfoItem
+from src.application.v2_info_shadow_runtime import info_shadow_enabled as info_shadow_enabled_for_settings
 
 
 @dataclass(frozen=True)
@@ -50,7 +51,7 @@ def build_info_shadow_report(
     )
     holdout_steps = list(getattr(holdout_trajectory, "steps", []) or [])
     return {
-        "info_shadow_enabled": bool(settings.get("use_info_fusion", False)),
+        "info_shadow_enabled": bool(info_shadow_enabled_for_settings(settings)),
         "shadow_only": bool(settings.get("info_shadow_only", True)),
         "market_shadow_modes": dict(all_variant.get("market_shadow_modes", {})),
         "stock_shadow_modes": dict(all_variant.get("stock_shadow_modes", {})),

@@ -18,13 +18,14 @@ class DailyWorkflowDependencies:
     build_daily_universe_context_fn: Callable[..., object]
     build_daily_composite_state_fn: Callable[..., tuple[object, list[dict[str, object]]]]
     build_daily_symbol_names_fn: Callable[..., dict[str, str]]
-    attach_daily_info_overlay_fn: Callable[..., tuple[object, str, str, bool, int, list[object], list[object], list[object], list[object]]]
+    attach_daily_info_overlay_fn: Callable[..., tuple[object, str, str, bool, int, list[object], list[object], list[object], list[object], object | None]]
     attach_daily_external_signal_overlay_fn: Callable[..., tuple[object, str, str, bool, dict[str, object], dict[str, object]]]
     attach_daily_insight_overlay_fn: Callable[..., object]
     filter_state_for_recommendation_scope_fn: Callable[..., object]
     apply_leader_candidate_overlay_fn: Callable[..., object]
     parse_boolish_fn: Callable[[object, bool], bool]
     resolve_daily_policy_model_fn: Callable[..., object | None]
+    resolve_daily_exit_behavior_model_fn: Callable[..., dict[str, object] | None]
     policy_spec_from_model_fn: Callable[..., PolicySpec]
     apply_policy_fn: Callable[..., object]
     build_execution_plans_fn: Callable[..., list[object]]
@@ -55,6 +56,7 @@ def run_daily_v2_live_impl(
     info_lookback_days: int | None = None,
     info_half_life_days: float | None = None,
     use_info_fusion: bool | None = None,
+    use_learned_info_fusion: bool | None = None,
     info_shadow_only: bool | None = None,
     info_types: str | None = None,
     info_source_mode: str | None = None,
@@ -90,6 +92,7 @@ def run_daily_v2_live_impl(
         info_lookback_days=info_lookback_days,
         info_half_life_days=info_half_life_days,
         use_info_fusion=use_info_fusion,
+        use_learned_info_fusion=use_learned_info_fusion,
         info_shadow_only=info_shadow_only,
         info_types=info_types,
         info_source_mode=info_source_mode,
@@ -163,6 +166,7 @@ def run_daily_v2_live_impl(
         top_positive_info_signals,
         quant_info_divergence,
         info_items,
+        shadow_info_state,
     ) = dependencies.attach_daily_info_overlay_fn(
         snapshot=snapshot,
         settings=settings,
@@ -204,6 +208,12 @@ def run_daily_v2_live_impl(
             manifest=manifest,
             manifest_path=manifest_path,
         )
+    exit_behavior_model = None
+    if dependencies.parse_boolish_fn(settings.get("enable_exit_behavior_overlay", True), True):
+        exit_behavior_model = dependencies.resolve_daily_exit_behavior_model_fn(
+            manifest=manifest,
+            manifest_path=manifest_path,
+        )
     active_policy_spec = None
     if learned_policy is not None:
         active_policy_spec = dependencies.policy_spec_from_model_fn(
@@ -224,6 +234,7 @@ def run_daily_v2_live_impl(
             current_cash=max(0.0, 1.0 - sum(current_weights.values())),
             total_equity=1.0,
             current_holding_days={symbol: 5 for symbol in current_weights},
+            exit_behavior_model=dict(exit_behavior_model or {}),
         ),
         policy_spec=active_policy_spec,
     )
@@ -244,13 +255,21 @@ def run_daily_v2_live_impl(
         manifest=manifest,
         manifest_path=manifest_path,
     )
+    reporting_state = composite_state
+    if shadow_info_state is not None and not dependencies.parse_boolish_fn(settings.get("use_info_fusion", False), False):
+        reporting_state = replace(
+            composite_state,
+            market_info_state=getattr(shadow_info_state, "market_info_state", composite_state.market_info_state),
+            sector_info_states=dict(getattr(shadow_info_state, "sector_info_states", {})),
+            stock_info_states=dict(getattr(shadow_info_state, "stock_info_states", {})),
+        )
     reporting_market, reporting_cross_section = dependencies.build_live_market_reporting_overlay_fn(
         settings=settings,
         universe_ctx=universe_ctx,
-        state=composite_state,
+        state=reporting_state,
     )
     composite_state = dependencies.decorate_composite_state_for_reporting_fn(
-        state=composite_state,
+        state=reporting_state,
         policy=policy_decision,
         calibration_priors=calibration_priors,
         reporting_market=reporting_market,

@@ -1,12 +1,14 @@
 from __future__ import annotations
 
 import json
+from dataclasses import replace
 import pandas as pd
 import pytest
 
 import src.application.v2_services as legacy_services
 from src.application import v2_policy_feature_runtime as policy_feature_runtime
 from src.application import v2_policy_runtime as policy_runtime
+from src.application.v2_signal_training_runtime import exit_model_feature_names
 from src.application.v2_leader_runtime import LeaderScoreSnapshot
 from src.application.v2_contracts import DailyRunResult, StrategySnapshot
 from src.application.v2_contracts import PolicyInput
@@ -28,6 +30,7 @@ from src.application.v2_contracts import (
     CandidateSelectionState,
     CompositeState,
     CrossSectionForecastState,
+    HorizonForecast,
     InfoAggregateState,
     MainlineState,
     MarketForecastState,
@@ -139,6 +142,73 @@ def _make_leader_policy_state(
         theme_episodes=list(theme_episodes or []),
         stock_role_states=dict(stock_role_states or {}),
     )
+
+
+def _make_horizon_forecasts(
+    *,
+    up_1d: float,
+    up_5d: float,
+    up_20d: float,
+    exp_5d: float,
+    exp_20d: float,
+) -> dict[str, HorizonForecast]:
+    return {
+        "1d": HorizonForecast(horizon_days=1, label="1d", up_prob=up_1d, expected_return=0.0, q50=0.0),
+        "5d": HorizonForecast(horizon_days=5, label="5d", up_prob=up_5d, expected_return=exp_5d, q50=exp_5d),
+        "20d": HorizonForecast(horizon_days=20, label="20d", up_prob=up_20d, expected_return=exp_20d, q50=exp_20d),
+    }
+
+
+def _make_risk_off_policy_state(stocks: list[StockForecastState]) -> CompositeState:
+    return CompositeState(
+        market=MarketForecastState(
+            as_of_date="2026-03-16",
+            up_1d_prob=0.44,
+            up_5d_prob=0.46,
+            up_20d_prob=0.47,
+            trend_state="risk_off",
+            drawdown_risk=0.68,
+            volatility_regime="normal",
+            liquidity_stress=0.62,
+        ),
+        cross_section=CrossSectionForecastState(
+            as_of_date="2026-03-16",
+            large_vs_small_bias=-0.02,
+            growth_vs_value_bias=-0.04,
+            fund_flow_strength=-0.08,
+            margin_risk_on_score=0.06,
+            breadth_strength=0.04,
+            leader_participation=0.46,
+            weak_stock_ratio=0.62,
+        ),
+        sectors=[SectorForecastState("power", 0.54, 0.57, 0.10, 0.28, 0.24)],
+        stocks=stocks,
+        strategy_mode="defensive",
+        risk_regime="risk_off",
+        candidate_selection=CandidateSelectionState(
+            shortlisted_symbols=[stock.symbol for stock in stocks],
+            shortlisted_sectors=["power"],
+            sector_slots={"power": 1},
+            total_scored=len(stocks),
+            shortlist_size=len(stocks),
+            shortlist_ratio=1.0,
+            selection_mode="macro_sector_ranking",
+            selection_notes=["test shortlist"],
+        ),
+    )
+
+
+def _make_exit_behavior_model(**feature_weights: float) -> dict[str, object]:
+    feature_names = exit_model_feature_names()
+    coef = [0.0] * len(feature_names)
+    for name, value in feature_weights.items():
+        coef[feature_names.index(name)] = float(value)
+    return {
+        "feature_names": feature_names,
+        "intercept": 0.05,
+        "coef": coef,
+        "threshold": 0.50,
+    }
 
 
 def test_v2_policy_returns_bounded_exposure_and_weights() -> None:
@@ -256,6 +326,528 @@ def test_v2_policy_reduces_exposure_under_risk_off_inputs() -> None:
     assert composite_state.risk_regime == "risk_off"
     assert decision.target_exposure <= 0.35
     assert decision.rebalance_now is True
+
+
+def test_v2_policy_blocks_weak_relative_leader_from_fresh_buy() -> None:
+    weak = StockForecastState(
+        symbol="WEAK",
+        sector="power",
+        up_1d_prob=0.505,
+        up_5d_prob=0.546,
+        up_20d_prob=0.482,
+        excess_vs_sector_prob=0.533,
+        event_impact_score=0.48,
+        tradeability_score=0.96,
+        up_2d_prob=0.51,
+        up_3d_prob=0.512,
+        horizon_forecasts=_make_horizon_forecasts(
+            up_1d=0.505,
+            up_5d=0.546,
+            up_20d=0.482,
+            exp_5d=-0.002,
+            exp_20d=-0.006,
+        ),
+    )
+    strong = StockForecastState(
+        symbol="STRONG",
+        sector="power",
+        up_1d_prob=0.542,
+        up_5d_prob=0.602,
+        up_20d_prob=0.575,
+        excess_vs_sector_prob=0.582,
+        event_impact_score=0.42,
+        tradeability_score=0.91,
+        up_2d_prob=0.552,
+        up_3d_prob=0.571,
+        horizon_forecasts=_make_horizon_forecasts(
+            up_1d=0.542,
+            up_5d=0.602,
+            up_20d=0.575,
+            exp_5d=0.013,
+            exp_20d=0.029,
+        ),
+    )
+
+    decision = apply_policy(
+        PolicyInput(
+            composite_state=_make_risk_off_policy_state([weak, strong]),
+            current_weights={},
+            current_cash=1.0,
+            total_equity=1.0,
+        )
+    )
+
+    assert "WEAK" not in decision.symbol_target_weights
+    assert "STRONG" in decision.symbol_target_weights
+    assert any("Absolute buy gate blocked" in note for note in decision.risk_notes)
+
+
+def test_v2_policy_buy_gate_does_not_force_liquidate_existing_holding() -> None:
+    weak = StockForecastState(
+        symbol="WEAK",
+        sector="power",
+        up_1d_prob=0.505,
+        up_5d_prob=0.542,
+        up_20d_prob=0.486,
+        excess_vs_sector_prob=0.53,
+        event_impact_score=0.50,
+        tradeability_score=0.95,
+        up_2d_prob=0.509,
+        up_3d_prob=0.511,
+        horizon_forecasts=_make_horizon_forecasts(
+            up_1d=0.505,
+            up_5d=0.542,
+            up_20d=0.486,
+            exp_5d=-0.001,
+            exp_20d=-0.003,
+        ),
+    )
+
+    decision = apply_policy(
+        PolicyInput(
+            composite_state=_make_risk_off_policy_state([weak]),
+            current_weights={"WEAK": 0.20},
+            current_cash=0.80,
+            total_equity=1.0,
+        )
+    )
+
+    assert decision.symbol_target_weights.get("WEAK", 0.0) > 0.0
+    assert any("minimum holding window active" in note for note in decision.execution_notes)
+    assert not any("WEAK: add-on blocked" in note for note in decision.execution_notes)
+
+
+def test_v2_policy_can_hold_cash_when_no_fresh_buy_passes_gate() -> None:
+    weak = StockForecastState(
+        symbol="WEAK",
+        sector="power",
+        up_1d_prob=0.498,
+        up_5d_prob=0.531,
+        up_20d_prob=0.478,
+        excess_vs_sector_prob=0.521,
+        event_impact_score=0.45,
+        tradeability_score=0.93,
+        up_2d_prob=0.501,
+        up_3d_prob=0.503,
+        horizon_forecasts=_make_horizon_forecasts(
+            up_1d=0.498,
+            up_5d=0.531,
+            up_20d=0.478,
+            exp_5d=-0.004,
+            exp_20d=-0.010,
+        ),
+    )
+
+    decision = apply_policy(
+        PolicyInput(
+            composite_state=_make_risk_off_policy_state([weak]),
+            current_weights={},
+            current_cash=1.0,
+            total_equity=1.0,
+        )
+    )
+
+    assert decision.symbol_target_weights == {}
+    assert any("No fresh long passed the absolute edge gate" in note for note in decision.risk_notes)
+
+
+def test_v2_policy_exit_model_only_ranks_trim_candidates_for_existing_holding() -> None:
+    stocks = [
+        StockForecastState(
+            "AAA",
+            "chips",
+            0.53,
+            0.58,
+            0.62,
+            0.58,
+            0.08,
+            0.93,
+            alpha_score=0.88,
+            up_2d_prob=0.54,
+            up_3d_prob=0.55,
+        ),
+        StockForecastState(
+            "BBB",
+            "chips",
+            0.57,
+            0.61,
+            0.65,
+            0.58,
+            0.08,
+            0.91,
+            alpha_score=0.76,
+            up_2d_prob=0.58,
+            up_3d_prob=0.59,
+        ),
+    ]
+    state = _make_leader_policy_state(
+        stocks=stocks,
+        theme_episodes=[
+            ThemeEpisode(
+                theme="chips",
+                phase="crowded",
+                conviction=0.74,
+                breadth=0.34,
+                leadership=0.31,
+                event_risk=0.61,
+                sectors=["chips"],
+                representative_symbols=["AAA"],
+            )
+        ],
+        stock_role_states={
+            "AAA": StockRoleSnapshot(
+                symbol="AAA",
+                theme="chips",
+                role="core",
+                previous_role="leader",
+                role_downgrade=True,
+            ),
+            "BBB": StockRoleSnapshot(symbol="BBB", theme="chips", role="leader"),
+        },
+    )
+    exit_model = _make_exit_behavior_model(
+        phase_crowded=0.45,
+        negative_score=0.35,
+        source_shortlist=0.25,
+        role_core=0.10,
+    )
+    spec = PolicySpec(risk_on_positions=2, cautious_positions=2, risk_off_positions=1)
+
+    baseline = apply_policy(
+        PolicyInput(
+            composite_state=state,
+            current_weights={"AAA": 0.25},
+            current_cash=0.75,
+            total_equity=1.0,
+            current_holding_days={"AAA": 8},
+        ),
+        policy_spec=spec,
+    )
+    ranked = apply_policy(
+        PolicyInput(
+            composite_state=state,
+            current_weights={"AAA": 0.25},
+            current_cash=0.75,
+            total_equity=1.0,
+            current_holding_days={"AAA": 8},
+            exit_behavior_model=exit_model,
+        ),
+        policy_spec=spec,
+    )
+
+    assert ranked.symbol_target_weights == baseline.symbol_target_weights
+    assert ranked.desired_symbol_target_weights == baseline.desired_symbol_target_weights
+    assert ranked.trim_candidate_scores["AAA"] > 0.0
+    assert ranked.trim_candidate_ranks["AAA"] == 1
+    assert ranked.trim_candidate_labels["AAA"] in {"watch", "reduce", "exit_fast"}
+    assert any("Exit ranking overlay:" in note for note in ranked.risk_notes)
+
+
+def test_v2_policy_exit_model_does_not_change_fresh_buy_allocation() -> None:
+    stocks = [
+        StockForecastState(
+            "AAA",
+            "chips",
+            0.59,
+            0.64,
+            0.68,
+            0.60,
+            0.09,
+            0.93,
+            alpha_score=0.80,
+            up_2d_prob=0.60,
+            up_3d_prob=0.61,
+        ),
+        StockForecastState(
+            "BBB",
+            "chips",
+            0.57,
+            0.61,
+            0.65,
+            0.58,
+            0.08,
+            0.91,
+            alpha_score=0.76,
+            up_2d_prob=0.58,
+            up_3d_prob=0.59,
+        ),
+    ]
+    state = _make_leader_policy_state(
+        stocks=stocks,
+        theme_episodes=[
+            ThemeEpisode(
+                theme="chips",
+                phase="crowded",
+                conviction=0.74,
+                breadth=0.34,
+                leadership=0.31,
+                event_risk=0.61,
+                sectors=["chips"],
+                representative_symbols=["AAA"],
+            )
+        ],
+        stock_role_states={
+            "AAA": StockRoleSnapshot(
+                symbol="AAA",
+                theme="chips",
+                role="core",
+                previous_role="leader",
+                role_downgrade=True,
+            ),
+            "BBB": StockRoleSnapshot(symbol="BBB", theme="chips", role="leader"),
+        },
+    )
+    exit_model = _make_exit_behavior_model(
+        phase_crowded=0.45,
+        negative_score=0.35,
+        source_shortlist=0.25,
+        role_core=0.10,
+    )
+    spec = PolicySpec(risk_on_positions=2, cautious_positions=2, risk_off_positions=1)
+
+    baseline = apply_policy(
+        PolicyInput(
+            composite_state=state,
+            current_weights={},
+            current_cash=1.0,
+            total_equity=1.0,
+        ),
+        policy_spec=spec,
+    )
+    with_exit_model = apply_policy(
+        PolicyInput(
+            composite_state=state,
+            current_weights={},
+            current_cash=1.0,
+            total_equity=1.0,
+            exit_behavior_model=exit_model,
+        ),
+        policy_spec=spec,
+    )
+
+    assert with_exit_model.desired_symbol_target_weights == baseline.desired_symbol_target_weights
+    assert with_exit_model.symbol_target_weights == baseline.symbol_target_weights
+    assert with_exit_model.trim_candidate_scores == {}
+
+
+def test_v2_policy_risk_off_requires_forward_return_buffer_for_fresh_buy() -> None:
+    thin = StockForecastState(
+        symbol="THIN",
+        sector="power",
+        up_1d_prob=0.542,
+        up_5d_prob=0.556,
+        up_20d_prob=0.561,
+        excess_vs_sector_prob=0.56,
+        event_impact_score=0.44,
+        tradeability_score=0.93,
+        up_2d_prob=0.549,
+        up_3d_prob=0.558,
+        horizon_forecasts=_make_horizon_forecasts(
+            up_1d=0.542,
+            up_5d=0.556,
+            up_20d=0.561,
+            exp_5d=0.004,
+            exp_20d=0.001,
+        ),
+    )
+    strong = StockForecastState(
+        symbol="STRONG",
+        sector="power",
+        up_1d_prob=0.548,
+        up_5d_prob=0.602,
+        up_20d_prob=0.585,
+        excess_vs_sector_prob=0.58,
+        event_impact_score=0.42,
+        tradeability_score=0.91,
+        up_2d_prob=0.552,
+        up_3d_prob=0.571,
+        horizon_forecasts=_make_horizon_forecasts(
+            up_1d=0.548,
+            up_5d=0.602,
+            up_20d=0.585,
+            exp_5d=0.013,
+            exp_20d=0.029,
+        ),
+    )
+
+    decision = apply_policy(
+        PolicyInput(
+            composite_state=_make_risk_off_policy_state([thin, strong]),
+            current_weights={},
+            current_cash=1.0,
+            total_equity=1.0,
+        )
+    )
+
+    assert "THIN" not in decision.symbol_target_weights
+    assert "THIN" in decision.blocked_fresh_candidates
+    assert "20d_exp_buffer<0.008" in decision.blocked_fresh_candidates["THIN"]
+    assert "STRONG" in decision.symbol_target_weights
+
+
+def test_v2_policy_risk_off_pilot_allows_small_probe_for_info_backed_leader() -> None:
+    pilot = StockForecastState(
+        symbol="PILOT",
+        sector="power",
+        up_1d_prob=0.546,
+        up_5d_prob=0.607,
+        up_20d_prob=0.568,
+        excess_vs_sector_prob=0.593,
+        event_impact_score=0.34,
+        tradeability_score=0.94,
+        alpha_score=0.78,
+        up_2d_prob=0.554,
+        up_3d_prob=0.571,
+        horizon_forecasts=_make_horizon_forecasts(
+            up_1d=0.546,
+            up_5d=0.607,
+            up_20d=0.568,
+            exp_5d=0.011,
+            exp_20d=0.005,
+        ),
+    )
+    state = replace(
+        _make_risk_off_policy_state([pilot]),
+        market_info_state=InfoAggregateState(
+            catalyst_strength=0.70,
+            negative_event_risk=0.10,
+        ),
+        stock_info_states={
+            "PILOT": InfoAggregateState(
+                catalyst_strength=0.82,
+                coverage_confidence=0.90,
+                info_prob_5d=0.60,
+                info_prob_20d=0.57,
+                shadow_prob_20d=0.60,
+            )
+        },
+        theme_episodes=[
+            ThemeEpisode(
+                theme="power_up",
+                phase="fading",
+                conviction=0.58,
+                breadth=0.26,
+                leadership=0.62,
+                catalyst_strength=0.70,
+                event_risk=0.22,
+                representative_symbols=["PILOT"],
+                sectors=["power"],
+            )
+        ],
+        stock_role_states={
+            "PILOT": StockRoleSnapshot(
+                symbol="PILOT",
+                theme="power_up",
+                role="leader",
+                theme_rank=1,
+                theme_size=6,
+                theme_percentile=1.0,
+                alpha_score=0.78,
+                excess_vs_sector=0.593,
+                breakdown_risk=0.08,
+            )
+        },
+    )
+
+    decision = apply_policy(
+        PolicyInput(
+            composite_state=state,
+            current_weights={},
+            current_cash=1.0,
+            total_equity=1.0,
+        )
+    )
+
+    assert "PILOT" in decision.symbol_target_weights
+    assert "PILOT" not in decision.blocked_fresh_candidates
+    assert decision.target_position_count == 1
+    assert 0.08 <= decision.target_exposure <= 0.12
+    assert any("Risk-off pilot unlocked" in note for note in decision.risk_notes)
+    assert any("Risk-off pilot sizing active" in note for note in decision.risk_notes)
+
+
+def test_v2_policy_cautious_blocks_thin_forward_edge_even_when_probs_look_ok() -> None:
+    sectors = [SectorForecastState("Stable", 0.60, 0.66, 0.18, 0.20, 0.18)]
+    market = MarketForecastState(
+        as_of_date="2026-03-01",
+        up_1d_prob=0.52,
+        up_5d_prob=0.54,
+        up_20d_prob=0.56,
+        trend_state="range",
+        drawdown_risk=0.34,
+        volatility_regime="normal",
+        liquidity_stress=0.24,
+    )
+    cross_section = CrossSectionForecastState(
+        as_of_date="2026-03-01",
+        large_vs_small_bias=0.01,
+        growth_vs_value_bias=-0.01,
+        fund_flow_strength=0.02,
+        margin_risk_on_score=0.04,
+        breadth_strength=0.08,
+        leader_participation=0.52,
+        weak_stock_ratio=0.50,
+    )
+    thin = StockForecastState(
+        "THIN_C",
+        "Stable",
+        0.56,
+        0.585,
+        0.558,
+        0.57,
+        0.10,
+        0.90,
+        alpha_score=0.64,
+        up_2d_prob=0.57,
+        up_3d_prob=0.575,
+        horizon_forecasts=_make_horizon_forecasts(
+            up_1d=0.56,
+            up_5d=0.585,
+            up_20d=0.558,
+            exp_5d=0.001,
+            exp_20d=0.002,
+        ),
+    )
+    strong = StockForecastState(
+        "STRONG_C",
+        "Stable",
+        0.57,
+        0.62,
+        0.60,
+        0.60,
+        0.12,
+        0.91,
+        alpha_score=0.67,
+        up_2d_prob=0.59,
+        up_3d_prob=0.60,
+        horizon_forecasts=_make_horizon_forecasts(
+            up_1d=0.57,
+            up_5d=0.62,
+            up_20d=0.60,
+            exp_5d=0.012,
+            exp_20d=0.026,
+        ),
+    )
+
+    composite_state = compose_state(
+        market=market,
+        sectors=sectors,
+        stocks=[thin, strong],
+        cross_section=cross_section,
+    )
+    decision = apply_policy(
+        PolicyInput(
+            composite_state=composite_state,
+            current_weights={},
+            current_cash=1.0,
+            total_equity=1.0,
+        )
+    )
+
+    assert composite_state.risk_regime == "cautious"
+    assert "THIN_C" in decision.blocked_fresh_candidates
+    assert "forward_edge_too_thin" in decision.blocked_fresh_candidates["THIN_C"]
+    assert "STRONG_C" in decision.symbol_target_weights
 
 
 def test_compose_state_sorts_best_sector_and_stock_first() -> None:
@@ -2715,6 +3307,8 @@ def test_run_daily_v2_live_info_shadow_only_keeps_trade_plan_stable(
 
     assert baseline.policy_decision.target_exposure == shadow.policy_decision.target_exposure
     assert baseline.trade_actions == shadow.trade_actions
+    assert baseline.composite_state.market_info_state.item_count > 0
+    assert baseline.composite_state.stock_info_states["000630.SZ"].item_count > 0
     assert shadow.info_shadow_enabled is True
     assert shadow.info_item_count == 2
     assert shadow.top_negative_info_events

@@ -27,6 +27,7 @@ class _BaseRuntimeOptions:
     info_lookback_days: int | None = None
     info_half_life_days: float | None = None
     use_info_fusion: bool | None = None
+    use_learned_info_fusion: bool | None = None
     info_shadow_only: bool | None = None
     info_types: str | None = None
     info_source_mode: str | None = None
@@ -59,6 +60,7 @@ class _BaseRuntimeOptions:
             "info_lookback_days": self.info_lookback_days,
             "info_half_life_days": self.info_half_life_days,
             "use_info_fusion": self.use_info_fusion,
+            "use_learned_info_fusion": self.use_learned_info_fusion,
             "info_shadow_only": self.info_shadow_only,
             "info_types": self.info_types,
             "info_source_mode": self.info_source_mode,
@@ -104,6 +106,7 @@ class ResearchRunOptions(_BaseRuntimeOptions):
             info_lookback_days=args.info_lookback_days,
             info_half_life_days=args.info_half_life_days,
             use_info_fusion=args.use_info_fusion,
+            use_learned_info_fusion=getattr(args, "use_learned_info_fusion", None),
             info_shadow_only=args.info_shadow_only,
             info_types=args.info_types,
             info_source_mode=args.info_source_mode,
@@ -189,6 +192,7 @@ class DailyRunOptions(_BaseRuntimeOptions):
             info_lookback_days=args.info_lookback_days,
             info_half_life_days=args.info_half_life_days,
             use_info_fusion=args.use_info_fusion,
+            use_learned_info_fusion=getattr(args, "use_learned_info_fusion", None),
             info_shadow_only=args.info_shadow_only,
             info_types=args.info_types,
             info_source_mode=args.info_source_mode,

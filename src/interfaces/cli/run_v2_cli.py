@@ -54,6 +54,19 @@ def _add_info_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--info-half-life-days", dest="info_half_life_days", type=float, default=None, help="Info half life")
     parser.add_argument("--use-info-fusion", dest="use_info_fusion", action="store_true", default=None, help="Enable info shadow evaluation")
     parser.add_argument("--no-use-info-fusion", dest="use_info_fusion", action="store_false", help="Disable info shadow evaluation")
+    parser.add_argument(
+        "--use-learned-info-fusion",
+        dest="use_learned_info_fusion",
+        action="store_true",
+        default=None,
+        help="Enable learned info shadow fitting and reporting",
+    )
+    parser.add_argument(
+        "--no-use-learned-info-fusion",
+        dest="use_learned_info_fusion",
+        action="store_false",
+        help="Disable learned info shadow fitting and reporting",
+    )
     parser.add_argument("--info-shadow-only", dest="info_shadow_only", action="store_true", default=None, help="Keep info in shadow-only mode")
     parser.add_argument("--no-info-shadow-only", dest="info_shadow_only", action="store_false", help="Disable shadow-only flag")
     parser.add_argument("--info-types", dest="info_types", default=None, help="Comma-separated info types")

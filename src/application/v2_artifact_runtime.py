@@ -54,3 +54,23 @@ def resolve_daily_policy_model(
             artifact_root=artifact_root,
         )
     return learned_policy
+
+
+def resolve_manifest_json_artifact(
+    *,
+    manifest: dict[str, object],
+    manifest_path: Path | None,
+    manifest_key: str,
+    path_from_manifest_entry: Callable[..., Path | None],
+    load_json_dict: Callable[[object], dict[str, object]],
+) -> dict[str, object] | None:
+    if not manifest or manifest_path is None:
+        return None
+    artifact_path = path_from_manifest_entry(
+        manifest.get(str(manifest_key)),
+        run_dir=manifest_path.parent,
+    )
+    if artifact_path is None:
+        return None
+    payload = load_json_dict(artifact_path)
+    return payload if payload else None

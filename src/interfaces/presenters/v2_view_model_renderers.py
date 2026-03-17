@@ -28,10 +28,12 @@ def _money(value: float) -> str:
 def render_daily_markdown(view_model: DailyReportViewModel) -> str:
     metadata = view_model.metadata
     market_summary = view_model.market_summary
+    info_summary = dict(view_model.info_summary)
     sentiment = dict(market_summary.get("sentiment", {}))
     facts = dict(market_summary.get("facts", {}))
     risk_notes = list(market_summary.get("risk_notes", []))
     recall = dict(view_model.memory_summary.get("recall", {}))
+    market_info = dict(info_summary.get("market_info_state", {}))
     capital_flow = dict(view_model.external_signals.get("capital_flow", {}))
     macro_context = dict(view_model.external_signals.get("macro_context", {}))
     candidate_selection = dict(view_model.dynamic_universe.get("candidate_selection", {}))
@@ -182,17 +184,32 @@ def render_daily_markdown(view_model: DailyReportViewModel) -> str:
             )
     lines.append("")
 
-    lines.append("## Top20 推荐")
+    lines.append("## 预测监控榜")
     lines.append("")
-    lines.append("| 排名 | 股票 | 行业 | 下一交易日区间 | 5日中位预期 | 20日中位预期 | 1日上涨概率 | 置信度 |")
-    lines.append("|---:|---|---|---:|---:|---:|---:|---:|")
-    if not view_model.top_recommendations:
-        lines.append("| 1 | NA | NA | NA | NA | NA | NA | NA |")
+    lines.append("| 排名 | 股票 | 行业 | 下一交易日区间 | 5日中位预期 | 20日中位预期 | 1日上涨概率 | 可执行分 | 状态 |")
+    lines.append("|---:|---|---|---:|---:|---:|---:|---:|---|")
+    if not view_model.monitor_recommendations:
+        lines.append("| 1 | NA | NA | NA | NA | NA | NA | NA | NA |")
     else:
-        for item in view_model.top_recommendations:
+        for item in view_model.monitor_recommendations:
             lines.append(
                 f"| {int(item['rank'])} | {item['name']} ({item['symbol']}) | {item['sector']} | {item['next_session_range']} | "
-                f"{_pct(float(item['median_5d']))} | {_pct(float(item['median_20d']))} | {_pct(float(item['up_prob_1d']))} | {_pct(float(item['confidence_1d']))} |"
+                f"{_pct(float(item['median_5d']))} | {_pct(float(item['median_20d']))} | {_pct(float(item['up_prob_1d']))} | "
+                f"{_pct(float(item['actionability_score']))} | {item['execution_status']} |"
+            )
+    lines.append("")
+
+    lines.append("## 可执行候选榜")
+    lines.append("")
+    lines.append("| 排名 | 股票 | 行业 | 可执行分 | 目标权重 | 下一交易日区间 | 1日上涨概率 | 备注 |")
+    lines.append("|---:|---|---|---:|---:|---|---:|---|")
+    if not view_model.actionable_recommendations:
+        lines.append("| 1 | NA | NA | NA | NA | NA | NA | 当前无新开仓候选 |")
+    else:
+        for item in view_model.actionable_recommendations:
+            lines.append(
+                f"| {int(item['rank'])} | {item['name']} ({item['symbol']}) | {item['sector']} | {_pct(float(item['actionability_score']))} | "
+                f"{_pct(float(item['target_weight']))} | {item['next_session_range']} | {_pct(float(item['up_prob_1d']))} | {item['execution_status']} |"
             )
     lines.append("")
 
@@ -252,6 +269,9 @@ def render_daily_markdown(view_model: DailyReportViewModel) -> str:
         lines.append(
             f"- 多周期判断: 5日 {_pct(float(item['median_5d']))} / 10日 {_pct(float(item['median_10d']))} / 20日 {_pct(float(item['median_20d']))}"
         )
+        lines.append(
+            f"- 可执行状态: {item['execution_status']}，可执行分 {_pct(float(item['actionability_score']))}，备注: {item['gate_reason']}"
+        )
         if item["selection_reasons"]:
             lines.append(f"- 入池原因: {'；'.join(str(v) for v in item['selection_reasons'])}")
         if item["ranking_reasons"]:
@@ -282,6 +302,35 @@ def render_daily_markdown(view_model: DailyReportViewModel) -> str:
             )
     for note in view_model.prediction_review.get("notes", []):
         lines.append(f"- {note}")
+    if info_summary:
+        lines.append("")
+        lines.append("## 淇℃伅灞傛憳瑕?")
+        lines.append("")
+        lines.append("| 鎸囨爣 | 鏁板€?|")
+        lines.append("|---|---:|")
+        lines.append(f"| info shadow enabled | {'true' if info_summary.get('shadow_enabled') else 'false'} |")
+        lines.append(f"| info items | {int(info_summary.get('item_count', 0))} |")
+        lines.append(f"| market catalyst | {_pct(float(market_info.get('catalyst_strength', float('nan'))))} |")
+        lines.append(f"| market event risk | {_pct(float(market_info.get('event_risk_level', float('nan'))))} |")
+        lines.append(f"| market negative risk | {_pct(float(market_info.get('negative_event_risk', float('nan'))))} |")
+        lines.append(f"| market coverage | {_pct(float(market_info.get('coverage_confidence', float('nan'))))} |")
+        for item in info_summary.get("top_negative_events", []):
+            lines.append(
+                f"- negative: {item.get('target_name') or item.get('target')} | {item.get('title')} | "
+                f"risk={_pct(float(item.get('negative_event_risk', float('nan'))))}"
+            )
+        for item in info_summary.get("top_positive_signals", []):
+            lines.append(
+                f"- positive: {item.get('target_name') or item.get('target')} | {item.get('title')} | "
+                f"score={_num(float(item.get('score', float('nan'))), 2)}"
+            )
+        for item in info_summary.get("quant_info_divergence", []):
+            lines.append(
+                f"- divergence: {item.get('name') or item.get('symbol')} | "
+                f"quant20={_pct(float(item.get('quant_prob_20d', float('nan'))))} | "
+                f"shadow20={_pct(float(item.get('shadow_prob_20d', float('nan'))))} | "
+                f"gap={_pct(float(item.get('gap', float('nan'))))}"
+            )
     return "\n".join(lines)
 
 
@@ -401,12 +450,14 @@ def render_daily_html(view_model: DailyReportViewModel) -> str:
     metadata = view_model.metadata
     sentiment = dict(view_model.market_summary.get("sentiment", {}))
     facts = dict(view_model.market_summary.get("facts", {}))
+    info_summary = dict(view_model.info_summary)
+    market_info = dict(info_summary.get("market_info_state", {}))
     candidate_selection = dict(view_model.dynamic_universe.get("candidate_selection", {}))
     selection_notes = " | ".join(str(item) for item in candidate_selection.get("selection_notes", [])[:2]) or "Full ranking in use."
     shortlist_text = (
         f"{int(candidate_selection.get('shortlist_size', 0))}/{int(candidate_selection.get('total_scored', 0))} shortlisted"
         if candidate_selection.get("shortlist_size") and candidate_selection.get("total_scored")
-        else f"{len(view_model.top_recommendations)} names scored"
+        else f"{len(view_model.monitor_recommendations)} names scored"
     )
     recurring_symbols = ", ".join(str(item) for item in view_model.memory_summary.get("recall", {}).get("recurring_symbols", [])[:4]) or "NA"
     capital_flow = dict(view_model.external_signals.get("capital_flow", {}))
@@ -421,7 +472,7 @@ def render_daily_html(view_model: DailyReportViewModel) -> str:
         "</tr>"
         for item in view_model.market_forecasts
     )
-    top20_rows = "".join(
+    monitor_rows = "".join(
         "<tr>"
         f"<td>{int(item['rank'])}</td>"
         f"<td><div class='ticker'>{escape(str(item['name']))}</div><div class='ticker-sub'>{escape(str(item['symbol']))}</div></td>"
@@ -430,9 +481,23 @@ def render_daily_html(view_model: DailyReportViewModel) -> str:
         f"<td>{_pct(float(item['median_5d']))}</td>"
         f"<td>{_pct(float(item['median_20d']))}</td>"
         f"<td>{_pct(float(item['up_prob_1d']))}</td>"
-        f"<td>{_pct(float(item['confidence_1d']))}</td>"
+        f"<td>{_pct(float(item['actionability_score']))}</td>"
+        f"<td>{escape(str(item['execution_status']))}</td>"
         "</tr>"
-        for item in view_model.top_recommendations
+        for item in view_model.monitor_recommendations
+    )
+    actionable_rows = "".join(
+        "<tr>"
+        f"<td>{int(item['rank'])}</td>"
+        f"<td><div class='ticker'>{escape(str(item['name']))}</div><div class='ticker-sub'>{escape(str(item['symbol']))}</div></td>"
+        f"<td>{escape(str(item['sector']))}</td>"
+        f"<td>{_pct(float(item['actionability_score']))}</td>"
+        f"<td>{_pct(float(item['target_weight']))}</td>"
+        f"<td>{escape(str(item['next_session_range']))}</td>"
+        f"<td>{_pct(float(item['up_prob_1d']))}</td>"
+        f"<td>{escape(str(item['execution_status']))}</td>"
+        "</tr>"
+        for item in view_model.actionable_recommendations
     )
     action_rows = "".join(
         "<tr>"
@@ -500,6 +565,7 @@ def render_daily_html(view_model: DailyReportViewModel) -> str:
         f"<p><strong>下一交易日({escape(view_model.next_session or 'NA')})</strong>: {escape(str(item['next_session_range']))}，上涨概率 {_pct(float(item['one_day_up_prob']))}，置信度 {_pct(float(item['one_day_confidence']))}</p>"
         f"<p><strong>入池原因</strong>: {escape('；'.join(str(v) for v in item['selection_reasons']) or '综合排序靠前')}</p>"
         f"<p><strong>排名原因</strong>: {escape('；'.join(str(v) for v in item['ranking_reasons']) or '综合排序稳定')}</p>"
+        f"<p><strong>可执行状态</strong>: {escape(str(item['execution_status']))} | 可执行分 {_pct(float(item['actionability_score']))} | {escape(str(item['gate_reason']))}</p>"
         f"<p><strong>{'操作原因' if item['selected'] else '未入组合原因'}</strong>: {escape(str(item['action_reason'] if item['selected'] else item['blocked_reason'] or item['weight_reason'] or 'NA'))}</p>"
         f"<p><strong>风险点</strong>: {escape('；'.join(str(v) for v in item['risk_flags']) or '暂无显著硬风险')}</p>"
         f"<p><strong>失效条件</strong>: {escape(str(item['invalidation_rule'] or '跌破预期下沿且5日概率转弱'))}</p>"
@@ -522,6 +588,32 @@ def render_daily_html(view_model: DailyReportViewModel) -> str:
         f"<td>{escape(str(item['note'] or 'NA'))}</td>"
         "</tr>"
         for item in view_model.prediction_review.get("windows", [])
+    )
+    info_rows = "".join(
+        "<tr>"
+        f"<td>{escape(str(label))}</td>"
+        f"<td>{escape(str(value))}</td>"
+        "</tr>"
+        for label, value in [
+            ("info shadow enabled", "true" if info_summary.get("shadow_enabled") else "false"),
+            ("info items", int(info_summary.get("item_count", 0))),
+            ("market catalyst", _pct(float(market_info.get("catalyst_strength", float("nan"))))),
+            ("market event risk", _pct(float(market_info.get("event_risk_level", float("nan"))))),
+            ("market negative risk", _pct(float(market_info.get("negative_event_risk", float("nan"))))),
+            ("market coverage", _pct(float(market_info.get("coverage_confidence", float("nan"))))),
+        ]
+    )
+    info_note_rows = "".join(
+        f"<li>negative | {escape(str(item.get('target_name') or item.get('target')))} | {escape(str(item.get('title')))} | risk {escape(_pct(float(item.get('negative_event_risk', float('nan')))))}</li>"
+        for item in info_summary.get("top_negative_events", [])
+    )
+    info_note_rows += "".join(
+        f"<li>positive | {escape(str(item.get('target_name') or item.get('target')))} | {escape(str(item.get('title')))} | score {escape(_num(float(item.get('score', float('nan'))), 2))}</li>"
+        for item in info_summary.get("top_positive_signals", [])
+    )
+    info_note_rows += "".join(
+        f"<li>divergence | {escape(str(item.get('name') or item.get('symbol')))} | quant20 {escape(_pct(float(item.get('quant_prob_20d', float('nan')))))} | shadow20 {escape(_pct(float(item.get('shadow_prob_20d', float('nan')))))} | gap {escape(_pct(float(item.get('gap', float('nan')))))}</li>"
+        for item in info_summary.get("quant_info_divergence", [])
     )
 
     return f"""<!doctype html>
@@ -605,13 +697,15 @@ def render_daily_html(view_model: DailyReportViewModel) -> str:
     <section class="panel"><h2>Dynamic Universe Funnel</h2><p class="muted">coarse {int(view_model.dynamic_universe.get('coarse_pool_size', 0))} | refined {int(view_model.dynamic_universe.get('refined_pool_size', 0))} | selected {int(view_model.dynamic_universe.get('selected_pool_size', 0))}</p><p class="muted">{escape(str(view_model.dynamic_universe.get('generator_version', 'NA')))} | {escape(shortlist_text)}</p><p class="muted">{escape(selection_notes)}</p></section>
     <section class="panel"><h2>当日主线列表</h2><div class="table-wrap"><table><thead><tr><th>主线</th><th>phase</th><th>conviction</th><th>breadth</th><th>leadership</th><th>event_risk</th><th>说明</th></tr></thead><tbody>{theme_rows or "<tr><td colspan='7'>暂无 insight 主线</td></tr>"}</tbody></table></div></section>
     <section class="panel"><h2>龙头候选</h2><div class="table-wrap"><table><thead><tr><th>股票</th><th>主线</th><th>phase</th><th>role</th><th>candidate</th><th>conviction</th><th>negative</th><th>说明</th></tr></thead><tbody>{leader_candidate_rows or "<tr><td colspan='8'>暂无龙头候选</td></tr>"}</tbody></table></div></section>
-    <section class="panel"><h2>Top20 推荐</h2><div class="table-wrap"><table><thead><tr><th>排名</th><th>股票</th><th>行业</th><th>下一交易日区间</th><th>5日中位预期</th><th>20日中位预期</th><th>1日上涨概率</th><th>置信度</th></tr></thead><tbody>{top20_rows or "<tr><td colspan='8'>暂无候选</td></tr>"}</tbody></table></div></section>
+    <section class="panel"><h2>预测监控榜</h2><div class="table-wrap"><table><thead><tr><th>排名</th><th>股票</th><th>行业</th><th>下一交易日区间</th><th>5日中位预期</th><th>20日中位预期</th><th>1日上涨概率</th><th>可执行分</th><th>状态</th></tr></thead><tbody>{monitor_rows or "<tr><td colspan='9'>暂无监控候选</td></tr>"}</tbody></table></div></section>
+    <section class="panel"><h2>可执行候选榜</h2><div class="table-wrap"><table><thead><tr><th>排名</th><th>股票</th><th>行业</th><th>可执行分</th><th>目标权重</th><th>下一交易日区间</th><th>1日上涨概率</th><th>备注</th></tr></thead><tbody>{actionable_rows or "<tr><td colspan='8'>当前无新开仓候选</td></tr>"}</tbody></table></div></section>
     <section class="panel"><h2>实际操作</h2><div class="table-wrap"><table><thead><tr><th>股票</th><th>动作</th><th>当前权重</th><th>目标权重</th><th>权重变化</th><th>操作理由</th></tr></thead><tbody>{action_rows or "<tr><td colspan='6'>当前不触发调仓</td></tr>"}</tbody></table></div></section>
     <section class="panel"><h2>持仓角色变化</h2><div class="table-wrap"><table><thead><tr><th>股票</th><th>主线</th><th>当前角色</th><th>前序角色</th><th>角色降级</th><th>备注</th></tr></thead><tbody>{role_change_rows or "<tr><td colspan='6'>暂无角色变化</td></tr>"}</tbody></table></div></section>
     <section class="panel"><h2>次日执行计划</h2><div class="table-wrap"><table><thead><tr><th>股票</th><th>bias</th><th>buy_zone</th><th>avoid_zone</th><th>reduce_if</th><th>exit_if</th><th>reason</th></tr></thead><tbody>{execution_plan_rows or "<tr><td colspan='7'>暂无执行计划</td></tr>"}</tbody></table></div></section>
     <section class="stock-grid">{cards_html or "<div class='panel'>暂无解释卡</div>"}</section>
     <section class="panel"><h2>Mainline Radar</h2><ul class="list">{mainline_rows or "<li>暂无主线</li>"}</ul></section>
     <section class="panel"><h2>预测复盘</h2><div class="table-wrap"><table><thead><tr><th>窗口</th><th>命中参考</th><th>平均边际</th><th>近窗表现</th><th>样本数</th><th>说明</th></tr></thead><tbody>{review_rows or "<tr><td colspan='6'>暂无复盘数据</td></tr>"}</tbody></table></div><p class="muted">{escape('；'.join(str(item) for item in view_model.prediction_review.get('notes', [])))}</p></section>
+    <section class="panel"><h2>淇℃伅灞傛憳瑕?</h2><div class="table-wrap"><table><thead><tr><th>metric</th><th>value</th></tr></thead><tbody>{info_rows}</tbody></table></div><ul class="list">{info_note_rows or "<li>NA</li>"}</ul></section>
   </main>
 </body>
 </html>

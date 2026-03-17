@@ -3,7 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 import pickle
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any, Callable
 
@@ -56,6 +56,11 @@ class BacktestPrepareDependencies:
     prepare_v2_backtest_data: Callable[..., object]
     build_v2_backtest_trajectory_from_prepared: Callable[..., object]
     parse_boolish: Callable[[object, bool], bool]
+    load_v2_info_items_for_date: Callable[..., tuple[str, list[object]]]
+    enrich_state_with_info: Callable[..., object]
+    attach_external_signals_to_composite_state: Callable[..., tuple[object, dict[str, object]]]
+    attach_insight_memory_to_state: Callable[..., object]
+    sha256_file: Callable[[object], str]
 
 
 def trajectory_cache_key(
@@ -73,9 +78,10 @@ def trajectory_cache_key(
     use_cn_etf_context: bool,
     cn_etf_source: str,
     training_window_days: int | None,
+    overlay_cache_token: str = "",
 ) -> str:
     payload = {
-        "version": "v2-trajectory-cache-4",
+        "version": "v2-trajectory-cache-5",
         "config_path": str(Path(config_path).resolve()),
         "source": "" if source is None else str(source),
         "universe_file": "" if universe_file is None else str(Path(universe_file).resolve()),
@@ -89,9 +95,228 @@ def trajectory_cache_key(
         "use_cn_etf_context": bool(use_cn_etf_context),
         "cn_etf_source": str(cn_etf_source),
         "training_window_days": None if training_window_days is None else int(training_window_days),
+        "overlay_cache_token": str(overlay_cache_token),
     }
     raw = json.dumps(payload, sort_keys=True, ensure_ascii=False)
     return hashlib.sha256(raw.encode("utf-8")).hexdigest()[:24]
+
+
+def _normalized_path(value: object) -> str:
+    text = str(value or "").strip()
+    if not text:
+        return ""
+    try:
+        return str(Path(text).resolve())
+    except Exception:
+        return text
+
+
+def _hashed_path(value: object, *, deps: BacktestPrepareDependencies) -> str:
+    text = str(value or "").strip()
+    if not text:
+        return ""
+    try:
+        return str(deps.sha256_file(text))
+    except Exception:
+        return ""
+
+
+def _research_overlay_cache_token(
+    *,
+    settings: dict[str, object],
+    deps: BacktestPrepareDependencies,
+) -> str:
+    payload = {
+        "use_info_fusion": bool(settings.get("use_info_fusion", False)),
+        "use_learned_info_fusion": bool(settings.get("use_learned_info_fusion", settings.get("use_learned_news_fusion", False))),
+        "external_signals": bool(settings.get("external_signals", True)),
+        "enable_insight_memory": bool(settings.get("enable_insight_memory", True)),
+        "info_source_mode": str(settings.get("info_source_mode", "layered")),
+        "info_types": [str(item) for item in settings.get("info_types", [])],
+        "info_subsets": [str(item) for item in settings.get("info_subsets", [])],
+        "announcement_event_tags": [str(item) for item in settings.get("announcement_event_tags", [])],
+        "info_lookback_days": int(settings.get("info_lookback_days", 45)),
+        "event_lookback_days": int(settings.get("event_lookback_days", settings.get("info_lookback_days", 45))),
+        "capital_flow_lookback_days": int(settings.get("capital_flow_lookback_days", 20)),
+        "macro_lookback_days": int(settings.get("macro_lookback_days", 60)),
+        "info_half_life_days": float(settings.get("info_half_life_days", 10.0)),
+        "external_signal_version": str(settings.get("external_signal_version", "v1")),
+        "info_file": _normalized_path(settings.get("info_file", "")),
+        "info_file_hash": _hashed_path(settings.get("info_file", ""), deps=deps),
+        "event_file": _normalized_path(settings.get("event_file", "")),
+        "event_file_hash": _hashed_path(settings.get("event_file", ""), deps=deps),
+        "news_file": _normalized_path(settings.get("news_file", "")),
+        "news_file_hash": _hashed_path(settings.get("news_file", ""), deps=deps),
+        "capital_flow_file": _normalized_path(settings.get("capital_flow_file", "")),
+        "capital_flow_file_hash": _hashed_path(settings.get("capital_flow_file", ""), deps=deps),
+        "macro_file": _normalized_path(settings.get("macro_file", "")),
+        "macro_file_hash": _hashed_path(settings.get("macro_file", ""), deps=deps),
+        "insight_notes_dir": _normalized_path(settings.get("insight_notes_dir", "")),
+        "insight_notes_hash": _hashed_path(settings.get("insight_notes_dir", ""), deps=deps),
+    }
+    raw = json.dumps(payload, sort_keys=True, ensure_ascii=False)
+    return hashlib.sha256(raw.encode("utf-8")).hexdigest()[:24]
+
+
+def _step_as_of_date(step: object) -> pd.Timestamp:
+    state = getattr(step, "composite_state", None)
+    market = getattr(state, "market", None)
+    market_as_of = getattr(market, "as_of_date", "")
+    try:
+        if str(market_as_of).strip():
+            return pd.Timestamp(market_as_of).normalize()
+    except Exception:
+        pass
+    return pd.Timestamp(getattr(step, "date")).normalize()
+
+
+def _replace_trajectory_step(
+    step: object,
+    *,
+    composite_state: object,
+    stock_states: list[object],
+) -> object:
+    try:
+        return replace(
+            step,
+            composite_state=composite_state,
+            stock_states=stock_states,
+        )
+    except Exception:
+        return type(step)(
+            date=getattr(step, "date"),
+            next_date=getattr(step, "next_date"),
+            composite_state=composite_state,
+            stock_states=stock_states,
+            horizon_metrics=getattr(step, "horizon_metrics"),
+        )
+
+
+def _replace_trajectory_steps(
+    trajectory: object,
+    *,
+    steps: list[object],
+) -> object:
+    try:
+        return replace(trajectory, steps=steps)
+    except Exception:
+        prepared = getattr(trajectory, "prepared", None)
+        if prepared is not None:
+            try:
+                return type(trajectory)(
+                    prepared=prepared,
+                    steps=steps,
+                )
+            except Exception:
+                pass
+        try:
+            cloned = type(trajectory)()
+            if prepared is not None:
+                setattr(cloned, "prepared", prepared)
+            setattr(cloned, "steps", steps)
+            return cloned
+        except Exception:
+            setattr(trajectory, "steps", steps)
+            return trajectory
+
+
+def decorate_research_trajectory(
+    trajectory: object,
+    *,
+    settings: dict[str, object],
+    deps: BacktestPrepareDependencies,
+) -> object:
+    steps = getattr(trajectory, "steps", None)
+    if not steps:
+        return trajectory
+
+    use_info_fusion = bool(settings.get("use_info_fusion", False))
+    use_learned_info_fusion = bool(settings.get("use_learned_info_fusion", settings.get("use_learned_news_fusion", False)))
+    use_external_signals = bool(settings.get("external_signals", True))
+    use_insight_memory = bool(settings.get("enable_insight_memory", True))
+    if not (use_info_fusion or use_learned_info_fusion or use_external_signals or use_insight_memory):
+        return trajectory
+
+    step_list = list(steps)
+    deps.emit_progress(
+        "trajectory",
+        (
+            "decorating research states: "
+            f"steps={len(step_list)}, "
+            f"info={use_info_fusion}, learned_info={use_learned_info_fusion}, external={use_external_signals}, insight={use_insight_memory}"
+        ),
+    )
+    info_items_by_date: dict[str, list[object]] = {}
+    previous_roles: dict[str, object] = {}
+    decorated_steps: list[object] = []
+
+    def _load_info_items(as_of_date: pd.Timestamp) -> list[object]:
+        key = str(as_of_date.date())
+        cached = info_items_by_date.get(key)
+        if cached is not None:
+            return cached
+        try:
+            _, loaded = deps.load_v2_info_items_for_date(
+                settings=settings,
+                as_of_date=as_of_date,
+                learned_window=False,
+            )
+        except Exception:
+            loaded = []
+        info_items_by_date[key] = list(loaded)
+        return info_items_by_date[key]
+
+    for idx, step in enumerate(step_list, start=1):
+        state = getattr(step, "composite_state", None)
+        if state is None:
+            decorated_steps.append(step)
+            continue
+        as_of_date = _step_as_of_date(step)
+        info_items = _load_info_items(as_of_date)
+        decorated_state = state
+        if use_info_fusion and info_items:
+            decorated_state = deps.enrich_state_with_info(
+                state=decorated_state,
+                as_of_date=as_of_date,
+                info_items=info_items,
+                settings=settings,
+            )
+        if use_external_signals:
+            decorated_state, _ = deps.attach_external_signals_to_composite_state(
+                state=decorated_state,
+                settings=settings,
+                as_of_date=as_of_date,
+                info_items=info_items,
+            )
+        if use_insight_memory:
+            if previous_roles:
+                try:
+                    decorated_state = replace(decorated_state, stock_role_states=dict(previous_roles))
+                except Exception:
+                    pass
+            decorated_state = deps.attach_insight_memory_to_state(
+                state=decorated_state,
+                settings=settings,
+                as_of_date=as_of_date,
+                info_items=info_items,
+            )
+            previous_roles = dict(getattr(decorated_state, "stock_role_states", {}) or {})
+        else:
+            previous_roles = {}
+        decorated_steps.append(
+            _replace_trajectory_step(
+                step,
+                composite_state=decorated_state,
+                stock_states=list(getattr(decorated_state, "stocks", getattr(step, "stock_states", [])) or []),
+            )
+        )
+        if idx == len(step_list) or (len(step_list) > 20 and idx % 25 == 0):
+            deps.emit_progress(
+                "trajectory",
+                f"decorated research states {idx}/{len(step_list)}",
+            )
+
+    return _replace_trajectory_steps(trajectory, steps=decorated_steps)
 
 
 def trajectory_cache_path(
@@ -189,6 +414,18 @@ def prepare_v2_backtest_data(
     universe_file: str | None = None,
     universe_limit: int | None = None,
     universe_tier: str | None = None,
+    info_file: str | None = None,
+    info_lookback_days: int | None = None,
+    info_half_life_days: float | None = None,
+    use_info_fusion: bool | None = None,
+    info_shadow_only: bool | None = None,
+    info_types: str | None = None,
+    info_source_mode: str | None = None,
+    info_subsets: str | None = None,
+    external_signals: bool | None = None,
+    event_file: str | None = None,
+    capital_flow_file: str | None = None,
+    macro_file: str | None = None,
     dynamic_universe: bool | None = None,
     generator_target_size: int | None = None,
     generator_coarse_size: int | None = None,
@@ -208,6 +445,18 @@ def prepare_v2_backtest_data(
         universe_file=universe_file,
         universe_limit=universe_limit,
         universe_tier=universe_tier,
+        info_file=info_file,
+        info_lookback_days=info_lookback_days,
+        info_half_life_days=info_half_life_days,
+        use_info_fusion=use_info_fusion,
+        info_shadow_only=info_shadow_only,
+        info_types=info_types,
+        info_source_mode=info_source_mode,
+        info_subsets=info_subsets,
+        external_signals=external_signals,
+        event_file=event_file,
+        capital_flow_file=capital_flow_file,
+        macro_file=macro_file,
         dynamic_universe=dynamic_universe,
         generator_target_size=generator_target_size,
         generator_coarse_size=generator_coarse_size,
@@ -341,6 +590,19 @@ def load_or_build_v2_backtest_trajectory(
     universe_file: str | None = None,
     universe_limit: int | None = None,
     universe_tier: str | None = None,
+    info_file: str | None = None,
+    info_lookback_days: int | None = None,
+    info_half_life_days: float | None = None,
+    use_info_fusion: bool | None = None,
+    use_learned_info_fusion: bool | None = None,
+    info_shadow_only: bool | None = None,
+    info_types: str | None = None,
+    info_source_mode: str | None = None,
+    info_subsets: str | None = None,
+    external_signals: bool | None = None,
+    event_file: str | None = None,
+    capital_flow_file: str | None = None,
+    macro_file: str | None = None,
     dynamic_universe: bool | None = None,
     generator_target_size: int | None = None,
     generator_coarse_size: int | None = None,
@@ -362,6 +624,19 @@ def load_or_build_v2_backtest_trajectory(
         universe_file=universe_file,
         universe_limit=universe_limit,
         universe_tier=universe_tier,
+        info_file=info_file,
+        info_lookback_days=info_lookback_days,
+        info_half_life_days=info_half_life_days,
+        use_info_fusion=use_info_fusion,
+        use_learned_info_fusion=use_learned_info_fusion,
+        info_shadow_only=info_shadow_only,
+        info_types=info_types,
+        info_source_mode=info_source_mode,
+        info_subsets=info_subsets,
+        external_signals=external_signals,
+        event_file=event_file,
+        capital_flow_file=capital_flow_file,
+        macro_file=macro_file,
         dynamic_universe=dynamic_universe,
         generator_target_size=generator_target_size,
         generator_coarse_size=generator_coarse_size,
@@ -393,6 +668,10 @@ def load_or_build_v2_backtest_trajectory(
             if settings.get("training_window_days") is not None
             else None
         ),
+        overlay_cache_token=_research_overlay_cache_token(
+            settings=settings,
+            deps=deps,
+        ),
     )
     cache_path = trajectory_cache_path(cache_root=cache_root, cache_key=cache_key)
     if not refresh_cache and cache_path.exists():
@@ -416,6 +695,30 @@ def load_or_build_v2_backtest_trajectory(
         else None,
         universe_limit=int(settings.get("universe_limit")) if settings.get("universe_limit") is not None else universe_limit,
         universe_tier=str(settings.get("universe_tier", universe_tier)),
+        info_file=str(settings.get("info_file", info_file)) if settings.get("info_file", info_file) is not None else None,
+        info_lookback_days=(
+            int(settings.get("info_lookback_days"))
+            if settings.get("info_lookback_days") is not None
+            else info_lookback_days
+        ),
+        info_half_life_days=(
+            float(settings.get("info_half_life_days"))
+            if settings.get("info_half_life_days") is not None
+            else info_half_life_days
+        ),
+        use_info_fusion=deps.parse_boolish(settings.get("use_info_fusion", False), False),
+        info_shadow_only=deps.parse_boolish(settings.get("info_shadow_only", True), True),
+        info_types=settings.get("info_types", info_types),
+        info_source_mode=str(settings.get("info_source_mode", info_source_mode or "layered")),
+        info_subsets=settings.get("info_subsets", info_subsets),
+        external_signals=deps.parse_boolish(settings.get("external_signals", True), True),
+        event_file=str(settings.get("event_file", event_file)) if settings.get("event_file", event_file) is not None else None,
+        capital_flow_file=(
+            str(settings.get("capital_flow_file", capital_flow_file))
+            if settings.get("capital_flow_file", capital_flow_file) is not None
+            else None
+        ),
+        macro_file=str(settings.get("macro_file", macro_file)) if settings.get("macro_file", macro_file) is not None else None,
         dynamic_universe=deps.parse_boolish(settings.get("dynamic_universe_enabled", False), False),
         generator_target_size=int(settings.get("generator_target_size", settings.get("universe_limit", 0)) or 0),
         generator_coarse_size=int(settings.get("generator_coarse_size", 0) or 0),
@@ -438,6 +741,11 @@ def load_or_build_v2_backtest_trajectory(
         prepared,
         retrain_days=retrain_days,
         forecast_backend=backend.name,
+    )
+    trajectory = decorate_research_trajectory(
+        trajectory,
+        settings=settings,
+        deps=deps,
     )
     try:
         with cache_path.open("wb") as f:

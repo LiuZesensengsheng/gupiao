@@ -25,6 +25,64 @@ class LeaderScoreSnapshot:
     reasons: list[str] = field(default_factory=list)
 
 
+@dataclass(frozen=True)
+class LeaderTrainingLabel:
+    date: str
+    symbol: str
+    sector: str
+    theme: str
+    theme_phase: str
+    role: str
+    role_downgrade: bool = False
+    theme_rank: int = 0
+    theme_size: int = 0
+    theme_percentile: float = 0.0
+    negative_score: float = 0.0
+    candidate_score: float = 0.0
+    conviction_score: float = 0.0
+    hard_negative: bool = False
+    future_excess_5d_vs_sector: float = 0.0
+    future_excess_20d_vs_sector: float = 0.0
+    future_theme_score: float = 0.0
+    future_theme_rank: int = 0
+    future_theme_percentile: float = 0.0
+    is_true_leader: bool = False
+    leader_bucket: str = "neutral"
+
+
+@dataclass(frozen=True)
+class ExitTrainingLabel:
+    date: str
+    symbol: str
+    sector: str
+    theme: str
+    theme_phase: str
+    role: str
+    role_downgrade: bool = False
+    theme_rank: int = 0
+    theme_size: int = 0
+    theme_percentile: float = 0.0
+    sample_source: str = ""
+    negative_score: float = 0.0
+    candidate_score: float = 0.0
+    conviction_score: float = 0.0
+    hard_negative: bool = False
+    future_ret_1d: float = 0.0
+    future_excess_1d_vs_mkt: float = 0.0
+    future_excess_5d_vs_sector: float = 0.0
+    future_excess_20d_vs_sector: float = 0.0
+    future_drag_score: float = 0.0
+    hold_score: float = 0.0
+    exit_pressure_score: float = 0.0
+    exit_severity_label: str = "keep"
+    exit_label: str = "keep"
+    should_watch: bool = False
+    should_reduce: bool = False
+    should_exit_fast: bool = False
+    should_exit_early: bool = False
+    sample_weight: float = 1.0
+
+
 def _clip01(value: float) -> float:
     return float(min(1.0, max(0.0, value)))
 
@@ -41,6 +99,12 @@ def _safe_float(value: object, default: float = 0.0) -> float:
     if math.isnan(number):
         return float(default)
     return number
+
+
+def _rank_percentile(rank: int, size: int) -> float:
+    if size <= 1 or rank <= 0:
+        return 1.0
+    return float(max(0.0, min(1.0, 1.0 - ((rank - 1) / max(1, size - 1)))))
 
 
 def _theme_episode_map(state: CompositeState) -> dict[str, ThemeEpisode]:
@@ -469,9 +533,8 @@ def apply_leader_candidate_overlay(
         payload = score_map.get(symbol)
         if payload is None:
             return (2.0, 0.0, 0.0, 2.0, rank_map.get(symbol, len(rank_map)))
-        hard_negative_bucket = 1.0 if payload.hard_negative else 0.0
         return (
-            hard_negative_bucket,
+            1.0 if payload.hard_negative else 0.0,
             -float(payload.conviction_score),
             -float(payload.candidate_score),
             float(payload.negative_score),
@@ -533,30 +596,13 @@ def _future_theme_scores(
     step_date: pd.Timestamp,
     future_lookup: dict[str, pd.DataFrame],
 ) -> tuple[dict[str, float], set[str], int]:
-    rows: list[tuple[str, float, float]] = []
-    for item in group:
-        frame = future_lookup.get(str(item.symbol))
-        if frame is None or step_date not in frame.index:
-            continue
-        row = frame.loc[step_date]
-        if isinstance(row, pd.DataFrame):
-            row = row.iloc[0]
-        excess_5 = _safe_float(row.get("excess_ret_5_vs_sector", float("nan")), float("nan"))
-        excess_20 = _safe_float(row.get("excess_ret_20_vs_sector", float("nan")), float("nan"))
-        if math.isnan(excess_5) or math.isnan(excess_20):
-            continue
-        rows.append((str(item.symbol), excess_5, excess_20))
-    if len(rows) < 2:
-        return {}, set(), 0
-    frame = pd.DataFrame(rows, columns=["symbol", "excess_5", "excess_20"])
-    frame["score_5_rank"] = frame["excess_5"].rank(method="average", pct=True)
-    frame["score_20_rank"] = frame["excess_20"].rank(method="average", pct=True)
-    frame["future_score"] = (
-        0.60 * frame["score_5_rank"]
-        + 0.40 * frame["score_20_rank"]
-        + 0.05 * (frame["excess_5"] > 0.0).astype(float)
-        + 0.05 * (frame["excess_20"] > 0.0).astype(float)
+    frame = _future_theme_frame(
+        group=group,
+        step_date=step_date,
+        future_lookup=future_lookup,
     )
+    if frame.empty:
+        return {}, set(), 0
     top_score = float(frame["future_score"].max())
     leader_cut = max(0.80, top_score - 0.05)
     leaders = {
@@ -572,6 +618,462 @@ def _future_theme_scores(
         str(row.symbol): float(row.future_score)
         for row in frame.itertuples(index=False)
     }, leaders, int(len(frame))
+
+
+def _future_theme_frame(
+    *,
+    group: list[LeaderScoreSnapshot],
+    step_date: pd.Timestamp,
+    future_lookup: dict[str, pd.DataFrame],
+) -> pd.DataFrame:
+    rows: list[dict[str, object]] = []
+    for item in group:
+        frame = future_lookup.get(str(item.symbol))
+        if frame is None or step_date not in frame.index:
+            continue
+        row = frame.loc[step_date]
+        if isinstance(row, pd.DataFrame):
+            row = row.iloc[0]
+        excess_5 = _safe_float(row.get("excess_ret_5_vs_sector", float("nan")), float("nan"))
+        excess_20 = _safe_float(row.get("excess_ret_20_vs_sector", float("nan")), float("nan"))
+        if math.isnan(excess_5) or math.isnan(excess_20):
+            continue
+        rows.append(
+            {
+                "symbol": str(item.symbol),
+                "future_ret_1": _safe_float(row.get("fwd_ret_1", 0.0), 0.0),
+                "future_excess_1": _safe_float(row.get("excess_ret_1_vs_mkt", 0.0), 0.0),
+                "excess_5": excess_5,
+                "excess_20": excess_20,
+            }
+        )
+    if len(rows) < 2:
+        return pd.DataFrame()
+    frame = pd.DataFrame(rows)
+    frame["score_5_rank"] = frame["excess_5"].rank(method="average", pct=True)
+    frame["score_20_rank"] = frame["excess_20"].rank(method="average", pct=True)
+    frame["future_score"] = (
+        0.60 * frame["score_5_rank"]
+        + 0.40 * frame["score_20_rank"]
+        + 0.05 * (frame["excess_5"] > 0.0).astype(float)
+        + 0.05 * (frame["excess_20"] > 0.0).astype(float)
+    )
+    frame = frame.sort_values(["future_score", "excess_5", "excess_20"], ascending=False).reset_index(drop=True)
+    frame["future_rank"] = range(1, len(frame) + 1)
+    frame["future_percentile"] = [
+        _rank_percentile(int(rank), int(len(frame)))
+        for rank in frame["future_rank"].tolist()
+    ]
+    return frame
+
+
+def _leader_bucket(
+    *,
+    is_true_leader: bool,
+    future_score: float,
+    hard_negative: bool,
+    future_excess_5: float,
+) -> str:
+    if is_true_leader:
+        return "true_leader"
+    if hard_negative and future_score <= 0.50 and future_excess_5 <= 0.0:
+        return "hard_negative"
+    if future_score >= 0.70 or future_excess_5 > 0.0:
+        return "contender"
+    return "neutral"
+
+
+def _hold_score(
+    *,
+    role: str,
+    phase: str,
+    negative_score: float,
+    candidate_score: float,
+    conviction_score: float,
+) -> float:
+    role_score = {
+        "leader": 1.00,
+        "core": 0.85,
+        "follower": 0.55,
+        "rebound": 0.45,
+        "laggard": 0.20,
+    }.get(_normalize_text(role).lower(), 0.40)
+    phase_score = {
+        "strengthening": 1.00,
+        "emerging": 0.80,
+        "crowded": 0.55,
+        "diverging": 0.35,
+        "fading": 0.10,
+    }.get(_normalize_text(phase).lower(), 0.45)
+    return _clip01(
+        0.34 * conviction_score
+        + 0.26 * candidate_score
+        + 0.20 * role_score
+        + 0.12 * phase_score
+        + 0.08 * (1.0 - negative_score)
+    )
+
+
+def _future_drag_score(
+    *,
+    future_ret_1: float,
+    future_excess_1: float,
+    future_excess_5: float,
+    future_excess_20: float,
+) -> float:
+    return _clip01(
+        0.10 * max(0.0, -future_ret_1 / 0.03)
+        + 0.18 * max(0.0, -future_excess_1 / 0.02)
+        + 0.36 * max(0.0, -future_excess_5 / 0.05)
+        + 0.28 * max(0.0, -future_excess_20 / 0.08)
+        + 0.08 * (1.0 if future_excess_5 < 0.0 and future_excess_20 < 0.0 else 0.0)
+    )
+
+
+def _exit_severity_label(
+    *,
+    phase: str,
+    role_downgrade: bool,
+    hard_negative: bool,
+    future_drag_score: float,
+) -> str:
+    phase_value = _normalize_text(phase).lower()
+    if (
+        future_drag_score >= 0.72
+        or (hard_negative and future_drag_score >= 0.44)
+        or (phase_value == "fading" and future_drag_score >= 0.36)
+    ):
+        return "exit_fast"
+    if (
+        future_drag_score >= 0.50
+        or (role_downgrade and future_drag_score >= 0.26)
+        or (phase_value in {"crowded", "diverging", "fading"} and future_drag_score >= 0.32)
+    ):
+        return "reduce"
+    if (
+        future_drag_score >= 0.24
+        or role_downgrade
+        or hard_negative
+        or phase_value in {"crowded", "diverging", "fading"}
+    ):
+        return "watch"
+    return "keep"
+
+
+def _exit_sample_source(
+    *,
+    symbol: str,
+    shortlisted: set[str],
+    top_actionable: set[str],
+    role: str,
+    phase: str,
+    candidate_score: float,
+    role_downgrade: bool,
+    hard_negative: bool,
+) -> str:
+    if symbol in shortlisted:
+        return "shortlist"
+    if symbol in top_actionable and (role in {"leader", "core", "follower"} or float(candidate_score) >= 0.62):
+        return "top_conviction"
+    if role in {"leader", "core"}:
+        return "theme_role"
+    if role_downgrade or hard_negative or phase in {"diverging", "fading"} or float(candidate_score) >= 0.60:
+        return "candidate_score"
+    return ""
+
+
+def _exit_sample_weight(
+    *,
+    sample_source: str,
+    future_drag_score: float,
+    role_downgrade: bool,
+    hard_negative: bool,
+) -> float:
+    base = {
+        "shortlist": 1.20,
+        "top_conviction": 1.10,
+        "theme_role": 1.00,
+        "candidate_score": 0.90,
+    }.get(sample_source, 0.80)
+    return float(
+        1.0
+        * base
+        * (1.0 + 0.85 * float(future_drag_score))
+        * (1.10 if role_downgrade else 1.0)
+        * (1.15 if hard_negative else 1.0)
+    )
+
+
+def build_leader_training_labels(
+    *,
+    trajectory: object | None,
+    min_theme_size: int = 3,
+) -> list[LeaderTrainingLabel]:
+    if trajectory is None or not getattr(trajectory, "steps", None):
+        return []
+
+    future_lookup = _future_lookup_for_trajectory(trajectory)
+    rows: list[LeaderTrainingLabel] = []
+    for step in getattr(trajectory, "steps", []) or []:
+        step_date = pd.Timestamp(getattr(step, "date"))
+        step_state = getattr(step, "composite_state", None)
+        snapshots = [] if step_state is None else build_leader_score_snapshots(state=step_state)
+        grouped: dict[str, list[LeaderScoreSnapshot]] = {}
+        for item in snapshots:
+            grouped.setdefault(str(item.theme), []).append(item)
+        for group in grouped.values():
+            if len(group) < max(2, int(min_theme_size)):
+                continue
+            future_frame = _future_theme_frame(
+                group=group,
+                step_date=step_date,
+                future_lookup=future_lookup,
+            )
+            if future_frame.empty:
+                continue
+            top_score = float(future_frame["future_score"].max())
+            leader_cut = max(0.80, top_score - 0.05)
+            true_leaders = {
+                str(row.symbol)
+                for row in future_frame.itertuples(index=False)
+                if float(row.future_score) >= leader_cut and float(row.excess_5) > 0.0
+            }
+            if not true_leaders and top_score >= 0.70:
+                best = future_frame.iloc[0]
+                if float(best["excess_5"]) > 0.0 or float(best["excess_20"]) > 0.0:
+                    true_leaders.add(str(best["symbol"]))
+            future_map = {
+                str(row["symbol"]): row
+                for row in future_frame.to_dict(orient="records")
+            }
+            for item in group:
+                metrics = future_map.get(str(item.symbol))
+                if metrics is None:
+                    continue
+                future_score = _safe_float(metrics.get("future_score", 0.0), 0.0)
+                future_excess_5 = _safe_float(metrics.get("excess_5", 0.0), 0.0)
+                future_excess_20 = _safe_float(metrics.get("excess_20", 0.0), 0.0)
+                rows.append(
+                    LeaderTrainingLabel(
+                        date=str(step_date.date()),
+                        symbol=str(item.symbol),
+                        sector=str(item.sector),
+                        theme=str(item.theme),
+                        theme_phase=str(item.theme_phase),
+                        role=str(item.role),
+                        role_downgrade=bool(item.role_downgrade),
+                        theme_rank=int(item.theme_rank),
+                        theme_size=int(item.theme_size),
+                        theme_percentile=_rank_percentile(int(item.theme_rank), int(item.theme_size)),
+                        negative_score=float(item.negative_score),
+                        candidate_score=float(item.candidate_score),
+                        conviction_score=float(item.conviction_score),
+                        hard_negative=bool(item.hard_negative),
+                        future_excess_5d_vs_sector=future_excess_5,
+                        future_excess_20d_vs_sector=future_excess_20,
+                        future_theme_score=future_score,
+                        future_theme_rank=int(metrics.get("future_rank", 0) or 0),
+                        future_theme_percentile=_safe_float(metrics.get("future_percentile", 0.0), 0.0),
+                        is_true_leader=str(item.symbol) in true_leaders,
+                        leader_bucket=_leader_bucket(
+                            is_true_leader=str(item.symbol) in true_leaders,
+                            future_score=future_score,
+                            hard_negative=bool(item.hard_negative),
+                            future_excess_5=future_excess_5,
+                        ),
+                    )
+                )
+    return rows
+
+
+def build_exit_training_labels(
+    *,
+    trajectory: object | None,
+    min_theme_size: int = 2,
+    candidate_limit: int = 8,
+) -> list[ExitTrainingLabel]:
+    if trajectory is None or not getattr(trajectory, "steps", None):
+        return []
+
+    future_lookup = _future_lookup_for_trajectory(trajectory)
+    rows: list[ExitTrainingLabel] = []
+    for step in getattr(trajectory, "steps", []) or []:
+        step_date = pd.Timestamp(getattr(step, "date"))
+        step_state = getattr(step, "composite_state", None)
+        if step_state is None:
+            continue
+        snapshots = build_leader_score_snapshots(state=step_state)
+        grouped: dict[str, list[LeaderScoreSnapshot]] = {}
+        for item in snapshots:
+            grouped.setdefault(str(item.theme), []).append(item)
+        shortlisted = {
+            str(item)
+            for item in getattr(getattr(step_state, "candidate_selection", None), "shortlisted_symbols", []) or []
+            if str(item).strip()
+        }
+        for group in grouped.values():
+            if len(group) < max(2, int(min_theme_size)):
+                continue
+            future_frame = _future_theme_frame(
+                group=group,
+                step_date=step_date,
+                future_lookup=future_lookup,
+            )
+            if future_frame.empty:
+                continue
+            future_map = {
+                str(row["symbol"]): row
+                for row in future_frame.to_dict(orient="records")
+            }
+            ranked_group = sorted(
+                group,
+                key=lambda item: (item.conviction_score, item.candidate_score, -item.negative_score),
+                reverse=True,
+            )
+            top_actionable = {
+                str(item.symbol)
+                for item in ranked_group[: max(2, min(int(candidate_limit), len(ranked_group)))]
+            }
+            for item in group:
+                symbol = str(item.symbol)
+                metrics = future_map.get(symbol)
+                if metrics is None:
+                    continue
+                sample_source = _exit_sample_source(
+                    symbol=symbol,
+                    shortlisted=shortlisted,
+                    top_actionable=top_actionable,
+                    role=str(item.role),
+                    phase=str(item.theme_phase),
+                    candidate_score=float(item.candidate_score),
+                    role_downgrade=bool(item.role_downgrade),
+                    hard_negative=bool(item.hard_negative),
+                )
+                if not sample_source:
+                    continue
+                future_ret_1 = _safe_float(metrics.get("future_ret_1", 0.0), 0.0)
+                future_excess_1 = _safe_float(metrics.get("future_excess_1", 0.0), 0.0)
+                future_excess_5 = _safe_float(metrics.get("excess_5", 0.0), 0.0)
+                future_excess_20 = _safe_float(metrics.get("excess_20", 0.0), 0.0)
+                hold_score = _hold_score(
+                    role=str(item.role),
+                    phase=str(item.theme_phase),
+                    negative_score=float(item.negative_score),
+                    candidate_score=float(item.candidate_score),
+                    conviction_score=float(item.conviction_score),
+                )
+                future_drag_score = _future_drag_score(
+                    future_ret_1=future_ret_1,
+                    future_excess_1=future_excess_1,
+                    future_excess_5=future_excess_5,
+                    future_excess_20=future_excess_20,
+                )
+                severity_label = _exit_severity_label(
+                    phase=str(item.theme_phase),
+                    role_downgrade=bool(item.role_downgrade),
+                    hard_negative=bool(item.hard_negative),
+                    future_drag_score=future_drag_score,
+                )
+                sample_weight = _exit_sample_weight(
+                    sample_source=sample_source,
+                    future_drag_score=future_drag_score,
+                    role_downgrade=bool(item.role_downgrade),
+                    hard_negative=bool(item.hard_negative),
+                )
+                rows.append(
+                    ExitTrainingLabel(
+                        date=str(step_date.date()),
+                        symbol=symbol,
+                        sector=str(item.sector),
+                        theme=str(item.theme),
+                        theme_phase=str(item.theme_phase),
+                        role=str(item.role),
+                        role_downgrade=bool(item.role_downgrade),
+                        theme_rank=int(item.theme_rank),
+                        theme_size=int(item.theme_size),
+                        theme_percentile=_rank_percentile(int(item.theme_rank), int(item.theme_size)),
+                        sample_source=sample_source,
+                        negative_score=float(item.negative_score),
+                        candidate_score=float(item.candidate_score),
+                        conviction_score=float(item.conviction_score),
+                        hard_negative=bool(item.hard_negative),
+                        future_ret_1d=future_ret_1,
+                        future_excess_1d_vs_mkt=future_excess_1,
+                        future_excess_5d_vs_sector=future_excess_5,
+                        future_excess_20d_vs_sector=future_excess_20,
+                        future_drag_score=future_drag_score,
+                        hold_score=hold_score,
+                        exit_pressure_score=future_drag_score,
+                        exit_severity_label=severity_label,
+                        exit_label=severity_label,
+                        should_watch=severity_label in {"watch", "reduce", "exit_fast"},
+                        should_reduce=severity_label in {"reduce", "exit_fast"},
+                        should_exit_fast=severity_label == "exit_fast",
+                        should_exit_early=severity_label in {"reduce", "exit_fast"},
+                        sample_weight=sample_weight,
+                    )
+                )
+    return rows
+
+
+def build_research_label_artifact_payloads(
+    *,
+    trajectory: object | None,
+    min_leader_theme_size: int = 3,
+    min_exit_theme_size: int = 2,
+    exit_candidate_limit: int = 8,
+) -> dict[str, object]:
+    leader_rows = build_leader_training_labels(
+        trajectory=trajectory,
+        min_theme_size=min_leader_theme_size,
+    )
+    exit_rows = build_exit_training_labels(
+        trajectory=trajectory,
+        min_theme_size=min_exit_theme_size,
+        candidate_limit=exit_candidate_limit,
+    )
+    leader_bucket_counts: dict[str, int] = {}
+    for item in leader_rows:
+        leader_bucket_counts[item.leader_bucket] = int(leader_bucket_counts.get(item.leader_bucket, 0) + 1)
+    exit_label_counts: dict[str, int] = {}
+    exit_source_counts: dict[str, int] = {}
+    exit_severity_counts: dict[str, int] = {}
+    exit_source_avg_drag: dict[str, list[float]] = {}
+    for item in exit_rows:
+        exit_label_counts[item.exit_label] = int(exit_label_counts.get(item.exit_label, 0) + 1)
+        exit_source_counts[item.sample_source] = int(exit_source_counts.get(item.sample_source, 0) + 1)
+        exit_severity_counts[item.exit_severity_label] = int(exit_severity_counts.get(item.exit_severity_label, 0) + 1)
+        exit_source_avg_drag.setdefault(item.sample_source, []).append(float(item.future_drag_score))
+    all_dates = [item.date for item in leader_rows] + [item.date for item in exit_rows]
+    label_manifest = {
+        "leader_row_count": int(len(leader_rows)),
+        "leader_true_count": int(sum(1 for item in leader_rows if item.is_true_leader)),
+        "leader_hard_negative_count": int(sum(1 for item in leader_rows if item.hard_negative)),
+        "leader_bucket_counts": leader_bucket_counts,
+        "exit_row_count": int(len(exit_rows)),
+        "exit_watch_count": int(sum(1 for item in exit_rows if item.exit_severity_label == "watch")),
+        "exit_reduce_count": int(sum(1 for item in exit_rows if item.exit_label == "reduce")),
+        "exit_fast_count": int(sum(1 for item in exit_rows if item.exit_label == "exit_fast")),
+        "exit_label_counts": exit_label_counts,
+        "exit_severity_counts": exit_severity_counts,
+        "exit_sample_sources": exit_source_counts,
+        "exit_avg_future_drag_score": float(
+            sum(float(item.future_drag_score) for item in exit_rows) / max(1, len(exit_rows))
+        ),
+        "exit_avg_future_drag_by_source": {
+            key: float(sum(values) / max(1, len(values)))
+            for key, values in exit_source_avg_drag.items()
+        },
+        "window": {
+            "start": "" if not all_dates else min(all_dates),
+            "end": "" if not all_dates else max(all_dates),
+        },
+    }
+    return {
+        "training_label_manifest": label_manifest,
+        "leader_training_labels": [asdict(item) for item in leader_rows],
+        "exit_training_labels": [asdict(item) for item in exit_rows],
+    }
 
 
 def evaluate_leader_candidates(

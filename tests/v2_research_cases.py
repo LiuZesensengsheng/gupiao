@@ -17,7 +17,9 @@ from src.application.v2_contracts import (
     CompositeState,
     CrossSectionForecastState,
     InfoAggregateState,
+    InfoItem,
     LearnedPolicyModel,
+    MainlineState,
     MarketFactsState,
     MarketForecastState,
     MacroContextState,
@@ -1392,6 +1394,12 @@ def test_publish_research_artifacts_reuses_supplied_trajectory(monkeypatch: pyte
 
     assert Path(paths["frozen_daily_state"]).exists()
     assert Path(paths["forecast_models_manifest"]).exists()
+    assert Path(paths["leader_rank_model"]).exists()
+    assert Path(paths["exit_behavior_model"]).exists()
+    manifest_payload = json.loads(Path(paths["research_manifest"]).read_text(encoding="utf-8"))
+    assert manifest_payload["leader_rank_model"]
+    assert manifest_payload["exit_behavior_model"]
+    assert "signal_model_summary" in manifest_payload
 
 
 def test_daily_run_prefers_frozen_external_signal_states(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
@@ -1704,6 +1712,14 @@ def test_publish_artifacts_write_frozen_forecast_bundle(monkeypatch: pytest.Monk
     assert payload["backend"] == "linear"
     assert "market_models" in payload
     assert "stock_models" in payload
+    leader_training_payload = json.loads(Path(paths["leader_training_labels"]).read_text(encoding="utf-8"))
+    exit_training_payload = json.loads(Path(paths["exit_training_labels"]).read_text(encoding="utf-8"))
+    leader_rank_model = json.loads(Path(paths["leader_rank_model"]).read_text(encoding="utf-8"))
+    exit_behavior_model = json.loads(Path(paths["exit_behavior_model"]).read_text(encoding="utf-8"))
+    assert leader_training_payload["items"] == []
+    assert exit_training_payload["items"] == []
+    assert leader_rank_model["train_rows"] == 0
+    assert exit_behavior_model["train_rows"] == 0
 
 
 def test_daily_run_prefers_frozen_forecast_bundle_when_available(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
@@ -2246,6 +2262,240 @@ def test_load_or_build_v2_backtest_trajectory_uses_disk_cache(monkeypatch: pytes
     assert seen["build_calls"] == 1
 
 
+def test_load_or_build_v2_backtest_trajectory_decorates_research_states_with_insight(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    note_dir = tmp_path / "insight_notes"
+    note_dir.mkdir(parents=True, exist_ok=True)
+    (note_dir / "2026-03-01.md").write_text(
+        "\n".join(
+            [
+                "---",
+                "effective_time: 2026-03-01",
+                "source: manual_note",
+                "---",
+                "## chips",
+                "- target_type: sector",
+                "- target: chips",
+                "- theme: chips",
+                "- direction: bullish",
+                "- confidence: 0.85",
+                "- importance: 0.80",
+                "- horizon: mid",
+                "- reason: chips leadership expanding",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    settings = {
+        "config_path": "config/api.json",
+        "source": "local",
+        "watchlist": "config/watchlist.json",
+        "universe_file": "config/universe_smoke_5.json",
+        "universe_limit": 1,
+        "universe_tier": "favorites_16",
+        "source_universe_manifest_path": "config/universe_smoke_5.json",
+        "data_dir": str(tmp_path / "data"),
+        "start": "2024-01-01",
+        "end": "2026-03-01",
+        "min_train_days": 2,
+        "use_margin_features": False,
+        "margin_market_file": str(tmp_path / "margin_market.csv"),
+        "margin_stock_file": str(tmp_path / "margin_stock.csv"),
+        "use_us_index_context": False,
+        "us_index_source": "akshare",
+        "info_file": str(tmp_path / "input" / "info_parts"),
+        "event_file": str(tmp_path / "input" / "info_parts"),
+        "use_info_fusion": True,
+        "info_shadow_only": False,
+        "info_source_mode": "layered",
+        "info_types": ["news"],
+        "info_subsets": ["market_news"],
+        "announcement_event_tags": ["earnings_negative"],
+        "external_signals": True,
+        "capital_flow_file": "",
+        "macro_file": "",
+        "enable_insight_memory": True,
+        "insight_notes_dir": str(note_dir),
+        "training_window_days": 480,
+    }
+    state = CompositeState(
+        market=MarketForecastState(
+            as_of_date="2026-03-01",
+            up_1d_prob=0.58,
+            up_5d_prob=0.61,
+            up_20d_prob=0.66,
+            trend_state="trend",
+            drawdown_risk=0.18,
+            volatility_regime="normal",
+            liquidity_stress=0.16,
+        ),
+        cross_section=CrossSectionForecastState(
+            as_of_date="2026-03-01",
+            large_vs_small_bias=0.04,
+            growth_vs_value_bias=0.03,
+            fund_flow_strength=0.14,
+            margin_risk_on_score=0.11,
+            breadth_strength=0.22,
+            leader_participation=0.64,
+            weak_stock_ratio=0.18,
+        ),
+        sectors=[SectorForecastState("chips", 0.61, 0.68, 0.20, 0.18, 0.14)],
+        stocks=[StockForecastState("AAA", "chips", 0.62, 0.67, 0.74, 0.61, 0.05, 0.92, alpha_score=0.84)],
+        strategy_mode="trend_follow",
+        risk_regime="risk_on",
+        mainlines=[
+            MainlineState(
+                name="chips",
+                conviction=0.64,
+                breadth=0.36,
+                leadership=0.33,
+                catalyst_strength=0.24,
+                sectors=["chips"],
+                representative_symbols=["AAA"],
+            )
+        ],
+        macro_context_state=MacroContextState(index_breadth_proxy=0.60),
+    )
+
+    monkeypatch.setattr("src.application.v2_services._load_v2_runtime_settings", lambda **_: dict(settings))
+    monkeypatch.setattr("src.application.v2_services._resolve_v2_universe_settings", lambda settings, cache_root: dict(settings))
+    monkeypatch.setattr(
+        "src.application.v2_services._prepare_v2_backtest_data",
+        lambda **_: SimpleNamespace(settings=dict(settings), stock_frames={}, market_valid=pd.DataFrame()),
+    )
+
+    def fake_build(prepared: object, *, retrain_days: int = 20, forecast_backend: str = "linear") -> object:
+        return _BacktestTrajectory(
+            prepared=prepared,
+            steps=[
+                _TrajectoryStep(
+                    date=pd.Timestamp("2026-03-01"),
+                    next_date=pd.Timestamp("2026-03-02"),
+                    composite_state=state,
+                    stock_states=list(state.stocks),
+                    horizon_metrics={"20d": {"rank_ic": 0.0, "top_decile_return": 0.0, "top_bottom_spread": 0.0, "top_k_hit_rate": 0.0}},
+                )
+            ],
+        )
+
+    monkeypatch.setattr("src.application.v2_services._build_v2_backtest_trajectory_from_prepared", fake_build)
+    monkeypatch.setattr(
+        "src.application.v2_services._load_v2_info_items_for_date",
+        lambda **_: (
+            "info.json",
+            [
+                InfoItem(
+                    date="2026-03-01",
+                    target_type="sector",
+                    target="chips",
+                    horizon="mid",
+                    direction="bullish",
+                    info_type="news",
+                    title="chips flow turning stronger",
+                    source_subset="market_news",
+                )
+            ],
+        ),
+    )
+    monkeypatch.setattr(
+        "src.application.v2_services._enrich_state_with_info",
+        lambda *, state, as_of_date, info_items, settings: replace(
+            state,
+            market_info_state=InfoAggregateState(item_count=len(info_items), catalyst_strength=0.22, coverage_ratio=0.30),
+            sector_info_states={"chips": InfoAggregateState(item_count=len(info_items), catalyst_strength=0.26, event_risk_level=0.12)},
+            stock_info_states={"AAA": InfoAggregateState(item_count=len(info_items), catalyst_strength=0.31, event_risk_level=0.08)},
+        ),
+    )
+    monkeypatch.setattr(
+        "src.application.v2_services._attach_external_signals_to_composite_state",
+        lambda *, state, settings, as_of_date, info_items: (
+            replace(
+                state,
+                capital_flow_state=CapitalFlowState(turnover_heat=0.74, large_order_bias=0.22, flow_regime="strong_inflow"),
+                macro_context_state=MacroContextState(style_regime="quality", index_breadth_proxy=0.65, commodity_pressure=0.12, macro_risk_level="neutral"),
+            ),
+            {"manifest": {"external_signal_enabled": True}},
+        ),
+    )
+
+    trajectory = _load_or_build_v2_backtest_trajectory(
+        config_path="config/api.json",
+        cache_root=str(tmp_path),
+        refresh_cache=True,
+        forecast_backend="linear",
+    )
+
+    assert trajectory is not None
+    step_state = trajectory.steps[0].composite_state
+    assert step_state.market_info_state.item_count == 1
+    assert step_state.capital_flow_state.flow_regime == "strong_inflow"
+    assert len(step_state.viewpoints) >= 1
+    assert step_state.theme_episodes[0].theme == "chips"
+    assert step_state.stock_role_states["AAA"].role in {"leader", "core"}
+
+
+def test_load_or_build_v2_backtest_trajectory_invalidates_cache_when_insight_notes_change(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    note_dir = tmp_path / "insight_notes"
+    note_dir.mkdir(parents=True, exist_ok=True)
+    note_path = note_dir / "2026-03-01.md"
+    note_path.write_text("first", encoding="utf-8")
+    settings = {
+        "config_path": "config/api.json",
+        "source": "local",
+        "watchlist": "config/watchlist.json",
+        "universe_file": "config/universe_smoke_5.json",
+        "universe_limit": 1,
+        "universe_tier": "favorites_16",
+        "source_universe_manifest_path": "config/universe_smoke_5.json",
+        "data_dir": str(tmp_path / "data"),
+        "start": "2024-01-01",
+        "end": "2026-03-01",
+        "min_train_days": 2,
+        "use_margin_features": False,
+        "margin_market_file": str(tmp_path / "margin_market.csv"),
+        "margin_stock_file": str(tmp_path / "margin_stock.csv"),
+        "use_us_index_context": False,
+        "us_index_source": "akshare",
+        "info_file": "",
+        "event_file": "",
+        "use_info_fusion": False,
+        "external_signals": False,
+        "enable_insight_memory": True,
+        "insight_notes_dir": str(note_dir),
+        "training_window_days": 480,
+    }
+    seen = {"build_calls": 0}
+
+    monkeypatch.setattr("src.application.v2_services._load_v2_runtime_settings", lambda **_: dict(settings))
+    monkeypatch.setattr("src.application.v2_services._resolve_v2_universe_settings", lambda settings, cache_root: dict(settings))
+    monkeypatch.setattr(
+        "src.application.v2_services._prepare_v2_backtest_data",
+        lambda **_: SimpleNamespace(settings=dict(settings), stock_frames={}, market_valid=pd.DataFrame()),
+    )
+
+    def fake_build(prepared: object, *, retrain_days: int = 20, forecast_backend: str = "linear") -> object:
+        seen["build_calls"] += 1
+        return _BacktestTrajectory(prepared=prepared, steps=[])
+
+    monkeypatch.setattr("src.application.v2_services._build_v2_backtest_trajectory_from_prepared", fake_build)
+
+    _load_or_build_v2_backtest_trajectory(
+        config_path="config/api.json",
+        cache_root=str(tmp_path),
+        forecast_backend="linear",
+    )
+    note_path.write_text("second", encoding="utf-8")
+    _load_or_build_v2_backtest_trajectory(
+        config_path="config/api.json",
+        cache_root=str(tmp_path),
+        forecast_backend="linear",
+    )
+
+    assert seen["build_calls"] == 2
+
+
 def test_research_workflow_passes_training_window_days_to_trajectory_builder(tmp_path: Path) -> None:
     seen: dict[str, object] = {}
     trajectory_sentinel = object()
@@ -2561,3 +2811,122 @@ def test_tensorize_temporal_frame_builds_group_lags() -> None:
     assert latest_aaa["f1__lag1"] == 1.0
     assert latest_bbb["f2__lag0"] == 40.0
     assert latest_bbb["f2__lag1"] == 30.0
+
+
+def test_publish_research_artifacts_loads_info_items_for_learned_shadow_mode(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    info_dir = tmp_path / "info_parts"
+    (info_dir / "market_news").mkdir(parents=True, exist_ok=True)
+    (info_dir / "announcements").mkdir(parents=True, exist_ok=True)
+    (info_dir / "research").mkdir(parents=True, exist_ok=True)
+    (info_dir / "market_news" / "core.csv").write_text(
+        "\n".join(
+            [
+                "date,target_type,target,horizon,direction,info_type,title",
+                "2024-12-20,market,MARKET,mid,bullish,news,macro support",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    (info_dir / "announcements" / "core.csv").write_text(
+        "\n".join(
+            [
+                "date,target_type,target,horizon,direction,info_type,title,event_tag",
+                "2024-12-22,stock,000001.SZ,short,bearish,announcement,risk event,earnings_negative",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    (info_dir / "research" / "core.csv").write_text(
+        "\n".join(
+            [
+                "date,target_type,target,horizon,direction,info_type,title",
+                "2024-12-23,stock,000001.SZ,mid,bullish,research,broker initiates buy coverage",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    captured: dict[str, object] = {}
+    monkeypatch.setattr("src.application.v2_services._load_or_build_v2_backtest_trajectory", lambda **_: SimpleNamespace(steps=[]))
+    monkeypatch.setattr(
+        "src.application.v2_services._split_research_trajectory",
+        lambda trajectory, *args, **kwargs: (trajectory, trajectory, trajectory),
+    )
+    monkeypatch.setattr("src.application.v2_services._build_frozen_linear_forecast_bundle", lambda prepared: {})
+    monkeypatch.setattr(
+        "src.application.v2_services._build_info_shadow_report",
+        lambda **kwargs: captured.setdefault(
+            "report",
+            {
+                "info_shadow_enabled": True,
+                "shadow_only": True,
+                "coverage_summary": {"market_coverage_ratio": 1.0, "stock_coverage_ratio": 0.5},
+                "info_source_breakdown": {"market_news": len(kwargs["info_items"])},
+            },
+        ),
+    )
+
+    baseline = _make_backtest(0.20, 0.18)
+    calibrated = _make_backtest(0.22, 0.20)
+    learned = _make_backtest(0.24, 0.22)
+    paths = publish_v2_research_artifacts(
+        strategy_id="swing_v2",
+        artifact_root=str(tmp_path),
+        cache_root=str(tmp_path / "cache"),
+        publish_forecast_models=False,
+        settings={
+            "config_path": "config/api.json",
+            "source": "local",
+            "watchlist": "config/watchlist.json",
+            "universe_file": "config/universe_smoke_5.json",
+            "universe_limit": 2,
+            "start": "2024-01-01",
+            "end": "2024-12-31",
+            "info_file": str(info_dir),
+            "use_info_fusion": False,
+            "use_learned_info_fusion": True,
+            "info_shadow_only": True,
+            "enable_insight_memory": True,
+            "external_signals": False,
+            "info_source_mode": "layered",
+            "info_subsets": ["market_news", "announcements", "research"],
+        },
+        baseline=baseline,
+        calibration=V2CalibrationResult(
+            best_policy=PolicySpec(),
+            best_score=0.12,
+            baseline=baseline,
+            calibrated=calibrated,
+            trials=[],
+        ),
+        learning=V2PolicyLearningResult(
+            model=LearnedPolicyModel(
+                feature_names=["x1"],
+                exposure_intercept=0.55,
+                exposure_coef=[0.1],
+                position_intercept=2.5,
+                position_coef=[0.05],
+                turnover_intercept=0.20,
+                turnover_coef=[0.01],
+                train_rows=88,
+                train_r2_exposure=0.33,
+                train_r2_positions=0.25,
+                train_r2_turnover=0.19,
+            ),
+            baseline=baseline,
+            learned=learned,
+        ),
+    )
+
+    info_manifest = json.loads(Path(paths["info_manifest"]).read_text(encoding="utf-8"))
+    dataset_manifest = json.loads(Path(paths["dataset_manifest"]).read_text(encoding="utf-8"))
+    research_manifest = json.loads(Path(paths["research_manifest"]).read_text(encoding="utf-8"))
+
+    assert info_manifest["info_item_count"] == 3
+    assert info_manifest["info_shadow_enabled"] is True
+    assert dataset_manifest["use_learned_info_fusion"] is True
+    assert dataset_manifest["info_item_count"] == 3
+    assert research_manifest["use_learned_info_fusion"] is True

@@ -119,6 +119,7 @@ def load_v2_runtime_settings(
     info_lookback_days: int | None = None,
     info_half_life_days: float | None = None,
     use_info_fusion: bool | None = None,
+    use_learned_info_fusion: bool | None = None,
     info_shadow_only: bool | None = None,
     info_types: str | None = None,
     info_source_mode: str | None = None,
@@ -330,7 +331,11 @@ def load_v2_runtime_settings(
             if use_info_fusion is not None
             else parse_boolish(pick("use_info_fusion", False), False)
         ),
-        "use_learned_info_fusion": parse_boolish(pick("use_learned_info_fusion", pick("use_learned_news_fusion", True)), True),
+        "use_learned_info_fusion": (
+            bool(use_learned_info_fusion)
+            if use_learned_info_fusion is not None
+            else parse_boolish(pick("use_learned_info_fusion", pick("use_learned_news_fusion", True)), True)
+        ),
         "learned_info_min_samples": int(pick("learned_info_min_samples", pick("learned_news_min_samples", 80))),
         "learned_info_l2": float(pick("learned_info_l2", pick("learned_news_l2", 0.8))),
         "learned_info_holdout_ratio": float(pick("learned_info_holdout_ratio", pick("learned_holdout_ratio", 0.2))),

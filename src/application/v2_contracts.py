@@ -235,6 +235,9 @@ class ExecutionPlan:
     name: str = ""
     theme: str = ""
     role: str = ""
+    trim_score: float = 0.0
+    trim_rank: int = 0
+    trim_label: str = ""
 
 
 @dataclass(frozen=True)
@@ -320,6 +323,7 @@ class PolicyInput:
     current_cash: float
     total_equity: float
     current_holding_days: Dict[str, int] = field(default_factory=dict)
+    exit_behavior_model: Dict[str, object] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -352,6 +356,12 @@ class PolicyDecision:
     desired_symbol_target_weights: Dict[str, float] = field(default_factory=dict)
     execution_notes: List[str] = field(default_factory=list)
     risk_notes: List[str] = field(default_factory=list)
+    actionability_scores: Dict[str, float] = field(default_factory=dict)
+    actionable_symbols: List[str] = field(default_factory=list)
+    blocked_fresh_candidates: Dict[str, List[str]] = field(default_factory=dict)
+    trim_candidate_scores: Dict[str, float] = field(default_factory=dict)
+    trim_candidate_ranks: Dict[str, int] = field(default_factory=dict)
+    trim_candidate_labels: Dict[str, str] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)

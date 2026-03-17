@@ -13,7 +13,12 @@ from src.application.v2_external_signal_support import (
     ensure_external_signal_manifest_path,
     merge_external_signal_manifest_summary,
 )
-from src.application.v2_leader_runtime import build_leader_artifact_payloads
+from src.application.v2_info_shadow_runtime import (
+    info_payload_enabled as info_payload_enabled_for_settings,
+    info_shadow_enabled as info_shadow_enabled_for_settings,
+)
+from src.application.v2_leader_runtime import build_leader_artifact_payloads, build_research_label_artifact_payloads
+from src.application.v2_signal_training_runtime import build_signal_training_artifacts
 from src.contracts.artifacts import add_artifact_metadata
 
 
@@ -86,6 +91,7 @@ def publish_research_artifacts(
     info_lookback_days: int | None = None,
     info_half_life_days: float | None = None,
     use_info_fusion: bool | None = None,
+    use_learned_info_fusion: bool | None = None,
     info_shadow_only: bool | None = None,
     info_types: str | None = None,
     info_source_mode: str | None = None,
@@ -125,6 +131,7 @@ def publish_research_artifacts(
         info_lookback_days=info_lookback_days,
         info_half_life_days=info_half_life_days,
         use_info_fusion=use_info_fusion,
+        use_learned_info_fusion=use_learned_info_fusion,
         info_shadow_only=info_shadow_only,
         info_types=info_types,
         info_source_mode=info_source_mode,
@@ -281,6 +288,10 @@ def publish_research_artifacts(
         "execution_plan": str(paths.execution_plan_path),
         "leader_manifest": str(paths.leader_manifest_path),
         "leader_candidates": str(paths.leader_candidates_path),
+        "leader_training_labels": str(paths.leader_training_labels_path),
+        "exit_training_labels": str(paths.exit_training_labels_path),
+        "leader_rank_model": str(paths.leader_rank_model_path),
+        "exit_behavior_model": str(paths.exit_behavior_model_path),
         "external_signal_version": str(settings.get("external_signal_version", "v1")),
         "external_signal_enabled": "true" if bool(settings.get("external_signals", True)) else "false",
         "generator_manifest": str(settings.get("generator_manifest_path", "")),
@@ -402,6 +413,12 @@ class InsightPublishArtifacts:
 class LeaderPublishArtifacts:
     manifest: dict[str, object]
     candidates: list[dict[str, object]]
+    training_label_manifest: dict[str, object]
+    leader_training_labels: list[dict[str, object]]
+    exit_training_labels: list[dict[str, object]]
+    signal_training_manifest: dict[str, object]
+    leader_rank_model: dict[str, object]
+    exit_behavior_model: dict[str, object]
 
 
 @dataclass(frozen=True)
@@ -425,6 +442,10 @@ class PublishPaths:
     execution_plan_path: Path
     leader_manifest_path: Path
     leader_candidates_path: Path
+    leader_training_labels_path: Path
+    exit_training_labels_path: Path
+    leader_rank_model_path: Path
+    exit_behavior_model_path: Path
     manifest_path: Path
     latest_policy_path: Path
     latest_manifest_path: Path
@@ -686,6 +707,10 @@ def _build_publish_paths(
         execution_plan_path=base_dir / "execution_plan.json",
         leader_manifest_path=base_dir / "leader_manifest.json",
         leader_candidates_path=base_dir / "leader_candidates.json",
+        leader_training_labels_path=base_dir / "leader_training_labels.json",
+        exit_training_labels_path=base_dir / "exit_training_labels.json",
+        leader_rank_model_path=base_dir / "leader_rank_model.json",
+        exit_behavior_model_path=base_dir / "exit_behavior_model.json",
         manifest_path=base_dir / "research_manifest.json",
         latest_policy_path=Path(str(artifact_root)) / str(strategy_id) / "latest_policy_model.json",
         latest_manifest_path=Path(str(artifact_root)) / str(strategy_id) / "latest_research_manifest.json",
@@ -752,7 +777,9 @@ def _build_info_publish_artifacts(
     ).normalize()
     info_items: list[InfoItem] = []
     trajectory = forecast_artifacts.trajectory
-    if bool(settings.get("use_info_fusion", False)):
+    info_payload_requested = info_payload_enabled_for_settings(settings)
+    info_shadow_requested = info_shadow_enabled_for_settings(settings)
+    if info_payload_requested:
         if trajectory is None:
             trajectory = dependencies.load_or_build_v2_backtest_trajectory_fn(
                 config_path=str(settings.get("config_path", config_path)),
@@ -790,7 +817,7 @@ def _build_info_publish_artifacts(
             as_of_date=info_as_of_date,
             learned_window=True,
         )
-        if trajectory is not None and info_items:
+        if trajectory is not None and info_items and info_shadow_requested:
             _, validation_traj, holdout_traj = dependencies.split_research_trajectory_fn(
                 trajectory,
                 split_mode=split_mode,
@@ -942,22 +969,79 @@ def _build_leader_publish_artifacts(
         frozen_composite = dependencies.decode_composite_state_fn(
             info_artifacts.frozen_daily_state.get("composite_state")
         )
+    fit_trajectory = None
     evaluation_trajectory = None
     if forecast_artifacts.trajectory is not None:
-        _, _, evaluation_trajectory = dependencies.split_research_trajectory_fn(
+        train_trajectory, validation_trajectory, evaluation_trajectory = dependencies.split_research_trajectory_fn(
             forecast_artifacts.trajectory,
             split_mode=split_mode,
             embargo_days=embargo_days,
         )
+        fit_steps = list(getattr(train_trajectory, "steps", []) or []) + list(getattr(validation_trajectory, "steps", []) or [])
+        if fit_steps:
+            fit_trajectory = type(forecast_artifacts.trajectory)(
+                prepared=getattr(forecast_artifacts.trajectory, "prepared", None),
+                steps=fit_steps,
+            )
     payloads = build_leader_artifact_payloads(
         state=frozen_composite,
         trajectory=evaluation_trajectory,
         top_k=3,
         limit=16,
     )
+    label_payloads = build_research_label_artifact_payloads(
+        trajectory=forecast_artifacts.trajectory,
+        min_leader_theme_size=3,
+        min_exit_theme_size=2,
+        exit_candidate_limit=8,
+    )
+    fit_label_payloads = build_research_label_artifact_payloads(
+        trajectory=fit_trajectory,
+        min_leader_theme_size=3,
+        min_exit_theme_size=2,
+        exit_candidate_limit=8,
+    )
+    evaluation_label_payloads = build_research_label_artifact_payloads(
+        trajectory=evaluation_trajectory,
+        min_leader_theme_size=3,
+        min_exit_theme_size=2,
+        exit_candidate_limit=8,
+    )
+    signal_payloads = build_signal_training_artifacts(
+        leader_fit_rows=[dict(item) for item in fit_label_payloads.get("leader_training_labels", []) if isinstance(item, dict)],
+        leader_evaluation_rows=[
+            dict(item) for item in evaluation_label_payloads.get("leader_training_labels", []) if isinstance(item, dict)
+        ],
+        exit_fit_rows=[dict(item) for item in fit_label_payloads.get("exit_training_labels", []) if isinstance(item, dict)],
+        exit_evaluation_rows=[
+            dict(item) for item in evaluation_label_payloads.get("exit_training_labels", []) if isinstance(item, dict)
+        ],
+        l2=1.0,
+    )
+    manifest = dict(payloads.get("leader_manifest", {}))
+    manifest["training_labels"] = dict(label_payloads.get("training_label_manifest", {}))
+    manifest["signal_models"] = dict(signal_payloads.get("signal_training_manifest", {}))
+    leader_rank_model = add_artifact_metadata(
+        dict(signal_payloads.get("leader_rank_model", {})),
+        artifact_type="leader_rank_model",
+    )
+    exit_behavior_model = add_artifact_metadata(
+        dict(signal_payloads.get("exit_behavior_model", {})),
+        artifact_type="exit_behavior_model",
+    )
     return LeaderPublishArtifacts(
-        manifest=dict(payloads.get("leader_manifest", {})),
+        manifest=manifest,
         candidates=[dict(item) for item in payloads.get("leader_candidates", []) if isinstance(item, dict)],
+        training_label_manifest=dict(label_payloads.get("training_label_manifest", {})),
+        leader_training_labels=[
+            dict(item) for item in label_payloads.get("leader_training_labels", []) if isinstance(item, dict)
+        ],
+        exit_training_labels=[
+            dict(item) for item in label_payloads.get("exit_training_labels", []) if isinstance(item, dict)
+        ],
+        signal_training_manifest=dict(signal_payloads.get("signal_training_manifest", {})),
+        leader_rank_model=leader_rank_model,
+        exit_behavior_model=exit_behavior_model,
     )
 
 
@@ -1094,6 +1178,10 @@ def _write_and_publish_artifacts(
     _write_publish_json(paths.execution_plan_path, {"items": insight_artifacts.execution_plan})
     _write_publish_json(paths.leader_manifest_path, leader_artifacts.manifest)
     _write_publish_json(paths.leader_candidates_path, {"items": leader_artifacts.candidates})
+    _write_publish_json(paths.leader_training_labels_path, {"items": leader_artifacts.leader_training_labels})
+    _write_publish_json(paths.exit_training_labels_path, {"items": leader_artifacts.exit_training_labels})
+    _write_publish_json(paths.leader_rank_model_path, leader_artifacts.leader_rank_model)
+    _write_publish_json(paths.exit_behavior_model_path, leader_artifacts.exit_behavior_model)
     _write_publish_json(paths.manifest_path, manifests.research_manifest)
     _write_publish_json(paths.tier_latest_manifest_path, manifests.research_manifest)
     if gate_artifacts.gate_ok:
@@ -1167,6 +1255,10 @@ def _build_publish_manifests(
             "event_file": str(settings.get("event_file", info_artifacts.info_file_path)),
             "info_hash": info_artifacts.info_hash,
             "info_shadow_enabled": bool(info_artifacts.info_shadow_enabled),
+            "use_info_fusion": bool(settings.get("use_info_fusion", False)),
+            "use_learned_info_fusion": bool(
+                settings.get("use_learned_info_fusion", settings.get("use_learned_news_fusion", False))
+            ),
             "info_shadow_only": bool(settings.get("info_shadow_only", True)),
             "info_item_count": int(info_artifacts.info_manifest.get("info_item_count", 0)),
             "info_source_mode": str(settings.get("info_source_mode", "layered")),
@@ -1276,6 +1368,10 @@ def _build_publish_manifests(
             "source_universe_manifest_path": context.source_universe_manifest_path,
             "info_hash": info_artifacts.info_hash,
             "info_shadow_enabled": bool(info_artifacts.info_shadow_enabled),
+            "use_info_fusion": bool(settings.get("use_info_fusion", False)),
+            "use_learned_info_fusion": bool(
+                settings.get("use_learned_info_fusion", settings.get("use_learned_news_fusion", False))
+            ),
             "info_source_mode": str(settings.get("info_source_mode", "layered")),
             "info_subsets": [str(item) for item in settings.get("info_subsets", [])],
             "announcement_event_tags": [str(item) for item in settings.get("announcement_event_tags", [])],
@@ -1332,7 +1428,13 @@ def _build_publish_manifests(
             "insight_summary": insight_artifacts.manifest,
             "leader_manifest": str(paths.leader_manifest_path),
             "leader_candidates": str(paths.leader_candidates_path),
+            "leader_training_labels": str(paths.leader_training_labels_path),
+            "exit_training_labels": str(paths.exit_training_labels_path),
+            "leader_rank_model": str(paths.leader_rank_model_path),
+            "exit_behavior_model": str(paths.exit_behavior_model_path),
             "leader_summary": leader_artifacts.manifest,
+            "training_label_summary": leader_artifacts.training_label_manifest,
+            "signal_model_summary": leader_artifacts.signal_training_manifest,
             "published_policy_model": str(paths.latest_policy_path),
             "latest_research_manifest": str(paths.latest_manifest_path),
             "tier_published_policy_model": str(paths.tier_latest_policy_path),

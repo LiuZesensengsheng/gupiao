@@ -72,6 +72,7 @@ def build_daily_report_view_model(result: DailyRunResult) -> DailyReportViewMode
     market_payload = dict(summary["market"])
     market_facts = dict(market_payload.get("market_facts", {}))
     sentiment = dict(market_payload.get("sentiment", {}))
+    market_info_state = dict(summary.get("market_info_state", {}))
     policy = dict(summary["policy"])
     selected_symbols = {
         str(symbol)
@@ -97,6 +98,18 @@ def build_daily_report_view_model(result: DailyRunResult) -> DailyReportViewMode
         for symbol, item in getattr(result.composite_state, "stock_role_states", {}).items()
     }
     execution_plans = [asdict(item) for item in getattr(result.composite_state, "execution_plans", [])]
+    actionability_scores = {
+        str(symbol): float(score)
+        for symbol, score in getattr(result.policy_decision, "actionability_scores", {}).items()
+    }
+    actionable_symbols = {
+        str(symbol)
+        for symbol in getattr(result.policy_decision, "actionable_symbols", [])
+    }
+    blocked_fresh_candidates = {
+        str(symbol): [str(reason) for reason in reasons]
+        for symbol, reasons in getattr(result.policy_decision, "blocked_fresh_candidates", {}).items()
+    }
 
     candidate_order = {
         str(symbol): idx
@@ -108,7 +121,8 @@ def build_daily_report_view_model(result: DailyRunResult) -> DailyReportViewMode
     )
     top20 = ranked_stocks[:20]
 
-    top_recommendations: list[dict[str, object]] = []
+    monitor_recommendations: list[dict[str, object]] = []
+    actionable_recommendations: list[dict[str, object]] = []
     explanation_cards: list[dict[str, object]] = []
     stock_reason_map: dict[str, str] = {}
     for idx, stock in enumerate(top20, start=1):
@@ -123,8 +137,20 @@ def build_daily_report_view_model(result: DailyRunResult) -> DailyReportViewMode
             if stock.symbol in selected_symbols and stock.action_reason
             else stock.blocked_reason or stock.weight_reason or "NA"
         )
+        execution_status = "monitor"
+        if stock.symbol in selected_symbols:
+            execution_status = "selected"
+        elif stock.symbol in actionable_symbols:
+            execution_status = "actionable"
+        elif stock.symbol in blocked_fresh_candidates:
+            execution_status = "blocked"
+        gate_reason = "prediction-only monitor"
+        if stock.symbol in blocked_fresh_candidates:
+            gate_reason = " / ".join(blocked_fresh_candidates.get(stock.symbol, [])[:2]) or "blocked by actionability gate"
+        elif stock.symbol in actionable_symbols:
+            gate_reason = "passed execution gate"
         stock_reason_map[stock.symbol] = reason
-        top_recommendations.append(
+        monitor_recommendations.append(
             {
                 "rank": idx,
                 "symbol": stock.symbol,
@@ -139,6 +165,9 @@ def build_daily_report_view_model(result: DailyRunResult) -> DailyReportViewMode
                 "median_20d": float(twenty.get("q50", float("nan"))),
                 "up_prob_1d": float(one.get("up_prob", float("nan"))),
                 "confidence_1d": float(one.get("confidence", float("nan"))),
+                "actionability_score": float(actionability_scores.get(stock.symbol, float("nan"))),
+                "execution_status": execution_status,
+                "gate_reason": gate_reason,
             }
         )
         explanation_cards.append(
@@ -161,11 +190,54 @@ def build_daily_report_view_model(result: DailyRunResult) -> DailyReportViewMode
                 "selection_reasons": list(stock.selection_reasons),
                 "ranking_reasons": list(stock.ranking_reasons),
                 "selected": stock.symbol in selected_symbols,
+                "actionable": stock.symbol in actionable_symbols,
                 "action_reason": stock.action_reason,
                 "blocked_reason": stock.blocked_reason,
                 "weight_reason": stock.weight_reason,
                 "risk_flags": list(stock.risk_flags),
                 "invalidation_rule": stock.invalidation_rule,
+                "actionability_score": float(actionability_scores.get(stock.symbol, float("nan"))),
+                "execution_status": execution_status,
+                "gate_reason": gate_reason,
+            }
+        )
+
+    actionable_universe = [
+        stock for stock in ranked_stocks
+        if stock.symbol in actionable_symbols
+    ]
+    actionable_universe.sort(
+        key=lambda stock: (
+            -int(stock.symbol in selected_symbols),
+            -float(result.policy_decision.symbol_target_weights.get(stock.symbol, 0.0)),
+            -float(result.policy_decision.desired_symbol_target_weights.get(stock.symbol, 0.0)),
+            -float(actionability_scores.get(stock.symbol, 0.0)),
+            int(candidate_order.get(stock.symbol, len(candidate_order) + 999)),
+        )
+    )
+    for idx, stock in enumerate(actionable_universe[:10], start=1):
+        forecasts = _flatten_horizon_forecasts(asdict(stock).get("horizon_forecasts", {}))
+        forecast_by_horizon = {str(item["horizon"]): item for item in forecasts}
+        one = forecast_by_horizon.get("1d", {})
+        five = forecast_by_horizon.get("5d", {})
+        actionable_recommendations.append(
+            {
+                "rank": idx,
+                "symbol": stock.symbol,
+                "name": _stock_name(stock.symbol),
+                "sector": stock.sector,
+                "actionability_score": float(actionability_scores.get(stock.symbol, float("nan"))),
+                "target_weight": float(result.policy_decision.symbol_target_weights.get(stock.symbol, 0.0)),
+                "desired_weight": float(result.policy_decision.desired_symbol_target_weights.get(stock.symbol, 0.0)),
+                "next_session_range": (
+                    f"{one['price_low']:.2f} ~ {one['price_high']:.2f}"
+                    if one and one["price_low"] == one["price_low"] and one["price_high"] == one["price_high"]
+                    else "NA"
+                ),
+                "up_prob_1d": float(one.get("up_prob", float("nan"))),
+                "median_5d": float(five.get("q50", float("nan"))),
+                "execution_status": "selected" if stock.symbol in selected_symbols else "eligible",
+                "gate_reason": "passed execution gate",
             }
         )
 
@@ -270,6 +342,14 @@ def build_daily_report_view_model(result: DailyRunResult) -> DailyReportViewMode
             "memory_path": str(summary["memory_path"] or ""),
             "recall": dict(summary["memory_recall"]),
         },
+        info_summary={
+            "item_count": int(summary.get("info_item_count", 0)),
+            "shadow_enabled": bool(summary.get("info_shadow_enabled", False)),
+            "market_info_state": market_info_state,
+            "top_negative_events": [dict(item) for item in summary.get("top_negative_info_events", [])[:5]],
+            "top_positive_signals": [dict(item) for item in summary.get("top_positive_info_signals", [])[:5]],
+            "quant_info_divergence": [dict(item) for item in summary.get("quant_info_divergence", [])[:5]],
+        },
         external_signals={
             "capital_flow": dict(summary["capital_flow_state"]),
             "macro_context": dict(summary["macro_context_state"]),
@@ -279,7 +359,9 @@ def build_daily_report_view_model(result: DailyRunResult) -> DailyReportViewMode
         leader_candidates=leader_candidates,
         holding_role_changes=holding_role_changes,
         execution_plans=execution_plans,
-        top_recommendations=top_recommendations,
+        monitor_recommendations=monitor_recommendations,
+        actionable_recommendations=actionable_recommendations,
+        top_recommendations=monitor_recommendations,
         explanation_cards=explanation_cards,
         prediction_review={
             "windows": review_windows,

@@ -9,6 +9,7 @@ from src.application.watchlist import load_watchlist
 from src.domain.symbols import SymbolError, normalize_symbol
 from src.infrastructure.data_sync import sync_market_data
 from src.infrastructure.discovery import _load_universe_file as _load_discovery_universe_file
+from src.infrastructure.info_sync import sync_info_data
 from src.infrastructure.margin_sync import sync_margin_data
 from src.infrastructure.market_data import DataError, set_tushare_token
 
@@ -41,6 +42,15 @@ DEFAULT_TASK: dict[str, dict[str, Any]] = {
         "universe_file": "",
         "universe_limit": 0,
         "sleep_ms": 80,
+    },
+    "sync-info": {
+        "symbols": "",
+        "universe_file": "",
+        "universe_limit": 0,
+        "info_dir": "input/info_parts",
+        "sleep_ms": 120,
+        "max_retries": 3,
+        "timeout": 20.0,
     },
 }
 
@@ -141,6 +151,28 @@ def build_parser() -> argparse.ArgumentParser:
         help="Comma separated symbols, e.g. 600160.SH,000630.SZ",
     )
     sync_margin.add_argument("--sleep-ms", dest="sleep_ms", type=int, default=None, help="Sleep between requests in ms")
+
+    sync_info = sub.add_parser("sync-info", parents=[config_parent], help="Sync structured info parts for V2 info layer")
+    sync_info.add_argument("--watchlist", default=None, help="Watchlist JSON path when --symbols is not provided")
+    sync_info.add_argument("--universe-file", dest="universe_file", default=None, help="Universe file (csv/json)")
+    sync_info.add_argument(
+        "--universe-limit",
+        dest="universe_limit",
+        type=int,
+        default=None,
+        help="Optional limit on symbols loaded from universe file",
+    )
+    sync_info.add_argument("--start", default=None, help="Start date YYYY-MM-DD")
+    sync_info.add_argument("--end", default=None, help="End date YYYY-MM-DD")
+    sync_info.add_argument(
+        "--symbols",
+        default=None,
+        help="Comma separated symbols, e.g. 600160.SH,000630.SZ",
+    )
+    sync_info.add_argument("--info-dir", dest="info_dir", default=None, help="Structured info output directory")
+    sync_info.add_argument("--sleep-ms", dest="sleep_ms", type=int, default=None, help="Sleep between announcement pages in ms")
+    sync_info.add_argument("--max-retries", dest="max_retries", type=int, default=None, help="Max retries per remote request")
+    sync_info.add_argument("--timeout", dest="timeout", type=float, default=None, help="HTTP timeout in seconds")
 
     return parser
 
@@ -307,10 +339,40 @@ def run_sync_margin(settings: dict[str, Any]) -> int:
     return 0
 
 
+def run_sync_info(settings: dict[str, Any]) -> int:
+    set_tushare_token(settings.get("tushare_token", ""))
+    symbols = _parse_symbol_list(settings.get("symbols", ""))
+    result = sync_info_data(
+        out_dir=str(settings["info_dir"]),
+        start=str(settings["start"]),
+        end=str(settings["end"]),
+        watchlist=str(settings["watchlist"]),
+        universe_file=str(settings.get("universe_file", "")),
+        universe_limit=int(settings.get("universe_limit", 0) or 0),
+        symbols=symbols,
+        tushare_token=str(settings.get("tushare_token", "")),
+        sleep_ms=int(settings["sleep_ms"]),
+        max_retries=int(settings["max_retries"]),
+        timeout=float(settings["timeout"]),
+    )
+    print(f"[OK] Info output: {result.out_dir}")
+    print(f"[OK] Symbols resolved: {result.symbol_count}")
+    print(f"[OK] Market news rows: {result.market_news_rows}")
+    print(f"[OK] Announcement rows: {result.announcement_rows}")
+    print(f"[OK] Research rows: {result.research_rows}")
+    for note in result.notes:
+        print(f"[WARN] {note}")
+    if max(result.market_news_rows, result.announcement_rows, result.research_rows) <= 0:
+        print("[ERROR] No info rows were synced.")
+        return 2
+    return 0
+
+
 def _task_handlers() -> dict[str, Any]:
     return {
         "sync-data": run_sync_data,
         "sync-margin": run_sync_margin,
+        "sync-info": run_sync_info,
     }
 
 
