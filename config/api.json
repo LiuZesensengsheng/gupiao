@@ -1,7 +1,7 @@
 {
   "common": {
     "source": "auto",
-    "tushare_token": "",
+    "tushare_token": "ce0d71cf4f8716ca95d18a4ea489d784eb2d67eaec9f9b125336dc4d",
     "watchlist": "config/watchlist.json",
     "data_dir": "data",
     "start": "2018-01-01",
@@ -13,6 +13,9 @@
     "use_margin_features": true,
     "use_us_index_context": true,
     "us_index_source": "akshare",
+    "use_us_sector_etf_context": true,
+    "use_cn_etf_context": true,
+    "cn_etf_source": "akshare",
     "margin_market_file": "input/margin_market.csv",
     "margin_stock_file": "input/margin_stock.csv"
   },
@@ -46,8 +49,10 @@
     "favorites_universe_file": "config/universe_favorites.json",
     "generated_universe_base_file": "config/universe_all_a_3y_local_ready_nost_no_kc_cy_stable3y.json",
     "baseline_reference_run_id": "20260308_211808",
-    "universe_file": "config/universe_auto_longtrain.json",
-    "universe_limit": 500,
+    "universe_file": "config/universe_ml_80.json",
+    "universe_limit": 80,
+    "main_board_only_universe": true,
+    "main_board_only_recommendations": true,
     "positions_file": "",
     "portfolio_nav": 0.0,
     "trade_lot_size": 100,

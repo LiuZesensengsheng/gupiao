@@ -25,6 +25,14 @@ _NEGATIVE_EVENT_TAGS = {
     "delisting_risk",
 }
 
+_POSITIVE_CATALYST_TAGS = {
+    "earnings_positive",
+    "guidance_positive",
+    "contract_win",
+    "regulatory_positive",
+    "share_increase",
+}
+
 
 def _clip(value: float, lo: float, hi: float) -> float:
     return max(float(lo), min(float(hi), float(value)))
@@ -80,6 +88,21 @@ def _negative_event_severity(item: InfoItem) -> float:
     return float(base)
 
 
+def _catalyst_strength(item: InfoItem) -> float:
+    sign = normalize_direction(item.direction)
+    if sign <= 0 and item.event_tag not in _POSITIVE_CATALYST_TAGS:
+        return 0.0
+    if item.event_tag in {"earnings_positive", "guidance_positive"}:
+        base = 0.85
+    elif item.event_tag in {"contract_win", "regulatory_positive"}:
+        base = 0.70
+    elif item.event_tag == "share_increase":
+        base = 0.55
+    else:
+        base = 0.30 if sign > 0 else 0.0
+    return float(base)
+
+
 def _aggregate_items(
     items: Iterable[tuple[InfoItem, float]],
     *,
@@ -96,6 +119,10 @@ def _aggregate_items(
     research_count = 0
     negative_risk_total = 0.0
     negative_risk_weight = 0.0
+    catalyst_total = 0.0
+    catalyst_weight = 0.0
+    confidence_total = 0.0
+    source_labels: set[str] = set()
 
     for item, carry in items:
         weight = _item_weight(item, as_of_date=as_of_date, half_life_days=half_life_days, carry=carry)
@@ -117,12 +144,25 @@ def _aggregate_items(
         if neg_severity > 0.0:
             negative_risk_total += weight * neg_severity
             negative_risk_weight += weight
+        catalyst = _catalyst_strength(item)
+        if catalyst > 0.0:
+            catalyst_total += weight * catalyst
+            catalyst_weight += weight
+        confidence_total += weight * _clip(_safe_float(item.confidence, 0.7), 0.0, 1.0)
+        source_label = str(item.source_subset or item.info_type or "").strip().lower()
+        if source_label:
+            source_labels.add(source_label)
 
     short_value = 0.0 if short_total <= 1e-12 else float(np.clip(short_score / short_total, -1.0, 1.0))
     mid_value = 0.0 if mid_total <= 1e-12 else float(np.clip(mid_score / mid_total, -1.0, 1.0))
     negative_event_risk = 0.0 if negative_risk_weight <= 1e-12 else float(
         np.clip(negative_risk_total / negative_risk_weight, 0.0, 1.0)
     )
+    catalyst_strength = 0.0 if catalyst_weight <= 1e-12 else float(np.clip(catalyst_total / catalyst_weight, 0.0, 1.0))
+    total_weight = max(short_total, mid_total, negative_risk_weight, 1e-12)
+    coverage_confidence = float(np.clip(confidence_total / total_weight, 0.0, 1.0))
+    source_diversity = float(np.clip(len(source_labels) / 4.0, 0.0, 1.0))
+    event_risk_level = float(np.clip(0.70 * negative_event_risk + 0.30 * max(0.0, -short_value), 0.0, 1.0))
     return InfoAggregateState(
         short_score=short_value,
         mid_score=mid_value,
@@ -137,6 +177,10 @@ def _aggregate_items(
         shadow_prob_1d=0.5,
         shadow_prob_5d=0.5,
         shadow_prob_20d=0.5,
+        event_risk_level=event_risk_level,
+        catalyst_strength=catalyst_strength,
+        coverage_confidence=coverage_confidence,
+        source_diversity=source_diversity,
     )
 
 
@@ -197,6 +241,10 @@ def build_info_state_maps(
         short_score = float(np.average([item.short_score for item in bucket], weights=weight))
         mid_score = float(np.average([item.mid_score for item in bucket], weights=weight))
         negative_event_risk = float(np.average([item.negative_event_risk for item in bucket], weights=weight))
+        event_risk_level = float(np.average([item.event_risk_level for item in bucket], weights=weight))
+        catalyst_strength = float(np.average([item.catalyst_strength for item in bucket], weights=weight))
+        coverage_confidence = float(np.average([item.coverage_confidence for item in bucket], weights=weight))
+        source_diversity = float(np.average([item.source_diversity for item in bucket], weights=weight))
         info_prob_1d = float(np.average([item.info_prob_1d for item in bucket], weights=weight))
         info_prob_5d = float(np.average([item.info_prob_5d for item in bucket], weights=weight))
         info_prob_20d = float(np.average([item.info_prob_20d for item in bucket], weights=weight))
@@ -214,6 +262,10 @@ def build_info_state_maps(
             shadow_prob_1d=0.5,
             shadow_prob_5d=0.5,
             shadow_prob_20d=0.5,
+            event_risk_level=event_risk_level,
+            catalyst_strength=catalyst_strength,
+            coverage_confidence=coverage_confidence,
+            source_diversity=source_diversity,
         )
     return market_state, sector_states, stock_states
 
@@ -266,7 +318,12 @@ def top_positive_stock_signals(
     rows: list[InfoSignalRecord] = []
     for stock in state.stocks:
         info_state = state.stock_info_states.get(stock.symbol, InfoAggregateState())
-        score = 0.45 * float(info_state.mid_score) + 0.35 * float(info_state.short_score) - 0.20 * float(info_state.negative_event_risk)
+        score = (
+            0.35 * float(info_state.mid_score)
+            + 0.20 * float(info_state.short_score)
+            + 0.30 * float(info_state.catalyst_strength)
+            - 0.15 * float(info_state.negative_event_risk)
+        )
         if score <= 0.0 or info_state.item_count <= 0:
             continue
         rows.append(

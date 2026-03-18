@@ -42,7 +42,10 @@ def forecast_cross_section_state(
     if market_frame is None or market_frame.empty:
         raise ValueError("market_frame is empty")
 
-    latest = market_frame.sort_values("date").iloc[-1]
+    if market_frame["date"].is_monotonic_increasing:
+        latest = market_frame.iloc[-1]
+    else:
+        latest = market_frame.sort_values("date").iloc[-1]
 
     large_vs_small = _clip(
         _safe_latest_value(latest, "idx_cyb_trend_20_60") - _safe_latest_value(latest, "idx_sh_trend_20_60"),

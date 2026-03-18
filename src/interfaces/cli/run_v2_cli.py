@@ -5,11 +5,6 @@ import json
 from pathlib import Path
 
 from src.application.v2_services import (
-    load_published_v2_policy_model,
-    publish_v2_research_artifacts,
-    run_daily_v2_live,
-    run_v2_research_matrix,
-    run_v2_research_workflow,
     summarize_daily_run,
     summarize_v2_backtest,
     summarize_v2_calibration,
@@ -20,8 +15,79 @@ from src.application.v2_workflow import (
     build_research_run_blueprint,
     describe_v2_stack,
 )
+from src.artifact_registry.v2_registry import (
+    load_published_v2_policy_model,
+    publish_v2_research_artifacts,
+)
+from src.contracts.runtime import DailyRunOptions, ResearchMatrixOptions, ResearchRunOptions
+from src.infrastructure.market_data import set_tushare_token
 from src.interfaces.presenters.html_dashboard import write_v2_daily_dashboard, write_v2_research_dashboard
 from src.interfaces.presenters.markdown_reports import write_v2_daily_report, write_v2_research_report
+from src.workflows.daily_workflow import run_daily_v2_live
+from src.workflows.research_workflow import last_research_trajectory, run_v2_research_matrix, run_v2_research_workflow
+
+
+def _add_runtime_identity_args(parser: argparse.ArgumentParser, *, strategy_help: str) -> None:
+    parser.add_argument("--strategy", default="swing_v2", help=strategy_help)
+    parser.add_argument("--config", default="config/api.json", help="Runtime config path")
+    parser.add_argument("--source", default=None, help="Optional source override")
+    parser.add_argument("--tushare-token", dest="tushare_token", default=None, help="Optional Tushare token override")
+
+
+def _add_universe_args(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument("--universe-tier", dest="universe_tier", default=None, help="Optional predefined universe tier override")
+    parser.add_argument("--universe-file", dest="universe_file", default=None, help="Optional universe file override")
+    parser.add_argument("--universe-limit", dest="universe_limit", type=int, default=None, help="Optional universe size override")
+    parser.add_argument("--dynamic-universe", dest="dynamic_universe", action="store_true", default=None, help="Enable dynamic universe generation")
+    parser.add_argument("--no-dynamic-universe", dest="dynamic_universe", action="store_false", help="Disable dynamic universe generation")
+    parser.add_argument("--generator-target-size", dest="generator_target_size", type=int, default=None, help="Dynamic universe target size")
+    parser.add_argument("--generator-coarse-size", dest="generator_coarse_size", type=int, default=None, help="Dynamic universe coarse pool size")
+    parser.add_argument("--generator-theme-aware", dest="generator_theme_aware", action="store_true", default=None, help="Enable theme-aware generator quotas")
+    parser.add_argument("--no-generator-theme-aware", dest="generator_theme_aware", action="store_false", help="Disable theme-aware generator quotas")
+    parser.add_argument("--generator-use-concepts", dest="generator_use_concepts", action="store_true", default=None, help="Use concept metadata in dynamic generator")
+    parser.add_argument("--no-generator-use-concepts", dest="generator_use_concepts", action="store_false", help="Disable concept metadata in dynamic generator")
+
+
+def _add_info_args(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument("--info-file", dest="info_file", default=None, help="Optional structured info file or directory override")
+    parser.add_argument("--info-lookback-days", dest="info_lookback_days", type=int, default=None, help="Info lookback window")
+    parser.add_argument("--info-half-life-days", dest="info_half_life_days", type=float, default=None, help="Info half life")
+    parser.add_argument("--use-info-fusion", dest="use_info_fusion", action="store_true", default=None, help="Enable info shadow evaluation")
+    parser.add_argument("--no-use-info-fusion", dest="use_info_fusion", action="store_false", help="Disable info shadow evaluation")
+    parser.add_argument(
+        "--use-learned-info-fusion",
+        dest="use_learned_info_fusion",
+        action="store_true",
+        default=None,
+        help="Enable learned info shadow fitting and reporting",
+    )
+    parser.add_argument(
+        "--no-use-learned-info-fusion",
+        dest="use_learned_info_fusion",
+        action="store_false",
+        help="Disable learned info shadow fitting and reporting",
+    )
+    parser.add_argument("--info-shadow-only", dest="info_shadow_only", action="store_true", default=None, help="Keep info in shadow-only mode")
+    parser.add_argument("--no-info-shadow-only", dest="info_shadow_only", action="store_false", help="Disable shadow-only flag")
+    parser.add_argument("--info-types", dest="info_types", default=None, help="Comma-separated info types")
+    parser.add_argument("--info-source-mode", dest="info_source_mode", default=None, choices=["layered", "legacy"], help="Info input mode")
+    parser.add_argument("--info-subsets", dest="info_subsets", default=None, help="Comma-separated info subsets")
+
+
+def _add_external_context_args(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument("--external-signals", dest="external_signals", action="store_true", default=None, help="Enable external signal overlay")
+    parser.add_argument("--no-external-signals", dest="external_signals", action="store_false", help="Disable external signal overlay")
+    parser.add_argument("--event-file", dest="event_file", default=None, help="Optional event/news/announcement input override")
+    parser.add_argument("--capital-flow-file", dest="capital_flow_file", default=None, help="Optional capital flow input override")
+    parser.add_argument("--macro-file", dest="macro_file", default=None, help="Optional macro context input override")
+    parser.add_argument("--use-us-index-context", dest="use_us_index_context", action="store_true", default=None, help="Enable US index context features")
+    parser.add_argument("--no-use-us-index-context", dest="use_us_index_context", action="store_false", help="Disable US index context features")
+    parser.add_argument("--us-index-source", dest="us_index_source", default=None, choices=["akshare"], help="US index feature source")
+
+
+def _add_output_args(parser: argparse.ArgumentParser, *, report_default: str, dashboard_default: str, report_help: str) -> None:
+    parser.add_argument("--report", default=report_default, help=report_help)
+    parser.add_argument("--dashboard", default=dashboard_default, help="HTML dashboard output path")
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -31,60 +97,45 @@ def build_parser() -> argparse.ArgumentParser:
     sub.add_parser("describe", help="Print the V2 architecture summary")
 
     daily = sub.add_parser("daily-run", help="Print the V2 production workflow stages")
-    daily.add_argument("--strategy", default="swing_v2", help="Strategy snapshot id")
-    daily.add_argument("--config", default="config/api.json", help="Runtime config path for live mode")
-    daily.add_argument("--source", default=None, help="Optional source override")
-    daily.add_argument("--universe-tier", dest="universe_tier", default=None, help="Optional predefined universe tier override")
-    daily.add_argument("--universe-file", dest="universe_file", default=None, help="Optional universe file override")
-    daily.add_argument("--universe-limit", dest="universe_limit", type=int, default=None, help="Optional universe size override")
-    daily.add_argument("--info-file", dest="info_file", default=None, help="Optional structured info file or directory override")
-    daily.add_argument("--info-lookback-days", dest="info_lookback_days", type=int, default=None, help="Info lookback window")
-    daily.add_argument("--info-half-life-days", dest="info_half_life_days", type=float, default=None, help="Info half life")
-    daily.add_argument("--use-info-fusion", dest="use_info_fusion", action="store_true", default=None, help="Enable info shadow evaluation")
-    daily.add_argument("--no-use-info-fusion", dest="use_info_fusion", action="store_false", help="Disable info shadow evaluation")
-    daily.add_argument("--info-shadow-only", dest="info_shadow_only", action="store_true", default=None, help="Keep info in shadow-only mode")
-    daily.add_argument("--no-info-shadow-only", dest="info_shadow_only", action="store_false", help="Disable shadow-only flag")
-    daily.add_argument("--info-types", dest="info_types", default=None, help="Comma-separated info types")
-    daily.add_argument("--info-source-mode", dest="info_source_mode", default=None, choices=["layered", "legacy"], help="Info input mode")
-    daily.add_argument("--info-subsets", dest="info_subsets", default=None, help="Comma-separated info subsets")
-    daily.add_argument("--use-us-index-context", dest="use_us_index_context", action="store_true", default=None, help="Enable US index context features")
-    daily.add_argument("--no-use-us-index-context", dest="use_us_index_context", action="store_false", help="Disable US index context features")
-    daily.add_argument("--us-index-source", dest="us_index_source", default=None, choices=["akshare"], help="US index feature source")
-    daily.add_argument("--report", default="reports/v2_daily_report.md", help="Markdown report output path")
-    daily.add_argument("--dashboard", default="reports/v2_daily_dashboard.html", help="HTML dashboard output path")
+    _add_runtime_identity_args(daily, strategy_help="Strategy snapshot id")
+    _add_universe_args(daily)
+    _add_info_args(daily)
+    _add_external_context_args(daily)
+    _add_output_args(
+        daily,
+        report_default="reports/v2_daily_report.md",
+        dashboard_default="reports/v2_daily_dashboard.html",
+        report_help="Markdown report output path",
+    )
     daily.add_argument("--artifact-root", default="artifacts/v2", help="Published artifact root for learned policy snapshots")
     daily.add_argument("--cache-root", default="artifacts/v2/cache", help="On-disk cache root for daily-run results")
     daily.add_argument("--refresh-cache", action="store_true", help="Ignore existing daily-run cache and rebuild")
     daily.add_argument("--run-id", default=None, help="Pinned research run_id to consume")
     daily.add_argument("--snapshot-path", default=None, help="Pinned research manifest path (file or directory)")
     daily.add_argument("--allow-retrain", action="store_true", help="Allow daily-run to retrain forecasts (default: false)")
+    daily.add_argument(
+        "--disable-learned-policy",
+        action="store_true",
+        help="Use the rule-based policy only and ignore published learned policy models",
+    )
 
     research = sub.add_parser("research-run", help="Print the V2 research workflow stages")
-    research.add_argument("--strategy", default="swing_v2", help="Target strategy id")
-    research.add_argument("--config", default="config/api.json", help="Runtime config path")
-    research.add_argument("--source", default=None, help="Optional source override")
-    research.add_argument("--universe-tier", dest="universe_tier", default=None, help="Optional predefined universe tier override")
-    research.add_argument("--universe-file", dest="universe_file", default=None, help="Optional universe file override")
-    research.add_argument("--universe-limit", dest="universe_limit", type=int, default=None, help="Optional universe size override")
-    research.add_argument("--info-file", dest="info_file", default=None, help="Optional structured info file or directory override")
-    research.add_argument("--info-lookback-days", dest="info_lookback_days", type=int, default=None, help="Info lookback window")
-    research.add_argument("--info-half-life-days", dest="info_half_life_days", type=float, default=None, help="Info half life")
-    research.add_argument("--use-info-fusion", dest="use_info_fusion", action="store_true", default=None, help="Enable info shadow evaluation")
-    research.add_argument("--no-use-info-fusion", dest="use_info_fusion", action="store_false", help="Disable info shadow evaluation")
-    research.add_argument("--info-shadow-only", dest="info_shadow_only", action="store_true", default=None, help="Keep info in shadow-only mode")
-    research.add_argument("--no-info-shadow-only", dest="info_shadow_only", action="store_false", help="Disable shadow-only flag")
-    research.add_argument("--info-types", dest="info_types", default=None, help="Comma-separated info types")
-    research.add_argument("--info-source-mode", dest="info_source_mode", default=None, choices=["layered", "legacy"], help="Info input mode")
-    research.add_argument("--info-subsets", dest="info_subsets", default=None, help="Comma-separated info subsets")
-    research.add_argument("--use-us-index-context", dest="use_us_index_context", action="store_true", default=None, help="Enable US index context features")
-    research.add_argument("--no-use-us-index-context", dest="use_us_index_context", action="store_false", help="Disable US index context features")
-    research.add_argument("--us-index-source", dest="us_index_source", default=None, choices=["akshare"], help="US index feature source")
-    research.add_argument("--report", default="reports/v2_research_report.md", help="Markdown report output path")
-    research.add_argument("--dashboard", default="reports/v2_research_dashboard.html", help="HTML dashboard output path")
+    _add_runtime_identity_args(research, strategy_help="Target strategy id")
+    _add_universe_args(research)
+    _add_info_args(research)
+    _add_external_context_args(research)
+    _add_output_args(
+        research,
+        report_default="reports/v2_research_report.md",
+        dashboard_default="reports/v2_research_dashboard.html",
+        report_help="Markdown report output path",
+    )
     research.add_argument("--artifact-root", default="artifacts/v2", help="Artifact output root for research runs")
     research.add_argument("--cache-root", default="artifacts/v2/cache", help="On-disk cache root for prepared data and trajectories")
     research.add_argument("--refresh-cache", action="store_true", help="Ignore existing cached trajectory and rebuild it")
-    research.add_argument("--forecast-backend", default="linear", help="Forecast backend id for research backtests (linear/deep)")
+    research.add_argument("--retrain-days", type=int, default=20, help="Trajectory retraining cadence in trading days")
+    research.add_argument("--forecast-backend", default="linear", help="Forecast backend id for research backtests (linear/deep/hybrid)")
+    research.add_argument("--training-window-days", type=int, default=480, help="Rolling training window in trading days; use 0 to keep expanding history")
     research.add_argument("--light", action="store_true", help="Run baseline-only light research mode")
     research.add_argument("--skip-calibration", action="store_true", help="Skip policy calibration stage")
     research.add_argument("--skip-learning", action="store_true", help="Skip learned policy stage")
@@ -94,15 +145,19 @@ def build_parser() -> argparse.ArgumentParser:
     research.add_argument("--no-publish-forecast-models", dest="publish_forecast_models", action="store_false", help="Skip publishing forecast-layer metadata")
 
     matrix = sub.add_parser("research-matrix", help="Run the fixed 16/80/150/300 universe matrix")
-    matrix.add_argument("--strategy", default="swing_v2", help="Target strategy id")
-    matrix.add_argument("--config", default="config/api.json", help="Runtime config path")
-    matrix.add_argument("--source", default=None, help="Optional source override")
-    matrix.add_argument("--report", default="reports/v2_research_report.md", help="Markdown report output path for the last run")
-    matrix.add_argument("--dashboard", default="reports/v2_research_dashboard.html", help="HTML dashboard output path for the last run")
+    _add_runtime_identity_args(matrix, strategy_help="Target strategy id")
+    _add_output_args(
+        matrix,
+        report_default="reports/v2_research_report.md",
+        dashboard_default="reports/v2_research_dashboard.html",
+        report_help="Markdown report output path for the last run",
+    )
     matrix.add_argument("--artifact-root", default="artifacts/v2", help="Artifact output root for research runs")
     matrix.add_argument("--cache-root", default="artifacts/v2/cache", help="On-disk cache root for prepared data and trajectories")
     matrix.add_argument("--refresh-cache", action="store_true", help="Ignore existing cached trajectory and rebuild it")
-    matrix.add_argument("--forecast-backend", default="linear", help="Forecast backend id for research backtests (linear/deep)")
+    matrix.add_argument("--retrain-days", type=int, default=20, help="Trajectory retraining cadence in trading days")
+    matrix.add_argument("--forecast-backend", default="linear", help="Forecast backend id for research backtests (linear/deep/hybrid)")
+    matrix.add_argument("--training-window-days", type=int, default=480, help="Rolling training window in trading days; use 0 to keep expanding history")
     matrix.add_argument("--split-mode", default="purged_wf", choices=["purged_wf", "simple"], help="Research split mode")
     matrix.add_argument("--embargo-days", type=int, default=20, help="Embargo days for purged walk-forward split")
     matrix.add_argument("--tiers", nargs="*", default=["favorites_16", "generated_80", "generated_150", "generated_300"], help="Universe tiers to evaluate")
@@ -120,6 +175,9 @@ def _print_blueprint(title: str, strategy: str, stages: list[tuple[str, str, str
 
 def main() -> int:
     args = build_parser().parse_args()
+    token_override = getattr(args, "tushare_token", None)
+    if token_override is not None and str(token_override).strip():
+        set_tushare_token(str(token_override))
 
     if args.task == "describe":
         print(describe_v2_stack())
@@ -127,116 +185,50 @@ def main() -> int:
         return 0
 
     if args.task == "daily-run":
+        options = DailyRunOptions.from_namespace(args)
         bp = build_daily_run_blueprint()
         _print_blueprint(
             bp.name,
-            str(args.strategy),
+            options.strategy_id,
             [(stage.name, stage.purpose, stage.produces) for stage in bp.stages],
         )
-        result = run_daily_v2_live(
-            strategy_id=str(args.strategy),
-            config_path=str(args.config),
-            source=args.source,
-            universe_tier=args.universe_tier,
-            universe_file=args.universe_file,
-            universe_limit=args.universe_limit,
-            info_file=args.info_file,
-            info_lookback_days=args.info_lookback_days,
-            info_half_life_days=args.info_half_life_days,
-            use_info_fusion=args.use_info_fusion,
-            info_shadow_only=args.info_shadow_only,
-            info_types=args.info_types,
-            info_source_mode=args.info_source_mode,
-            info_subsets=args.info_subsets,
-            use_us_index_context=args.use_us_index_context,
-            us_index_source=args.us_index_source,
-            artifact_root=str(args.artifact_root),
-            cache_root=str(args.cache_root),
-            refresh_cache=bool(args.refresh_cache),
-            run_id=args.run_id,
-            snapshot_path=args.snapshot_path,
-            allow_retrain=bool(args.allow_retrain),
-        )
+        result = run_daily_v2_live(options=options)
         published_model = load_published_v2_policy_model(
-            strategy_id=str(args.strategy),
-            artifact_root=str(args.artifact_root),
+            strategy_id=options.strategy_id,
+            artifact_root=options.artifact_root,
         )
         report_path = write_v2_daily_report(str(args.report), result)
         dashboard_path = write_v2_daily_dashboard(str(args.dashboard), result)
         print(f"[V2] daily-run report: {Path(report_path).resolve()}")
         print(f"[V2] daily-run dashboard: {Path(dashboard_path).resolve()}")
         if published_model is not None:
-            print(f"[V2] daily-run policy snapshot: {Path(str(args.artifact_root)).resolve() / str(args.strategy) / 'latest_policy_model.json'}")
+            snapshot_path = Path(options.artifact_root).resolve() / options.strategy_id / "latest_policy_model.json"
+            print(f"[V2] daily-run policy snapshot: {snapshot_path}")
         print("[V2] daily-run summary:")
         print(json.dumps(summarize_daily_run(result), ensure_ascii=False, indent=2))
         return 0
 
     if args.task == "research-run":
+        options = ResearchRunOptions.from_namespace(args)
         bp = build_research_run_blueprint()
         _print_blueprint(
             bp.name,
-            str(args.strategy),
+            options.strategy_id,
             [(stage.name, stage.purpose, stage.produces) for stage in bp.stages],
         )
-        skip_calibration = bool(args.light or args.skip_calibration)
-        skip_learning = bool(args.light or args.skip_learning)
-        baseline, calibration, learning = run_v2_research_workflow(
-            strategy_id=str(args.strategy),
-            config_path=str(args.config),
-            source=args.source,
-            universe_tier=args.universe_tier,
-            universe_file=args.universe_file,
-            universe_limit=args.universe_limit,
-            info_file=args.info_file,
-            info_lookback_days=args.info_lookback_days,
-            info_half_life_days=args.info_half_life_days,
-            use_info_fusion=args.use_info_fusion,
-            info_shadow_only=args.info_shadow_only,
-            info_types=args.info_types,
-            info_source_mode=args.info_source_mode,
-            info_subsets=args.info_subsets,
-            use_us_index_context=args.use_us_index_context,
-            us_index_source=args.us_index_source,
-            skip_calibration=skip_calibration,
-            skip_learning=skip_learning,
-            cache_root=str(args.cache_root),
-            refresh_cache=bool(args.refresh_cache),
-            forecast_backend=str(args.forecast_backend),
-            split_mode=str(args.split_mode),
-            embargo_days=int(args.embargo_days),
-        )
+        baseline, calibration, learning = run_v2_research_workflow(options=options)
         artifacts = None
-        if not skip_learning:
+        if not options.skip_learning:
             artifacts = publish_v2_research_artifacts(
-                strategy_id=str(args.strategy),
-                artifact_root=str(args.artifact_root),
-                config_path=str(args.config),
-                source=args.source,
-                universe_tier=args.universe_tier,
-                universe_file=args.universe_file,
-                universe_limit=args.universe_limit,
-                info_file=args.info_file,
-                info_lookback_days=args.info_lookback_days,
-                info_half_life_days=args.info_half_life_days,
-                use_info_fusion=args.use_info_fusion,
-                info_shadow_only=args.info_shadow_only,
-                info_types=args.info_types,
-                info_source_mode=args.info_source_mode,
-                info_subsets=args.info_subsets,
-                use_us_index_context=args.use_us_index_context,
-                us_index_source=args.us_index_source,
+                options=options,
                 baseline=baseline,
                 calibration=calibration,
                 learning=learning,
-                cache_root=str(args.cache_root),
-                forecast_backend=str(args.forecast_backend),
-                publish_forecast_models=bool(args.publish_forecast_models),
-                split_mode=str(args.split_mode),
-                embargo_days=int(args.embargo_days),
+                trajectory=last_research_trajectory(),
             )
         report_path = write_v2_research_report(
             str(args.report),
-            strategy_id=str(args.strategy),
+            strategy_id=options.strategy_id,
             baseline=baseline,
             calibration=calibration,
             learning=learning,
@@ -244,7 +236,7 @@ def main() -> int:
         )
         dashboard_path = write_v2_research_dashboard(
             str(args.dashboard),
-            strategy_id=str(args.strategy),
+            strategy_id=options.strategy_id,
             baseline=baseline,
             calibration=calibration,
             learning=learning,
@@ -257,7 +249,7 @@ def main() -> int:
             print(f"[V2] research run_id: {artifacts.get('run_id', '')}")
             print(f"[V2] release gate passed: {artifacts.get('release_gate_passed', 'false')}")
         else:
-            print("[V2] 轻量模式: 已跳过研究产物发布")
+            print("[V2] light mode: skipped research artifact publish")
         print("[V2] research baseline backtest:")
         print(
             json.dumps(
@@ -278,18 +270,8 @@ def main() -> int:
         return 0
 
     if args.task == "research-matrix":
-        results = run_v2_research_matrix(
-            strategy_id=str(args.strategy),
-            config_path=str(args.config),
-            source=args.source,
-            cache_root=str(args.cache_root),
-            artifact_root=str(args.artifact_root),
-            refresh_cache=bool(args.refresh_cache),
-            forecast_backend=str(args.forecast_backend),
-            split_mode=str(args.split_mode),
-            embargo_days=int(args.embargo_days),
-            universe_tiers=[str(item) for item in args.tiers],
-        )
+        options = ResearchMatrixOptions.from_namespace(args)
+        results = run_v2_research_matrix(options=options)
         print("[V2] research matrix:")
         print(json.dumps(results, ensure_ascii=False, indent=2))
         return 0

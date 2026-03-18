@@ -1,0 +1,12 @@
+from tests.v2_research_cases import (
+    test_build_date_slice_index_returns_contiguous_bounds,
+    test_load_or_build_v2_backtest_trajectory_decorates_research_states_with_insight,
+    test_load_or_build_v2_backtest_trajectory_invalidates_cache_when_insight_notes_change,
+    test_load_or_build_v2_backtest_trajectory_uses_disk_cache,
+    test_make_forecast_backend_accepts_supported_backends,
+    test_predict_quantile_profiles_vectorizes_and_keeps_monotonic_order,
+    test_prepare_v2_backtest_data_refresh_cache_rebuilds,
+    test_prepare_v2_backtest_data_uses_prepared_cache,
+    test_split_research_trajectory_purged_mode_applies_embargo,
+    test_tensorize_temporal_frame_builds_group_lags,
+)

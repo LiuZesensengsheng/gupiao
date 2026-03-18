@@ -1,0 +1,9 @@
+{
+  "source": "repair_indices_20260313",
+  "stocks": [
+    { "symbol": "000001.SH", "name": "000001.SH", "sector": "指数" },
+    { "symbol": "000300.SH", "name": "000300.SH", "sector": "指数" },
+    { "symbol": "399001.SZ", "name": "399001.SZ", "sector": "指数" },
+    { "symbol": "399006.SZ", "name": "399006.SZ", "sector": "指数" }
+  ]
+}

@@ -1,7 +1,0 @@
-date,target_type,target,horizon,direction,strength,confidence,source_weight,title,source_url
-2026-01-09,stock,603516.SH,mid,neutral,2,0.62,1.0,淳中科技:北京淳中科技股份有限公司关于变更签字会计师的公告,https://data.eastmoney.com/notices/detail/603516/AN202601081816845832.html
-2026-01-27,stock,603516.SH,mid,neutral,2,0.62,1.0,淳中科技:北京淳中科技股份有限公司2025年年度业绩预告,https://data.eastmoney.com/notices/detail/603516/AN202601261818430200.html
-2026-01-27,stock,603516.SH,mid,bullish,3,0.8,0.9,淳中科技业绩预告披露归母净利润同比大幅增长,
-2026-01-27,stock,603516.SH,mid,bearish,4,0.85,0.95,淳中科技业绩预告显示主营收入同比下滑且扣非亏损,
-2026-01-29,stock,603516.SH,short,bearish,4,0.82,1.0,淳中科技:北京淳中科技股份有限公司股票交易异常波动公告,https://data.eastmoney.com/notices/detail/603516/AN202601281818506011.html
-2026-01-29,stock,603516.SH,short,bearish,2,0.9,0.9,淳中科技发布股票交易异常波动公告并提示风险,

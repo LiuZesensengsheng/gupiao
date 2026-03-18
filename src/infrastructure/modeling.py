@@ -8,11 +8,20 @@ from scipy.optimize import minimize
 from scipy.special import expit
 from scipy.stats import rankdata
 
+try:
+    import torch
+except Exception:  # pragma: no cover - optional dependency
+    torch = None
+
 from src.domain.entities import BinaryMetrics
 
 
 def _as_float_array(frame: pd.DataFrame, columns: List[str]) -> np.ndarray:
     return frame[columns].astype(float).to_numpy(copy=True)
+
+
+def _torch_is_available() -> bool:
+    return torch is not None
 
 
 def binary_metrics(y_true: np.ndarray, y_prob: np.ndarray) -> BinaryMetrics:
@@ -56,6 +65,13 @@ class LogisticBinaryModel:
 
         y = train[target_col].astype(float).to_numpy()
         x = _as_float_array(train, feature_cols)
+        return self.fit_prepared(x=x, y=y, feature_cols=feature_cols)
+
+    def fit_prepared(self, *, x: np.ndarray, y: np.ndarray, feature_cols: List[str]) -> "LogisticBinaryModel":
+        if len(y) == 0 or np.asarray(x).size == 0:
+            raise ValueError("No rows available for training after dropping NaN.")
+        x = np.asarray(x, dtype=float)
+        y = np.asarray(y, dtype=float)
 
         self.feature_names = list(feature_cols)
         self.mean_ = np.nanmean(x, axis=0)
@@ -153,6 +169,13 @@ class QuantileLinearModel:
 
         y = train[target_col].astype(float).to_numpy()
         x = _as_float_array(train, feature_cols)
+        return self.fit_prepared(x=x, y=y, feature_cols=feature_cols)
+
+    def fit_prepared(self, *, x: np.ndarray, y: np.ndarray, feature_cols: List[str]) -> "QuantileLinearModel":
+        if len(y) == 0 or np.asarray(x).size == 0:
+            raise ValueError("No rows available for quantile training after dropping NaN.")
+        x = np.asarray(x, dtype=float)
+        y = np.asarray(y, dtype=float)
 
         self.feature_names = list(feature_cols)
         self.mean_ = np.nanmean(x, axis=0)
@@ -232,12 +255,16 @@ class _BaseMLPModel:
         epochs: int = 120,
         learning_rate: float = 0.03,
         random_state: int = 7,
+        device: str = "auto",
+        use_torch: bool | None = None,
     ) -> None:
         self.l2 = float(l2)
         self.hidden_dim = int(max(4, hidden_dim))
         self.epochs = int(max(20, epochs))
         self.learning_rate = float(max(1e-4, learning_rate))
         self.random_state = int(random_state)
+        self.device = str(device or "auto").strip().lower() or "auto"
+        self.use_torch = use_torch
         self.feature_names: List[str] = []
         self.mean_: np.ndarray | None = None
         self.std_: np.ndarray | None = None
@@ -245,6 +272,8 @@ class _BaseMLPModel:
         self.b1_: np.ndarray | None = None
         self.w2_: np.ndarray | None = None
         self.b2_: float = 0.0
+        self.training_backend_: str = "numpy"
+        self.training_device_: str = "cpu"
 
     def _prepare_x(self, df: pd.DataFrame, feature_cols: List[str]) -> np.ndarray:
         x = _as_float_array(df, feature_cols)
@@ -269,6 +298,108 @@ class _BaseMLPModel:
         output = hidden @ self.w2_ + float(self.b2_)
         return hidden, output
 
+    def _should_use_torch(self) -> bool:
+        if self.device == "numpy":
+            return False
+        if self.use_torch is False:
+            return False
+        return _torch_is_available()
+
+    def _resolve_torch_device(self) -> str | None:
+        if not self._should_use_torch():
+            return None
+        if torch is None:
+            return None
+        if self.device in {"auto", "cuda", "gpu"}:
+            if torch.cuda.is_available():
+                return "cuda"
+            if self.device in {"cuda", "gpu"}:
+                raise RuntimeError("Torch CUDA requested but no CUDA device is available.")
+            return "cpu"
+        if self.device == "cpu":
+            return "cpu"
+        raise ValueError(f"Unsupported MLP device: {self.device}")
+
+    def _torch_parameters(self, n_features: int, *, device: str) -> tuple[object, object, object, object]:
+        if torch is None:
+            raise RuntimeError("Torch is not installed.")
+        rng = np.random.default_rng(self.random_state)
+        scale1 = 1.0 / np.sqrt(max(1, n_features))
+        scale2 = 1.0 / np.sqrt(max(1, self.hidden_dim))
+        w1 = torch.tensor(
+            rng.normal(0.0, scale1, size=(n_features, self.hidden_dim)),
+            dtype=torch.float32,
+            device=device,
+            requires_grad=True,
+        )
+        b1 = torch.zeros(self.hidden_dim, dtype=torch.float32, device=device, requires_grad=True)
+        w2 = torch.tensor(
+            rng.normal(0.0, scale2, size=self.hidden_dim),
+            dtype=torch.float32,
+            device=device,
+            requires_grad=True,
+        )
+        b2 = torch.tensor(0.0, dtype=torch.float32, device=device, requires_grad=True)
+        return w1, b1, w2, b2
+
+    def _torch_forward(self, xs: object, *, w1: object, b1: object, w2: object, b2: object) -> tuple[object, object]:
+        if torch is None:
+            raise RuntimeError("Torch is not installed.")
+        hidden_linear = xs @ w1 + b1
+        hidden = torch.tanh(hidden_linear)
+        output = hidden @ w2 + b2
+        return hidden, output
+
+    def _store_torch_parameters(self, *, w1: object, b1: object, w2: object, b2: object, device: str) -> None:
+        if torch is None:
+            raise RuntimeError("Torch is not installed.")
+        self.w1_ = w1.detach().cpu().numpy().astype(float)
+        self.b1_ = b1.detach().cpu().numpy().astype(float)
+        self.w2_ = w2.detach().cpu().numpy().astype(float)
+        self.b2_ = float(b2.detach().cpu().item())
+        self.training_backend_ = "torch"
+        self.training_device_ = str(device)
+
+    def _fit_with_torch(self, *, x: np.ndarray, y: np.ndarray, trainer: str) -> bool:
+        device = self._resolve_torch_device()
+        if device is None:
+            return False
+        if torch is None:
+            return False
+        try:
+            torch.manual_seed(self.random_state)
+            if torch.cuda.is_available():
+                torch.cuda.manual_seed_all(self.random_state)
+            try:
+                torch.use_deterministic_algorithms(True, warn_only=True)
+            except Exception:
+                pass
+            xs = torch.tensor(np.asarray(x, dtype=np.float32), dtype=torch.float32, device=device)
+            ys = torch.tensor(np.asarray(y, dtype=np.float32), dtype=torch.float32, device=device)
+            w1, b1, w2, b2 = self._torch_parameters(xs.shape[1], device=device)
+            optimizer = torch.optim.Adam((w1, b1, w2, b2), lr=self.learning_rate)
+            for _ in range(self.epochs):
+                optimizer.zero_grad()
+                hidden, output = self._torch_forward(xs, w1=w1, b1=b1, w2=w2, b2=b2)
+                if trainer == "binary":
+                    loss = torch.nn.functional.binary_cross_entropy_with_logits(output, ys)
+                elif trainer == "quantile":
+                    residual = ys - output
+                    loss = torch.maximum(self.quantile * residual, (self.quantile - 1.0) * residual).mean()
+                else:
+                    raise ValueError(f"Unsupported torch trainer: {trainer}")
+                loss = loss + 0.5 * self.l2 * (torch.sum(w1 * w1) + torch.sum(w2 * w2))
+                loss.backward()
+                optimizer.step()
+            self._store_torch_parameters(w1=w1, b1=b1, w2=w2, b2=b2, device=device)
+            return True
+        except Exception:
+            if self.device in {"cuda", "gpu", "cpu"}:
+                raise
+            self.training_backend_ = "numpy"
+            self.training_device_ = "cpu"
+            return False
+
 
 class MLPBinaryModel(_BaseMLPModel):
     def __init__(
@@ -278,6 +409,8 @@ class MLPBinaryModel(_BaseMLPModel):
         epochs: int = 120,
         learning_rate: float = 0.03,
         random_state: int = 7,
+        device: str = "auto",
+        use_torch: bool | None = None,
     ) -> None:
         super().__init__(
             l2=l2,
@@ -285,6 +418,8 @@ class MLPBinaryModel(_BaseMLPModel):
             epochs=epochs,
             learning_rate=learning_rate,
             random_state=random_state,
+            device=device,
+            use_torch=use_torch,
         )
         self.fallback_prob_: float | None = None
 
@@ -295,6 +430,13 @@ class MLPBinaryModel(_BaseMLPModel):
 
         y = train[target_col].astype(float).to_numpy()
         x = _as_float_array(train, feature_cols)
+        return self.fit_prepared(x=x, y=y, feature_cols=feature_cols)
+
+    def fit_prepared(self, *, x: np.ndarray, y: np.ndarray, feature_cols: List[str]) -> "MLPBinaryModel":
+        if len(y) == 0 or np.asarray(x).size == 0:
+            raise ValueError("No rows available for MLP binary training after dropping NaN.")
+        x = np.asarray(x, dtype=float)
+        y = np.asarray(y, dtype=float)
 
         self.feature_names = list(feature_cols)
         self.mean_ = np.nanmean(x, axis=0)
@@ -307,6 +449,12 @@ class MLPBinaryModel(_BaseMLPModel):
         if positives == 0 or negatives == 0:
             self.fallback_prob_ = float(np.clip(np.mean(y), 1e-4, 1 - 1e-4))
             self._init_params(xs.shape[1])
+            self.training_backend_ = "numpy"
+            self.training_device_ = "cpu"
+            return self
+
+        if self._fit_with_torch(x=xs, y=y, trainer="binary"):
+            self.fallback_prob_ = None
             return self
 
         self._init_params(xs.shape[1])
@@ -326,6 +474,8 @@ class MLPBinaryModel(_BaseMLPModel):
             self.b1_ = self.b1_ - self.learning_rate * grad_b1
 
         self.fallback_prob_ = None
+        self.training_backend_ = "numpy"
+        self.training_device_ = "cpu"
         return self
 
     def predict_proba(self, df: pd.DataFrame, feature_cols: List[str] | None = None) -> np.ndarray:
@@ -347,6 +497,8 @@ class MLPQuantileModel(_BaseMLPModel):
         epochs: int = 120,
         learning_rate: float = 0.03,
         random_state: int = 7,
+        device: str = "auto",
+        use_torch: bool | None = None,
     ) -> None:
         super().__init__(
             l2=l2,
@@ -354,6 +506,8 @@ class MLPQuantileModel(_BaseMLPModel):
             epochs=epochs,
             learning_rate=learning_rate,
             random_state=random_state,
+            device=device,
+            use_torch=use_torch,
         )
         self.quantile = float(np.clip(float(quantile), 1e-3, 1.0 - 1e-3))
         self.fallback_value_: float | None = None
@@ -365,6 +519,13 @@ class MLPQuantileModel(_BaseMLPModel):
 
         y = train[target_col].astype(float).to_numpy()
         x = _as_float_array(train, feature_cols)
+        return self.fit_prepared(x=x, y=y, feature_cols=feature_cols)
+
+    def fit_prepared(self, *, x: np.ndarray, y: np.ndarray, feature_cols: List[str]) -> "MLPQuantileModel":
+        if len(y) == 0 or np.asarray(x).size == 0:
+            raise ValueError("No rows available for MLP quantile training after dropping NaN.")
+        x = np.asarray(x, dtype=float)
+        y = np.asarray(y, dtype=float)
 
         self.feature_names = list(feature_cols)
         self.mean_ = np.nanmean(x, axis=0)
@@ -377,6 +538,12 @@ class MLPQuantileModel(_BaseMLPModel):
             self.fallback_value_ = q_value
             self._init_params(xs.shape[1])
             self.b2_ = q_value
+            self.training_backend_ = "numpy"
+            self.training_device_ = "cpu"
+            return self
+
+        if self._fit_with_torch(x=xs, y=y, trainer="quantile"):
+            self.fallback_value_ = None
             return self
 
         self._init_params(xs.shape[1])
@@ -401,6 +568,8 @@ class MLPQuantileModel(_BaseMLPModel):
             self.b1_ = self.b1_ - self.learning_rate * grad_b1
 
         self.fallback_value_ = None
+        self.training_backend_ = "numpy"
+        self.training_device_ = "cpu"
         return self
 
     def predict(self, df: pd.DataFrame, feature_cols: List[str] | None = None) -> np.ndarray:

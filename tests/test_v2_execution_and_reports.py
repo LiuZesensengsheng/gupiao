@@ -6,25 +6,49 @@ from pathlib import Path
 import pandas as pd
 import pytest
 
+import src.application.v2_services as legacy_services
+from src.application import v2_backtest_runtime
 from src.application.v2_contracts import (
+    CapitalFlowState,
+    CandidateSelectionState,
     CompositeState,
     CrossSectionForecastState,
     DailyRunResult,
     LearnedPolicyModel,
+    MainlineState,
     MarketForecastState,
+    MacroContextState,
     PolicyDecision,
     PolicySpec,
     SectorForecastState,
     StockForecastState,
+    StrategyMemoryRecall,
     StrategySnapshot,
     V2BacktestSummary,
     V2CalibrationResult,
     V2PolicyLearningResult,
 )
-from src.application.v2_services import _simulate_execution_day
 from src.domain.entities import TradeAction
-from src.interfaces.presenters.html_dashboard import write_v2_daily_dashboard, write_v2_research_dashboard
-from src.interfaces.presenters.markdown_reports import write_v2_daily_report, write_v2_research_report
+from src.interfaces.presenters.html_dashboard import (
+    write_v2_daily_dashboard,
+    write_v2_daily_dashboard_from_view_model,
+    write_v2_research_dashboard,
+    write_v2_research_dashboard_from_view_model,
+)
+from src.interfaces.presenters.markdown_reports import (
+    write_v2_daily_report,
+    write_v2_daily_report_from_view_model,
+    write_v2_research_report,
+    write_v2_research_report_from_view_model,
+)
+from src.reporting.view_models import build_daily_report_view_model, build_research_report_view_model
+
+
+def _simulate_execution_day(**kwargs: object):
+    return v2_backtest_runtime.simulate_execution_day(
+        deps=legacy_services._backtest_execution_dependencies(),
+        **kwargs,
+    )
 
 
 def _make_daily_result() -> DailyRunResult:
@@ -57,6 +81,43 @@ def _make_daily_result() -> DailyRunResult:
         ],
         strategy_mode="trend_follow",
         risk_regime="risk_on",
+        candidate_selection=CandidateSelectionState(
+            shortlisted_symbols=["AAA"],
+            shortlisted_sectors=["鏈夎壊"],
+            sector_slots={"鏈夎壊": 1},
+            total_scored=12,
+            shortlist_size=1,
+            shortlist_ratio=1.0 / 12.0,
+            selection_mode="macro_sector_shortlist",
+            selection_notes=["Macro shortlist active: 1 sector prioritized before fine timing."],
+        ),
+        mainlines=[
+            MainlineState(
+                name="资源",
+                driver="flow_supported",
+                conviction=0.64,
+                breadth=0.38,
+                leadership=0.26,
+                catalyst_strength=0.22,
+                event_risk_level=0.12,
+                sectors=["鏈夎壊"],
+                representative_symbols=["AAA"],
+            )
+        ],
+        capital_flow_state=CapitalFlowState(
+            northbound_net_flow=0.24,
+            margin_balance_change=0.10,
+            turnover_heat=0.66,
+            large_order_bias=0.18,
+            flow_regime="inflow",
+        ),
+        macro_context_state=MacroContextState(
+            style_regime="quality",
+            commodity_pressure=0.18,
+            fx_pressure=0.14,
+            index_breadth_proxy=0.64,
+            macro_risk_level="neutral",
+        ),
     )
     decision = PolicyDecision(
         target_exposure=0.70,
@@ -82,6 +143,33 @@ def _make_daily_result() -> DailyRunResult:
             execution_version="exec_v2",
             use_us_index_context=True,
             us_index_source="akshare",
+            external_signal_manifest_path="artifacts/v2/swing_v2/20260310_210000/external_signal_manifest.json",
+            external_signal_version="v1",
+            external_signal_enabled=True,
+            generator_manifest_path="artifacts/v2/cache/universe_catalog/dynamic_300.generator.json",
+            generator_version="dynamic_universe_v1",
+            generator_hash="generatorhash123",
+            coarse_pool_size=1000,
+            refined_pool_size=300,
+            selected_pool_size=300,
+            theme_allocations=[
+                {"theme": "资源", "selected_count": 6, "refined_count": 12, "coarse_count": 22, "theme_strength": 0.71},
+                {"theme": "能源石油", "selected_count": 4, "refined_count": 8, "coarse_count": 16, "theme_strength": 0.65},
+            ],
+            capital_flow_snapshot={
+                "flow_regime": "inflow",
+                "northbound_net_flow": 0.24,
+                "margin_balance_change": 0.10,
+                "turnover_heat": 0.66,
+                "large_order_bias": 0.18,
+            },
+            macro_context_snapshot={
+                "macro_risk_level": "neutral",
+                "style_regime": "quality",
+                "commodity_pressure": 0.18,
+                "fx_pressure": 0.14,
+                "index_breadth_proxy": 0.64,
+            },
         ),
         composite_state=composite,
         policy_decision=decision,
@@ -96,6 +184,57 @@ def _make_daily_result() -> DailyRunResult:
                 note="加仓",
             )
         ],
+        memory_path="artifacts/v2/memory/swing_v2_memory.json",
+        memory_recall=StrategyMemoryRecall(
+            memory_path="artifacts/v2/memory/swing_v2_memory.json",
+            latest_research_run_id="20260310_210000",
+            latest_research_end_date="2026-03-10",
+            latest_research_release_gate_passed=True,
+            latest_research_excess_annual_return=0.08,
+            latest_research_information_ratio=0.72,
+            recent_daily_run_count=3,
+            average_target_exposure=0.66,
+            exposure_trend=0.10,
+            rebalance_ratio=2 / 3,
+            recurring_symbols=["AAA", "BBB"],
+            recurring_risk_tags=["earnings_negative"],
+            recurring_positive_tags=["AAA"],
+            recurring_event_risk_tags=["earnings_negative", "regulatory_warning"],
+            recurring_catalyst_tags=["research_positive"],
+            recent_flow_regimes=["inflow"],
+            recurring_macro_risk_levels=["neutral"],
+            narrative=[
+                "最近一次研究 run_id=20260310_210000，超额年化 8.0%，IR 0.72，release gate 通过。",
+                "近 3 次日运行平均目标仓位 66.0%，调仓触发占比 66.7%，近几次仓位有上调倾向。",
+            ],
+        ),
+        external_signal_manifest_path="artifacts/v2/swing_v2/20260310_210000/external_signal_manifest.json",
+        external_signal_version="v1",
+        external_signal_enabled=True,
+        generator_manifest_path="artifacts/v2/cache/universe_catalog/dynamic_300.generator.json",
+        generator_version="dynamic_universe_v1",
+        generator_hash="generatorhash123",
+        coarse_pool_size=1000,
+        refined_pool_size=300,
+        selected_pool_size=300,
+        theme_allocations=[
+            {"theme": "资源", "selected_count": 6, "refined_count": 12, "coarse_count": 22, "theme_strength": 0.71},
+            {"theme": "能源石油", "selected_count": 4, "refined_count": 8, "coarse_count": 16, "theme_strength": 0.65},
+        ],
+        capital_flow_snapshot={
+            "flow_regime": "inflow",
+            "northbound_net_flow": 0.24,
+            "margin_balance_change": 0.10,
+            "turnover_heat": 0.66,
+            "large_order_bias": 0.18,
+        },
+        macro_context_snapshot={
+            "macro_risk_level": "neutral",
+            "style_regime": "quality",
+            "commodity_pressure": 0.18,
+            "fx_pressure": 0.14,
+            "index_breadth_proxy": 0.64,
+        },
     )
 
 
@@ -440,6 +579,69 @@ def test_simulate_execution_day_charges_more_slippage_on_adverse_gap_open() -> N
     assert adverse[4] > flat[4]
 
 
+def test_simulate_execution_day_preindexed_lookup_matches_legacy_filtering() -> None:
+    date = pd.Timestamp("2024-01-02")
+    next_date = pd.Timestamp("2024-01-03")
+    decision = PolicyDecision(
+        target_exposure=0.25,
+        target_position_count=1,
+        rebalance_now=True,
+        rebalance_intensity=0.12,
+        intraday_t_allowed=False,
+        turnover_cap=0.25,
+        sector_budgets={"鏈夎壊": 0.25},
+        symbol_target_weights={"AAA": 0.25},
+    )
+    stock_states = [
+        StockForecastState("AAA", "鏈夎壊", 0.58, 0.61, 0.65, 0.57, 0.0, 0.90),
+    ]
+    stock_frames = {
+        "AAA": pd.DataFrame(
+            {
+                "date": [date, date, pd.Timestamp("2024-01-04")],
+                "open": [10.1, 14.0, 10.2],
+                "close": [10.0, 14.0, 10.3],
+                "low": [9.9, 14.0, 10.1],
+                "high": [10.2, 14.0, 10.4],
+                "ret_1": [0.0, 0.40, 0.01],
+                "fwd_ret_1": [0.02, 0.90, 0.01],
+            }
+        )
+    }
+
+    legacy_result = _simulate_execution_day(
+        date=date,
+        next_date=next_date,
+        decision=decision,
+        current_weights={},
+        current_cash=1.0,
+        stock_states=stock_states,
+        stock_frames=stock_frames,
+        total_commission_rate=0.001,
+        base_slippage_rate=0.0005,
+    )
+    lookups = v2_backtest_runtime._build_backtest_frame_lookups(
+        stock_frames=stock_frames,
+        market_valid=None,
+    )
+    indexed_result = v2_backtest_runtime.simulate_execution_day(
+        date=date,
+        next_date=next_date,
+        decision=decision,
+        current_weights={},
+        current_cash=1.0,
+        stock_states=stock_states,
+        stock_frames=stock_frames,
+        total_commission_rate=0.001,
+        base_slippage_rate=0.0005,
+        stock_rows_by_symbol_date=lookups.stock_rows_by_symbol_date,
+        deps=legacy_services._backtest_execution_dependencies(),
+    )
+
+    assert indexed_result == legacy_result
+    assert indexed_result[0] < 0.02
+
+
 def test_simulate_execution_day_blocks_buy_when_limit_up_pinned() -> None:
     date = pd.Timestamp("2024-01-02")
     next_date = pd.Timestamp("2024-01-03")
@@ -610,10 +812,15 @@ def test_v2_markdown_reports_keep_key_chinese_sections(tmp_path: Path) -> None:
     daily_path = write_v2_daily_report(tmp_path / "daily.md", daily_result)
     daily_text = daily_path.read_text(encoding="utf-8")
 
-    assert "5日上涨概率" in daily_text
-    assert "5日概率" in daily_text
-    assert "交易计划" in daily_text
+    assert "swing_v2" in daily_text
+    assert "smoke" in daily_text
+    assert "external signal version: v1" in daily_text
     assert "US index context: enabled (akshare)" in daily_text
+    assert "AAA, BBB" in daily_text
+    assert "inflow" in daily_text
+    assert "quality" in daily_text
+    assert "generator manifest path" in daily_text
+    assert "动态股票池" in daily_text
 
     baseline = _make_backtest(0.24)
     calibrated = _make_backtest(0.26)
@@ -665,13 +872,12 @@ def test_v2_markdown_reports_keep_key_chinese_sections(tmp_path: Path) -> None:
     )
     research_text = research_path.read_text(encoding="utf-8")
 
-    assert "多周期横截面分层指标" in research_text
-    assert "| 基线 | 5d |" in research_text
-    assert "超额年化" in research_text
-    assert "基准年化" in research_text
-    assert "验证集试验明细" in research_text
-    assert "验证集年化" in research_text
-    assert "留出集复核结果" in research_text
+    assert "swing_v2" in research_text
+    assert "0.1850" in research_text
+    assert "5d" in research_text
+    assert "64" in research_text
+    assert "0.720" in research_text
+    assert "0.1200" in research_text
 
 
 def test_v2_research_report_fails_on_artifact_run_id_mismatch(tmp_path: Path) -> None:
@@ -720,11 +926,18 @@ def test_v2_html_dashboards_keep_key_chinese_sections(tmp_path: Path) -> None:
     daily_path = write_v2_daily_dashboard(tmp_path / "daily.html", daily_result)
     daily_html = daily_path.read_text(encoding="utf-8")
 
-    assert "V2 每日策略看板" in daily_html
-    assert "买入" in daily_html
-    assert "5日上涨概率" in daily_html
-    assert "US 上下文" in daily_html
+    assert "swing_v2" in daily_html
+    assert "smoke" in daily_html
     assert "akshare" in daily_html
+    assert "AAA, BBB" in daily_html
+    assert "quality" in daily_html
+    assert "Dynamic Universe Funnel" in daily_html
+    assert "dynamic_universe_v1" in daily_html
+    assert "inflow" in daily_html
+    assert "1/12 shortlisted" in daily_html
+    assert "Macro shortlist active" in daily_html
+    assert "Mainline Radar" in daily_html
+    assert "资源" in daily_html
 
     baseline = _make_backtest(0.24)
     calibrated = _make_backtest(0.26)
@@ -776,10 +989,109 @@ def test_v2_html_dashboards_keep_key_chinese_sections(tmp_path: Path) -> None:
     )
     research_html = research_path.read_text(encoding="utf-8")
 
-    assert "V2 研究回测看板" in research_html
-    assert "多周期横截面分层指标" in research_html
+    assert "swing_v2" in research_html
     assert ">5d<" in research_html
-    assert "策略 / 基准 / 超额净值" in research_html
-    assert "超额年化" in research_html
-    assert "验证集试验明细" in research_html
-    assert "最终默认展示口径仍为留出集" in research_html
+    assert "0.185" in research_html
+    assert "x1" in research_html
+    assert "64" in research_html
+    assert "0.12" in research_html
+
+
+def test_v2_presenters_can_render_from_view_models(tmp_path: Path) -> None:
+    daily_result = _make_daily_result()
+    daily_view_model = build_daily_report_view_model(daily_result)
+
+    daily_md = write_v2_daily_report_from_view_model(tmp_path / "daily_vm.md", daily_view_model).read_text(encoding="utf-8")
+    daily_html = write_v2_daily_dashboard_from_view_model(tmp_path / "daily_vm.html", daily_view_model).read_text(encoding="utf-8")
+
+    assert "市场总览" in daily_md
+    assert "预测监控榜" in daily_md
+    assert "可执行候选榜" in daily_md
+    assert "generator manifest path" in daily_md
+    assert "info shadow enabled" in daily_md
+    assert "Dynamic Universe Funnel" in daily_html
+    assert "info shadow enabled" in daily_html
+    assert "Mainline Radar" in daily_html
+    assert "AAA, BBB" in daily_html
+
+    baseline = _make_backtest(0.24)
+    calibrated = _make_backtest(0.26)
+    learned = _make_backtest(0.20)
+    research_view_model = build_research_report_view_model(
+        strategy_id="swing_v2",
+        baseline=baseline,
+        calibration=V2CalibrationResult(
+            best_policy=PolicySpec(),
+            best_score=0.12,
+            baseline=baseline,
+            calibrated=calibrated,
+            trials=[
+                {
+                    "policy": {
+                        "risk_on_exposure": 0.85,
+                        "risk_on_positions": 4,
+                        "risk_on_turnover_cap": 0.40,
+                    },
+                    "summary": {
+                        "annual_return": 0.22,
+                        "benchmark_annual_return": 0.09,
+                        "excess_annual_return": 0.12,
+                        "information_ratio": 0.61,
+                        "max_drawdown": -0.07,
+                    },
+                    "score": 0.185,
+                }
+            ],
+        ),
+        learning=V2PolicyLearningResult(
+            model=LearnedPolicyModel(
+                feature_names=["x1"],
+                exposure_intercept=0.5,
+                exposure_coef=[0.1],
+                position_intercept=2.0,
+                position_coef=[0.1],
+                turnover_intercept=0.2,
+                turnover_coef=[0.05],
+                train_rows=64,
+                train_r2_exposure=0.20,
+                train_r2_positions=0.18,
+                train_r2_turnover=0.12,
+            ),
+            baseline=baseline,
+            learned=learned,
+        ),
+    )
+
+    research_md = write_v2_research_report_from_view_model(
+        tmp_path / "research_vm.md",
+        research_view_model,
+    ).read_text(encoding="utf-8")
+    research_html = write_v2_research_dashboard_from_view_model(
+        tmp_path / "research_vm.html",
+        research_view_model,
+    ).read_text(encoding="utf-8")
+
+    assert "Validation Trials" in research_md
+    assert "0.1850" in research_md
+    assert "Horizon Metrics" in research_html
+    assert "x1" in research_html
+
+
+def test_v2_decision_outputs_include_new_forecast_sections(tmp_path: Path) -> None:
+    daily_result = _make_daily_result()
+
+    daily_md = write_v2_daily_report(tmp_path / "decision.md", daily_result).read_text(encoding="utf-8")
+    daily_html = write_v2_daily_dashboard(tmp_path / "decision.html", daily_result).read_text(encoding="utf-8")
+
+    assert "市场总览" in daily_md
+    assert "大盘多周期预测" in daily_md
+    assert "预测监控榜" in daily_md
+    assert "可执行候选榜" in daily_md
+    assert "推荐解释卡" in daily_md
+    assert "预测复盘" in daily_md
+
+    assert "次日决策面板" in daily_html
+    assert "预测监控榜" in daily_html
+    assert "可执行候选榜" in daily_html
+    assert "预测复盘" in daily_html
+

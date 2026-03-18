@@ -1,0 +1,17 @@
+from tests.v2_policy_cases import (
+    test_allocate_with_sector_budgets_filters_marginal_weak_sector_names,
+    test_allocate_with_sector_budgets_prefers_mainline_representative_symbol,
+    test_build_sector_states_rewards_broad_sector_leadership,
+    test_candidate_shortlist_blends_sector_signal_with_stock_support,
+    test_candidate_stocks_from_state_only_uses_shortlist_core,
+    test_composite_state_roundtrip_preserves_candidate_selection,
+    test_compose_state_applies_leader_overlay_in_shared_runtime,
+    test_compose_state_builds_explicit_mainline_layer,
+    test_compose_state_builds_macro_sector_shortlist_for_large_universe,
+    test_compose_state_prefers_stronger_five_day_stock_when_other_signals_close,
+    test_compose_state_preserves_fine_grained_mainline_labels,
+    test_compose_state_sorts_best_sector_and_stock_first,
+    test_high_volatility_shortlist_is_tighter_and_filters_fragile_names,
+    test_large_universe_shortlist_allows_selective_concentration_for_dominant_alpha,
+    test_large_universe_shortlist_spreads_concentration,
+)

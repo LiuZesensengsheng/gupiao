@@ -11,7 +11,14 @@ import pandas as pd
 from src.domain.symbols import SymbolError, normalize_symbol
 from src.infrastructure.features import build_features
 from src.infrastructure.margin_features import build_market_margin_features
-from src.infrastructure.market_data import DataError, fetch_us_index_daily, load_local_daily, load_symbol_daily
+from src.infrastructure.market_data import (
+    DataError,
+    fetch_cn_etf_daily,
+    fetch_us_etf_daily,
+    fetch_us_index_daily,
+    load_local_daily,
+    load_symbol_daily,
+)
 
 
 _SYMBOL_FILE_PATTERN = re.compile(r"^(\d{6}\.(SH|SZ))\.csv$", re.IGNORECASE)
@@ -24,6 +31,26 @@ _DEFAULT_US_INDEX_SPECS: tuple[tuple[str, str], ...] = (
     (".INX", "us_inx"),
     (".NDX", "us_ndx"),
     (".DJI", "us_dji"),
+)
+_DEFAULT_US_SECTOR_ETF_SPECS: tuple[tuple[str, str], ...] = (
+    ("XLK", "us_etf_xlk"),
+    ("XLF", "us_etf_xlf"),
+    ("XLE", "us_etf_xle"),
+    ("XLI", "us_etf_xli"),
+    ("XLY", "us_etf_xly"),
+    ("XLP", "us_etf_xlp"),
+    ("XLV", "us_etf_xlv"),
+    ("SMH", "us_etf_smh"),
+)
+_DEFAULT_CN_ETF_SPECS: tuple[tuple[str, str], ...] = (
+    ("510300", "cn_etf_300"),
+    ("510500", "cn_etf_500"),
+    ("159915", "cn_etf_cyb"),
+    ("512480", "cn_etf_chip"),
+    ("512170", "cn_etf_med"),
+    ("512000", "cn_etf_broker"),
+    ("512660", "cn_etf_military"),
+    ("515880", "cn_etf_telecom"),
 )
 _INDEX_FEATURE_BASE = [
     "ret_1",
@@ -44,6 +71,17 @@ _BREADTH_FEATURE_COLS = [
     "breadth_limit_spread",
     "breadth_amount_z20",
     "breadth_coverage",
+]
+_BREADTH_DIAGNOSTIC_COLS = [
+    "breadth_advancers",
+    "breadth_decliners",
+    "breadth_flats",
+    "breadth_limit_up_count",
+    "breadth_limit_down_count",
+    "breadth_new_high_count",
+    "breadth_new_low_count",
+    "breadth_median_return",
+    "breadth_sample_amount",
 ]
 _BREADTH_CACHE: dict[tuple[str, int, int], pd.DataFrame] = {}
 
@@ -192,6 +230,90 @@ def _build_us_index_context(
     return merged, cols, notes
 
 
+def _build_us_sector_etf_context(
+    *,
+    start: str,
+    end: str,
+    market_dates: pd.Series,
+    us_index_source: str,
+    etf_specs: Sequence[tuple[str, str]],
+) -> tuple[pd.DataFrame, list[str], list[str]]:
+    notes: list[str] = []
+    merged: pd.DataFrame | None = None
+    cols: list[str] = []
+    buffered_start = str((pd.Timestamp(start) - pd.Timedelta(days=120)).date())
+
+    for symbol, prefix in etf_specs:
+        try:
+            raw = fetch_us_etf_daily(
+                symbol=symbol,
+                start=buffered_start,
+                end=end,
+                source=us_index_source,
+            )
+        except DataError as exc:
+            notes.append(f"US ETF context skipped {symbol}: {exc}")
+            continue
+        feat = build_features(raw)[["date"] + _INDEX_FEATURE_BASE].copy()
+        aligned = _align_external_context_to_next_market_date(
+            feature_frame=feat,
+            market_dates=market_dates,
+        )
+        if aligned.empty:
+            notes.append(f"US ETF context skipped {symbol}: no aligned A-share dates")
+            continue
+        rename = {name: f"{prefix}_{name}" for name in _INDEX_FEATURE_BASE}
+        aligned = aligned.rename(columns=rename)
+        if merged is None:
+            merged = aligned
+        else:
+            merged = merged.merge(aligned, on="date", how="outer", validate="1:1")
+        cols.extend(rename.values())
+
+    if merged is None:
+        return pd.DataFrame(columns=["date"]), [], notes
+    merged = merged.sort_values("date").drop_duplicates(subset=["date"])
+    return merged, cols, notes
+
+
+def _build_cn_etf_context(
+    *,
+    start: str,
+    end: str,
+    cn_etf_source: str,
+    etf_specs: Sequence[tuple[str, str]],
+) -> tuple[pd.DataFrame, list[str], list[str]]:
+    notes: list[str] = []
+    merged: pd.DataFrame | None = None
+    cols: list[str] = []
+    buffered_start = str((pd.Timestamp(start) - pd.Timedelta(days=120)).date())
+
+    for symbol, prefix in etf_specs:
+        try:
+            raw = fetch_cn_etf_daily(
+                symbol=symbol,
+                start=buffered_start,
+                end=end,
+                source=cn_etf_source,
+            )
+        except DataError as exc:
+            notes.append(f"CN ETF context skipped {symbol}: {exc}")
+            continue
+        feat = build_features(raw)[["date"] + _INDEX_FEATURE_BASE].copy()
+        rename = {name: f"{prefix}_{name}" for name in _INDEX_FEATURE_BASE}
+        feat = feat.rename(columns=rename)
+        if merged is None:
+            merged = feat
+        else:
+            merged = merged.merge(feat, on="date", how="outer", validate="1:1")
+        cols.extend(rename.values())
+
+    if merged is None:
+        return pd.DataFrame(columns=["date"]), [], notes
+    merged = merged.sort_values("date").drop_duplicates(subset=["date"])
+    return merged, cols, notes
+
+
 def _build_breadth_context(
     *,
     data_dir: str,
@@ -224,19 +346,24 @@ def _build_breadth_context(
             continue
         ret_1 = frame["close"].pct_change(1)
         amount = pd.to_numeric(frame["amount"], errors="coerce").fillna(frame["close"] * frame["volume"])
+        rolling_high_20 = frame["close"].shift(1).rolling(20).max()
+        rolling_low_20 = frame["close"].shift(1).rolling(20).min()
         part = pd.DataFrame(
             {
                 "date": pd.to_datetime(frame["date"], errors="coerce"),
+                "ret_1": ret_1.astype(float),
                 "adv": (ret_1 > 0.0).astype(float),
                 "dec": (ret_1 < 0.0).astype(float),
                 "flat": (ret_1 == 0.0).astype(float),
                 "lim_up": (ret_1 >= 0.095).astype(float),
                 "lim_dn": (ret_1 <= -0.095).astype(float),
+                "new_high_20": ((frame["close"] >= rolling_high_20) & rolling_high_20.notna()).astype(float),
+                "new_low_20": ((frame["close"] <= rolling_low_20) & rolling_low_20.notna()).astype(float),
                 "amount": amount.astype(float),
                 "count": 1.0,
             }
         )
-        part = part.dropna(subset=["date", "amount"])
+        part = part.dropna(subset=["date", "amount", "ret_1"])
         parts.append(part.iloc[1:].copy())
 
     if not parts:
@@ -244,7 +371,20 @@ def _build_breadth_context(
         return pd.DataFrame(columns=["date"]), [], notes
 
     agg = pd.concat(parts, ignore_index=True)
-    agg = agg.groupby("date", as_index=False)[["adv", "dec", "flat", "lim_up", "lim_dn", "amount", "count"]].sum()
+    agg = agg.groupby("date", as_index=False).agg(
+        {
+            "ret_1": "median",
+            "adv": "sum",
+            "dec": "sum",
+            "flat": "sum",
+            "lim_up": "sum",
+            "lim_dn": "sum",
+            "new_high_20": "sum",
+            "new_low_20": "sum",
+            "amount": "sum",
+            "count": "sum",
+        }
+    )
     agg = agg.sort_values("date").reset_index(drop=True)
     agg = agg[agg["count"] >= float(max(1, int(min_coverage)))]
     if agg.empty:
@@ -262,8 +402,31 @@ def _build_breadth_context(
     amount_std = amount_log.rolling(20).std().replace(0.0, np.nan)
     agg["breadth_amount_z20"] = (amount_log - amount_log.rolling(20).mean()) / (amount_std + 1e-9)
     agg["breadth_coverage"] = agg["count"].astype(float)
+    agg["breadth_advancers"] = agg["adv"].astype(float)
+    agg["breadth_decliners"] = agg["dec"].astype(float)
+    agg["breadth_flats"] = agg["flat"].astype(float)
+    agg["breadth_limit_up_count"] = agg["lim_up"].astype(float)
+    agg["breadth_limit_down_count"] = agg["lim_dn"].astype(float)
+    agg["breadth_new_high_count"] = agg["new_high_20"].astype(float)
+    agg["breadth_new_low_count"] = agg["new_low_20"].astype(float)
+    agg["breadth_median_return"] = agg["ret_1"].astype(float)
+    agg["breadth_sample_amount"] = agg["amount"].astype(float)
 
-    out = agg[["date"] + _BREADTH_FEATURE_COLS].copy()
+    out = agg[
+        [
+            "date",
+            *_BREADTH_FEATURE_COLS,
+            "breadth_advancers",
+            "breadth_decliners",
+            "breadth_flats",
+            "breadth_limit_up_count",
+            "breadth_limit_down_count",
+            "breadth_new_high_count",
+            "breadth_new_low_count",
+            "breadth_median_return",
+            "breadth_sample_amount",
+        ]
+    ].copy()
     out.replace([np.inf, -np.inf], np.nan, inplace=True)
     _BREADTH_CACHE[cache_key] = out.copy()
     return out, list(_BREADTH_FEATURE_COLS), notes
@@ -280,8 +443,13 @@ def build_market_context_features(
     margin_market_file: str = "input/margin_market.csv",
     use_us_index_context: bool = False,
     us_index_source: str = "akshare",
+    use_us_sector_etf_context: bool = False,
+    use_cn_etf_context: bool = False,
+    cn_etf_source: str = "akshare",
     index_specs: Sequence[tuple[str, str]] | None = None,
     us_index_specs: Sequence[tuple[str, str]] | None = None,
+    us_sector_etf_specs: Sequence[tuple[str, str]] | None = None,
+    cn_etf_specs: Sequence[tuple[str, str]] | None = None,
     breadth_max_symbols: int = 800,
     breadth_min_coverage: int = 30,
     min_valid_ratio: float = 0.55,
@@ -289,6 +457,8 @@ def build_market_context_features(
 ) -> MarketContextBundle:
     index_specs = tuple(index_specs or _DEFAULT_INDEX_SPECS)
     us_index_specs = tuple(us_index_specs or _DEFAULT_US_INDEX_SPECS)
+    us_sector_etf_specs = tuple(us_sector_etf_specs or _DEFAULT_US_SECTOR_ETF_SPECS)
+    cn_etf_specs = tuple(cn_etf_specs or _DEFAULT_CN_ETF_SPECS)
     base = pd.DataFrame({"date": pd.to_datetime(market_dates, errors="coerce")}).dropna(subset=["date"])
     base = base.drop_duplicates(subset=["date"]).sort_values("date").reset_index(drop=True)
     if base.empty:
@@ -316,6 +486,29 @@ def build_market_context_features(
         )
         notes.extend(us_notes)
 
+    us_sector_frame = pd.DataFrame(columns=["date"])
+    us_sector_cols: list[str] = []
+    if use_us_sector_etf_context:
+        us_sector_frame, us_sector_cols, us_sector_notes = _build_us_sector_etf_context(
+            start=start,
+            end=end,
+            market_dates=base["date"],
+            us_index_source=us_index_source,
+            etf_specs=us_sector_etf_specs,
+        )
+        notes.extend(us_sector_notes)
+
+    cn_etf_frame = pd.DataFrame(columns=["date"])
+    cn_etf_cols: list[str] = []
+    if use_cn_etf_context:
+        cn_etf_frame, cn_etf_cols, cn_etf_notes = _build_cn_etf_context(
+            start=start,
+            end=end,
+            cn_etf_source=cn_etf_source,
+            etf_specs=cn_etf_specs,
+        )
+        notes.extend(cn_etf_notes)
+
     exclude = [x[0] for x in index_specs] + ["000300.SH", "000905.SH", "000852.SH"]
     breadth_frame, breadth_cols, breadth_notes = _build_breadth_context(
         data_dir=data_dir,
@@ -339,12 +532,20 @@ def build_market_context_features(
         merged = merged.merge(idx_frame, on="date", how="left", validate="1:1")
     if not us_frame.empty:
         merged = merged.merge(us_frame, on="date", how="left", validate="1:1")
+    if not us_sector_frame.empty:
+        merged = merged.merge(us_sector_frame, on="date", how="left", validate="1:1")
+    if not cn_etf_frame.empty:
+        merged = merged.merge(cn_etf_frame, on="date", how="left", validate="1:1")
     if not breadth_frame.empty:
         merged = merged.merge(breadth_frame, on="date", how="left", validate="1:1")
     if not margin_frame.empty:
         merged = merged.merge(margin_frame, on="date", how="left", validate="1:1")
 
-    candidate_cols = [col for col in idx_cols + us_cols + breadth_cols + margin_cols if col in merged.columns]
+    candidate_cols = [
+        col
+        for col in idx_cols + us_cols + us_sector_cols + cn_etf_cols + breadth_cols + margin_cols
+        if col in merged.columns
+    ]
     selected_cols: list[str] = []
     for col in candidate_cols:
         valid_n = int(merged[col].notna().sum())
@@ -354,14 +555,18 @@ def build_market_context_features(
         else:
             notes.append(f"context column dropped {col}: valid={valid_n}, ratio={valid_ratio:.2f}")
 
-    if not selected_cols:
+    diagnostic_cols = [col for col in _BREADTH_DIAGNOSTIC_COLS if col in merged.columns]
+    if not selected_cols and not diagnostic_cols:
         return MarketContextBundle(frame=base, feature_columns=[], notes=notes)
 
-    out = merged[["date"] + selected_cols].copy().sort_values("date")
+    ordered_cols = ["date"] + selected_cols + [col for col in diagnostic_cols if col not in selected_cols]
+    out = merged[ordered_cols].copy().sort_values("date")
     for col in selected_cols:
         # Keep alignment stable while avoiding full-row drops from sparse context values.
         out[col] = out[col].ffill()
         if out[col].isna().any():
             out[col] = out[col].fillna(float(out[col].median(skipna=True)))
+    for col in diagnostic_cols:
+        out[col] = pd.to_numeric(out[col], errors="coerce").ffill().fillna(0.0)
     out.replace([np.inf, -np.inf], np.nan, inplace=True)
     return MarketContextBundle(frame=out, feature_columns=selected_cols, notes=notes)
