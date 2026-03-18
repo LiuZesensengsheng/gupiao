@@ -14,7 +14,14 @@ import requests
 
 from src.domain.entities import Security
 from src.domain.symbols import SymbolError, normalize_symbol
-from src.infrastructure.market_data import DataError, fetch_tushare_daily_batch, load_symbol_daily
+from src.infrastructure.market_data import (
+    DataError,
+    fetch_tushare_daily_batch,
+    fetch_tushare_daily_by_trade_dates,
+    load_local_daily,
+    load_symbol_daily,
+    probe_tushare_official_daily_availability,
+)
 
 
 EASTMONEY_CLIST_URL = "https://push2.eastmoney.com/api/qt/clist/get"
@@ -380,6 +387,15 @@ def _load_tushare_batch_task(
     return fetch_tushare_daily_batch(symbols=symbols, start=start, end=end)
 
 
+def _load_tushare_trade_date_batch_task(
+    *,
+    symbols: Sequence[str],
+    start: str,
+    end: str,
+) -> dict[str, pd.DataFrame]:
+    return fetch_tushare_daily_by_trade_dates(symbols=symbols, start=start, end=end)
+
+
 def _load_single_tushare_fallback(
     *,
     symbol: str,
@@ -394,6 +410,18 @@ def _load_single_tushare_fallback(
         start=start,
         end=end,
     )
+
+
+def _should_use_tushare_trade_date_fast_path(
+    *,
+    pending_count: int,
+    start: str,
+    end: str,
+) -> bool:
+    if pending_count <= 0:
+        return False
+    trading_days = _estimate_trading_days(start, end)
+    return trading_days <= 10
 
 
 def sync_market_data(
@@ -646,6 +674,19 @@ def sync_market_data(
         nonlocal downloaded
         if df.empty:
             raise DataError(f"{symbol}: empty dataframe after load")
+        if path.exists():
+            try:
+                existing = load_local_daily(symbol=symbol, data_dir=data_dir)
+            except Exception:
+                existing = pd.DataFrame()
+            if not existing.empty:
+                df = (
+                    pd.concat([existing, df], ignore_index=True)
+                    .assign(date=lambda frame: pd.to_datetime(frame["date"], errors="coerce"))
+                    .sort_values("date")
+                    .drop_duplicates(subset=["date"], keep="last")
+                    .reset_index(drop=True)
+                )
         df.to_csv(path, index=False)
         downloaded += 1
         completed_symbols.add(symbol)
@@ -665,6 +706,85 @@ def sync_market_data(
     max_workers = max(1, int(parallel_workers))
     batch_source = str(source).strip().lower()
     if batch_source == "tushare" and pending_rows:
+        probe_detail = probe_tushare_official_daily_availability()
+        print(f"[SYNC] {probe_detail}")
+        fast_path = _should_use_tushare_trade_date_fast_path(
+            pending_count=len(pending_rows),
+            start=start,
+            end=target_end.strftime("%Y-%m-%d"),
+        )
+        if fast_path:
+            print("[SYNC] Tushare trade-date fast path enabled request_scope=all_pending_symbols")
+            attempts += len(pending_rows)
+            batch_frames: dict[str, pd.DataFrame] = {}
+            batch_error: Exception | None = None
+            try:
+                batch_frames = _load_tushare_trade_date_batch_task(
+                    symbols=[symbol for _, symbol, _ in pending_rows],
+                    start=start,
+                    end=end,
+                )
+            except KeyboardInterrupt:
+                raise
+            except Exception as exc:
+                batch_error = exc
+                print(f"[WARN] [SYNC] Trade-date fast path fallback to single-symbol requests: {exc}")
+
+            for idx, symbol, path in pending_rows:
+                df = batch_frames.get(symbol)
+                try:
+                    if df is None or df.empty:
+                        df = _load_single_tushare_fallback(
+                            symbol=symbol,
+                            data_dir=data_dir,
+                            start=start,
+                            end=end,
+                        )
+                    _handle_success(idx=idx, symbol=symbol, path=path, df=df)
+                except KeyboardInterrupt:
+                    raise
+                except Exception as exc:
+                    failed += 1
+                    failed_symbols.append(symbol)
+                    print(
+                        f"[WARN] [SYNC] {idx}/{total} {symbol} sync failed: {exc} | "
+                        f"downloaded={downloaded} skipped={skipped} failed={failed} done={len(completed_symbols)}/{total}"
+                    )
+                    if failed >= max(1, int(max_failures)):
+                        print(
+                            f"[WARN] [SYNC] Reached failure limit {max(1, int(max_failures))}, "
+                            f"resume checkpoint retained -> {checkpoint_path.resolve()}"
+                        )
+                        break
+            checkpoint_file = ""
+            if len(completed_symbols) >= total:
+                if checkpoint_path.exists():
+                    checkpoint_path.unlink()
+            else:
+                checkpoint_file = str(checkpoint_path)
+                print(
+                    f"[SYNC] Progress saved {len(completed_symbols)}/{total}, resume checkpoint -> {checkpoint_path.resolve()}"
+                )
+
+            universe_path = ""
+            if str(write_universe_file).strip():
+                universe_rows = [x for x in rows if x.sector != "指数"]
+                universe_path = _write_universe_file(write_universe_file, universe_rows, source=universe_source)
+
+            return DataSyncResult(
+                requested_universe_size=int(universe_size),
+                universe_size=len(rows),
+                attempted=attempts,
+                downloaded=downloaded,
+                skipped=skipped,
+                failed=failed,
+                failed_symbols=failed_symbols[:20],
+                universe_source=universe_source,
+                universe_file=universe_path,
+                resumed=resumed,
+                resume_completed=resume_completed,
+                checkpoint_file=checkpoint_file,
+            )
         batch_size = _suggest_tushare_batch_size(start, target_end.strftime("%Y-%m-%d"))
         batches: list[list[tuple[int, str, Path]]] = [
             pending_rows[i : i + batch_size] for i in range(0, len(pending_rows), batch_size)

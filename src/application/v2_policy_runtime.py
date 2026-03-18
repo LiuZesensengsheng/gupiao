@@ -1422,7 +1422,7 @@ def apply_policy(
 
     min_exposure_floor = 0.0 if target_position_count <= 0 else regime_floor
     target_exposure = deps.clip(target_exposure, min_exposure_floor, 1.0)
-    max_single_position = 0.35
+    max_single_position = 0.28
     if market.volatility_regime == "high":
         max_single_position = min(max_single_position, 0.24)
     if cross.large_vs_small_bias < -0.05:
