@@ -13,6 +13,7 @@ from src.application.v2_contracts import (
     InfoItem,
     InfoSignalRecord,
 )
+from src.domain.info_clock import DEFAULT_INFO_CUTOFF_TIME, filter_items_as_of
 from src.domain.news import blend_probability, normalize_direction
 
 _NEGATIVE_EVENT_TAGS = {
@@ -194,8 +195,19 @@ def build_info_state_maps(
     info_half_life_days: float,
     market_info_strength: float,
     stock_info_strength: float,
+    cutoff_time: str = DEFAULT_INFO_CUTOFF_TIME,
+    availability_cutoff: pd.Timestamp | None = None,
 ) -> tuple[InfoAggregateState, dict[str, InfoAggregateState], dict[str, InfoAggregateState]]:
-    items = list(info_items)
+    items = [
+        item
+        for item in filter_items_as_of(
+            info_items,
+            as_of_date,
+            cutoff_time=cutoff_time,
+            availability_cutoff=availability_cutoff,
+        )
+        if isinstance(item, InfoItem)
+    ]
     market_items = [(item, 1.0) for item in items if item.target_type == "market" and item.target == "MARKET"]
     market_state = _aggregate_items(
         market_items,

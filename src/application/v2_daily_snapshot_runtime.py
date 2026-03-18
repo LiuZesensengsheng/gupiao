@@ -360,6 +360,7 @@ def hydrate_daily_settings_from_dataset_manifest(
     hydrated["catalyst_boost_cap"] = float(dataset_manifest.get("catalyst_boost_cap", hydrated.get("catalyst_boost_cap", 0.12)))
     hydrated["flow_exposure_cap"] = float(dataset_manifest.get("flow_exposure_cap", hydrated.get("flow_exposure_cap", 0.08)))
     hydrated["info_source_mode"] = str(dataset_manifest.get("info_source_mode", hydrated.get("info_source_mode", "layered")))
+    hydrated["info_cutoff_time"] = str(dataset_manifest.get("info_cutoff_time", hydrated.get("info_cutoff_time", "23:59:59")))
     hydrated["use_us_index_context"] = parse_boolish(
         dataset_manifest.get("use_us_index_context", manifest.get("use_us_index_context", False)),
         False,
@@ -414,6 +415,7 @@ def build_daily_snapshot_context(
     info_types: str | None,
     info_source_mode: str | None,
     info_subsets: str | None,
+    info_cutoff_time: str | None,
     external_signals: bool | None,
     event_file: str | None,
     capital_flow_file: str | None,
@@ -456,6 +458,7 @@ def build_daily_snapshot_context(
         info_types=info_types,
         info_source_mode=info_source_mode,
         info_subsets=info_subsets,
+        info_cutoff_time=info_cutoff_time,
         external_signals=external_signals,
         event_file=event_file,
         capital_flow_file=capital_flow_file,

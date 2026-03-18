@@ -67,7 +67,7 @@ def daily_result_cache_key(
     )
     info_file = deps.resolve_info_file_from_settings(settings)
     payload = {
-        "version": "v2-daily-cache-4",
+        "version": "v2-daily-cache-5",
         "strategy_id": str(strategy_id),
         "config_path": str(Path(str(settings.get("config_path", ""))).resolve()),
         "source": str(settings.get("source", "")),
@@ -103,6 +103,7 @@ def daily_result_cache_key(
         "info_source_mode": str(settings.get("info_source_mode", "layered")),
         "info_types": [str(item) for item in settings.get("info_types", [])],
         "info_subsets": [str(item) for item in settings.get("info_subsets", [])],
+        "info_cutoff_time": str(settings.get("info_cutoff_time", "23:59:59")),
         "announcement_event_tags": [str(item) for item in settings.get("announcement_event_tags", [])],
         "published_policy_path": str(policy_path.resolve()),
         "published_policy_mtime": file_mtime_token(policy_path),

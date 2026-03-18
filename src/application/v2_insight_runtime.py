@@ -10,6 +10,7 @@ import pandas as pd
 from src.application.v2_contracts import CompositeState, DailyRunResult, InfoItem, Viewpoint
 from src.application.v2_stock_role_runtime import build_stock_role_snapshots
 from src.application.v2_theme_episode_runtime import build_theme_episodes
+from src.domain.info_clock import DEFAULT_INFO_CUTOFF_TIME, as_of_day_cutoff, item_available_as_of, parse_timestamp
 
 
 _NOTE_FIELDS = {
@@ -42,16 +43,6 @@ def _normalize_direction(value: object) -> str:
     if text in {"bear", "bearish", "short", "negative", "down"}:
         return "bearish"
     return "neutral"
-
-
-def _parse_timestamp(value: object) -> pd.Timestamp | None:
-    text = _normalize_text(value)
-    if not text:
-        return None
-    ts = pd.Timestamp(text)
-    if pd.isna(ts):
-        return None
-    return ts
 
 
 def _reason_hash(value: object) -> str:
@@ -130,25 +121,29 @@ def build_viewpoints_from_notes(
     note_dir: str,
     as_of_date: pd.Timestamp,
     lookback_days: int,
+    cutoff_time: str = DEFAULT_INFO_CUTOFF_TIME,
 ) -> list[Viewpoint]:
     base = Path(str(note_dir))
     if not base.exists():
         return []
     cutoff = as_of_date.normalize() - pd.Timedelta(days=max(0, int(lookback_days)))
     out: list[Viewpoint] = []
+    cutoff_ts = as_of_day_cutoff(as_of_date, cutoff_time=cutoff_time)
     for path in sorted(base.glob("*.md")):
         try:
             raw = path.read_text(encoding="utf-8")
         except Exception:
             continue
         front, body = _front_matter_and_body(raw)
-        effective_ts = _parse_timestamp(front.get("effective_time")) or _parse_timestamp(path.stem)
+        effective_ts = parse_timestamp(front.get("effective_time")) or parse_timestamp(path.stem)
         if effective_ts is None:
             effective_ts = pd.Timestamp(path.stat().st_mtime, unit="s")
         effective_ts = effective_ts.normalize()
         if effective_ts > as_of_date.normalize() or effective_ts < cutoff:
             continue
-        ingest_ts = _parse_timestamp(front.get("ingest_time")) or pd.Timestamp(path.stat().st_mtime, unit="s")
+        ingest_ts = parse_timestamp(front.get("ingest_time")) or pd.Timestamp(path.stat().st_mtime, unit="s")
+        if ingest_ts > cutoff_ts:
+            continue
         for block in _parse_note_blocks(body):
             target_type = _normalize_text(block.get("target_type"))
             target = _normalize_text(block.get("target"))
@@ -183,12 +178,17 @@ def build_viewpoints_from_info_items(
     *,
     info_items: list[InfoItem],
     as_of_date: pd.Timestamp,
+    cutoff_time: str = DEFAULT_INFO_CUTOFF_TIME,
 ) -> list[Viewpoint]:
+    availability_cutoff = as_of_day_cutoff(as_of_date, cutoff_time=cutoff_time)
     out: list[Viewpoint] = []
     for item in info_items:
-        effective_ts = _parse_timestamp(item.date) or as_of_date
+        if not item_available_as_of(item, as_of_date, cutoff_time=cutoff_time, availability_cutoff=availability_cutoff):
+            continue
+        effective_ts = parse_timestamp(item.date) or as_of_date
         if effective_ts.normalize() > as_of_date.normalize():
             continue
+        ingest_ts = parse_timestamp(getattr(item, "publish_datetime", "")) or as_of_day_cutoff(effective_ts)
         source = _normalize_text(item.source_subset) or _normalize_text(item.info_type) or "market_news"
         reason = _normalize_text(item.title)
         theme = _normalize_text(item.target) if _normalize_text(item.target_type) == "sector" else ""
@@ -211,7 +211,7 @@ def build_viewpoints_from_info_items(
                     else source_weight_for_source(source)
                 ),
                 effective_time=str(effective_ts.normalize().date()),
-                ingest_time=str(as_of_date.isoformat()),
+                ingest_time=str(ingest_ts.isoformat()),
                 reason_hash=_reason_hash(reason),
             )
         )
@@ -226,7 +226,7 @@ def deduplicate_viewpoints(
 ) -> list[Viewpoint]:
     deduped: dict[tuple[str, str, str, str, str], Viewpoint] = {}
     for item in viewpoints:
-        effective_ts = _parse_timestamp(item.effective_time) or as_of_date
+        effective_ts = parse_timestamp(item.effective_time) or as_of_date
         age_days = max(0.0, float((as_of_date.normalize() - effective_ts.normalize()).days))
         recency = float(0.5 ** (age_days / max(1.0, float(half_life_days))))
         weight = float(recency * float(item.confidence) * float(item.importance) * float(item.source_weight))
@@ -269,15 +269,18 @@ def build_viewpoints(
         )
     )
     half_life_days = float(settings.get("info_half_life_days", 10.0))
+    cutoff_time = str(settings.get("info_cutoff_time", DEFAULT_INFO_CUTOFF_TIME))
     raw = build_viewpoints_from_notes(
         note_dir=note_dir,
         as_of_date=as_of_date,
         lookback_days=lookback_days,
+        cutoff_time=cutoff_time,
     )
     raw.extend(
         build_viewpoints_from_info_items(
             info_items=info_items,
             as_of_date=as_of_date,
+            cutoff_time=cutoff_time,
         )
     )
     return deduplicate_viewpoints(

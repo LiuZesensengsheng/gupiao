@@ -13,6 +13,7 @@ from src.application.v2_contracts import (
     HorizonForecast,
     InfoAggregateState,
     InfoDivergenceRecord,
+    InfoItem,
     InfoSignalRecord,
     LearnedPolicyModel,
     MainlineState,
@@ -167,6 +168,66 @@ def test_build_viewpoints_from_notes_deduplicates_and_keeps_conflicts(tmp_path) 
     assert bullish.reason == "demand improving"
     assert bullish.invalid_if == "loses breakout"
     assert bullish.weight == expected_weight
+
+
+def test_build_viewpoints_from_notes_skips_future_ingest_time(tmp_path) -> None:
+    note_dir = tmp_path / "notes"
+    note_dir.mkdir(parents=True, exist_ok=True)
+    (note_dir / "2026-03-10.md").write_text(
+        "\n".join(
+            [
+                "---",
+                "effective_time: 2026-03-10",
+                "ingest_time: 2026-03-13T09:30:00",
+                "---",
+                "- target_type: stock",
+                "- target: AAA",
+                "- direction: bullish",
+                "- confidence: 0.8",
+                "- importance: 0.8",
+                "- horizon: mid",
+                "- reason: backfilled after the fact",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    viewpoints = build_viewpoints(
+        settings={
+            "insight_notes_dir": str(note_dir),
+            "insight_lookback_days": 10,
+            "info_half_life_days": 10.0,
+        },
+        as_of_date=pd.Timestamp("2026-03-12"),
+        info_items=[],
+    )
+
+    assert viewpoints == []
+
+
+def test_build_viewpoints_from_info_items_skips_future_publish_datetime() -> None:
+    viewpoints = build_viewpoints(
+        settings={
+            "insight_notes_dir": "missing",
+            "insight_lookback_days": 10,
+            "info_half_life_days": 10.0,
+        },
+        as_of_date=pd.Timestamp("2026-03-12"),
+        info_items=[
+            InfoItem(
+                date="2026-03-12",
+                publish_datetime="2026-03-13T08:00:00",
+                target_type="stock",
+                target="AAA",
+                horizon="mid",
+                direction="bullish",
+                info_type="news",
+                title="future-published item",
+            )
+        ],
+    )
+
+    assert viewpoints == []
 
 
 def test_attach_insight_memory_to_state_returns_empty_overlay_when_disabled() -> None:

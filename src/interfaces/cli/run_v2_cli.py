@@ -52,6 +52,12 @@ def _add_info_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--info-file", dest="info_file", default=None, help="Optional structured info file or directory override")
     parser.add_argument("--info-lookback-days", dest="info_lookback_days", type=int, default=None, help="Info lookback window")
     parser.add_argument("--info-half-life-days", dest="info_half_life_days", type=float, default=None, help="Info half life")
+    parser.add_argument(
+        "--info-cutoff-time",
+        dest="info_cutoff_time",
+        default=None,
+        help="Decision cutoff time for same-day info availability, e.g. 15:00:00 or 23:59:59",
+    )
     parser.add_argument("--use-info-fusion", dest="use_info_fusion", action="store_true", default=None, help="Enable info shadow evaluation")
     parser.add_argument("--no-use-info-fusion", dest="use_info_fusion", action="store_false", help="Disable info shadow evaluation")
     parser.add_argument(

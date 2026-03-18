@@ -39,8 +39,11 @@ def build_info_manifest_payload(
     deps: InfoManifestDependencies,
 ) -> dict[str, object]:
     counts: dict[str, int] = {}
+    publish_timestamp_count = 0
     for item in info_items:
         counts[item.info_type] = int(counts.get(item.info_type, 0) + 1)
+        if str(getattr(item, "publish_datetime", "")).strip():
+            publish_timestamp_count += 1
     source_breakdown = info_source_breakdown(info_items)
     date_window = {
         "start": "",
@@ -63,6 +66,8 @@ def build_info_manifest_payload(
         "market_news_count": int(source_breakdown.get("market_news", 0)),
         "announcement_count": int(source_breakdown.get("announcements", 0)),
         "research_count": int(source_breakdown.get("research", 0)),
+        "publish_timestamp_count": int(publish_timestamp_count),
+        "publish_timestamp_coverage_ratio": float(publish_timestamp_count / max(1, len(info_items))) if info_items else 0.0,
         "date_window": date_window,
         "coverage_summary": {} if shadow_report is None else dict(shadow_report.get("coverage_summary", {})),
         "market_coverage_ratio": float(
@@ -79,4 +84,5 @@ def build_info_manifest_payload(
         "info_subsets": [str(item) for item in settings.get("info_subsets", [])],
         "announcement_event_tags": [str(item) for item in settings.get("announcement_event_tags", [])],
         "as_of_date": str(as_of_date.date()),
+        "info_cutoff_time": str(settings.get("info_cutoff_time", "23:59:59")),
     }

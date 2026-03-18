@@ -10,6 +10,7 @@ from src.application.v2_external_signal_support import (
     attach_external_signals_to_state,
     build_external_signal_package,
 )
+from src.domain.info_clock import DEFAULT_INFO_CUTOFF_TIME, as_of_day_cutoff, filter_items_as_of
 
 
 @dataclass(frozen=True)
@@ -24,6 +25,18 @@ def build_external_signal_package_for_date(
     as_of_date: pd.Timestamp,
     info_items: list[InfoItem],
 ) -> dict[str, object]:
+    cutoff_time = str(settings.get("info_cutoff_time", DEFAULT_INFO_CUTOFF_TIME))
+    availability_cutoff = as_of_day_cutoff(as_of_date, cutoff_time=cutoff_time)
+    filtered_items = [
+        item
+        for item in filter_items_as_of(
+            info_items,
+            as_of_date,
+            cutoff_time=cutoff_time,
+            availability_cutoff=availability_cutoff,
+        )
+        if isinstance(item, InfoItem)
+    ]
     if not bool(settings.get("external_signals", True)):
         return {
             "capital_flow_state": CapitalFlowState(),
@@ -45,7 +58,7 @@ def build_external_signal_package_for_date(
     return build_external_signal_package(
         settings=settings,
         as_of_date=as_of_date,
-        info_items=info_items,
+        info_items=filtered_items,
     )
 
 

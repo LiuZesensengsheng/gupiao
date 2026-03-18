@@ -7,6 +7,7 @@ from dataclasses import asdict
 from pathlib import Path
 from typing import Iterable
 
+from src.domain.info_clock import DEFAULT_INFO_CUTOFF_TIME
 from src.application.v2_universe_generator import generate_dynamic_universe
 from src.infrastructure.discovery import build_predefined_universe, normalize_universe_tier
 from src.infrastructure.market_data import set_tushare_token
@@ -118,6 +119,7 @@ def load_v2_runtime_settings(
     info_file: str | None = None,
     info_lookback_days: int | None = None,
     info_half_life_days: float | None = None,
+    info_cutoff_time: str | None = None,
     use_info_fusion: bool | None = None,
     use_learned_info_fusion: bool | None = None,
     info_shadow_only: bool | None = None,
@@ -274,6 +276,11 @@ def load_v2_runtime_settings(
             info_half_life_days
             if info_half_life_days is not None
             else float(pick("info_half_life_days", pick("news_half_life_days", 10.0)))
+        ),
+        "info_cutoff_time": (
+            str(info_cutoff_time).strip()
+            if info_cutoff_time is not None and str(info_cutoff_time).strip()
+            else str(pick("info_cutoff_time", DEFAULT_INFO_CUTOFF_TIME)).strip()
         ),
         "capital_flow_file": (
             str(capital_flow_file).strip()

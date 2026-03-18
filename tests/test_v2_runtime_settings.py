@@ -5,6 +5,7 @@ from tests.v2_research_cases import (
     test_generated_80_learning_targets_prefer_realizable_alpha_and_ranking,
     test_load_v2_runtime_settings_applies_tushare_token_from_config,
     test_load_v2_runtime_settings_defaults_to_generated_300_tiers_for_large_universe,
+    test_load_v2_runtime_settings_reads_info_cutoff_time,
     test_load_v2_runtime_settings_prefers_generated_base_file_for_dynamic_universe,
     test_load_v2_runtime_settings_reads_main_board_recommendation_flag,
     test_load_v2_runtime_settings_reads_main_board_universe_flag,
@@ -13,6 +14,7 @@ from tests.v2_research_cases import (
     test_policy_model_projects_state_into_valid_policy_spec,
     test_resolve_v2_universe_settings_passes_main_board_only_flag,
     test_run_v2_cli_accepts_dynamic_universe_overrides,
+    test_run_v2_cli_accepts_info_cutoff_time_override,
     test_run_v2_cli_accepts_tushare_token_override,
     test_sha256_file_supports_directory_inputs,
 )

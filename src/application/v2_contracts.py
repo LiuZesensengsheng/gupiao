@@ -257,6 +257,7 @@ class InfoItem:
     publisher: str = ""
     event_tag: str = ""
     event_id: str = ""
+    publish_datetime: str = ""
 
 
 @dataclass(frozen=True)

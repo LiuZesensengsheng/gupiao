@@ -6,9 +6,17 @@ from typing import Iterable
 import pandas as pd
 
 from src.application.v2_contracts import InfoItem
+from src.domain.info_clock import (
+    DEFAULT_INFO_CUTOFF_TIME,
+    as_of_day_cutoff,
+    derive_publish_timestamp_from_source_url,
+    parse_timestamp,
+)
 from src.domain.news import normalize_direction, normalize_horizon, normalize_target, normalize_target_type
 
 _REQUIRED_COLUMNS = ("date", "target_type", "target", "direction")
+_PUBLISH_DATETIME_COLUMNS = ("publish_datetime", "published_at", "publish_time", "datetime")
+_TIME_ONLY_COLUMNS = ("time",)
 _INFO_TYPE_WEIGHTS = {
     "announcement": 1.0,
     "news": 0.85,
@@ -211,6 +219,38 @@ def _load_raw_info(path: Path) -> pd.DataFrame:
     return pd.concat(frames, ignore_index=True)
 
 
+def _resolve_publish_datetime(
+    row: pd.Series,
+    *,
+    lower_map: dict[str, str],
+    base_date: pd.Timestamp,
+    source_url: object,
+) -> str:
+    for col in _PUBLISH_DATETIME_COLUMNS:
+        source_col = lower_map.get(col)
+        if source_col is None:
+            continue
+        publish_ts = parse_timestamp(row[source_col])
+        if publish_ts is None:
+            continue
+        return str(publish_ts.isoformat())
+    for col in _TIME_ONLY_COLUMNS:
+        source_col = lower_map.get(col)
+        if source_col is None:
+            continue
+        time_text = str(row[source_col] or "").strip()
+        if not time_text:
+            continue
+        publish_ts = parse_timestamp(f"{base_date.date()} {time_text}")
+        if publish_ts is None:
+            continue
+        return str(publish_ts.isoformat())
+    derived_source_ts = derive_publish_timestamp_from_source_url(source_url)
+    if derived_source_ts is not None:
+        return str(derived_source_ts.isoformat())
+    return ""
+
+
 def load_v2_info_items(
     csv_path: str | Path,
     *,
@@ -220,6 +260,7 @@ def load_v2_info_items(
     info_types: Iterable[str] = ("news", "announcement", "research"),
     info_subsets: Iterable[str] = ("market_news", "announcements", "research"),
     announcement_event_tags: Iterable[str] = _STRONG_ANNOUNCEMENT_EVENT_TAGS,
+    cutoff_time: str = DEFAULT_INFO_CUTOFF_TIME,
 ) -> list[InfoItem]:
     path = Path(csv_path)
     if not path.exists():
@@ -238,6 +279,7 @@ def load_v2_info_items(
         return []
 
     lower_map = _validate_columns(raw, source_label=str(path))
+    as_of_cutoff = as_of_day_cutoff(as_of_date, cutoff_time=cutoff_time)
     out_by_key: dict[tuple[object, ...], InfoItem] = {}
     for _, row in raw.iterrows():
         date = pd.to_datetime(row[lower_map["date"]], errors="coerce")
@@ -248,7 +290,6 @@ def load_v2_info_items(
             continue
         if (as_of_date - date).days > int(lookback_days):
             continue
-
         target_type = normalize_target_type(str(row[lower_map["target_type"]]))
         if target_type not in {"market", "stock"}:
             continue
@@ -262,6 +303,16 @@ def load_v2_info_items(
 
         title = str(row[lower_map["title"]]).strip() if "title" in lower_map else ""
         source_url = str(row[lower_map["source_url"]]).strip() if "source_url" in lower_map else ""
+        publish_datetime = _resolve_publish_datetime(
+            row,
+            lower_map=lower_map,
+            base_date=date,
+            source_url=source_url,
+        )
+        if publish_datetime:
+            publish_ts = parse_timestamp(publish_datetime)
+            if publish_ts is not None and publish_ts > as_of_cutoff:
+                continue
         publisher = str(row[lower_map["publisher"]]).strip() if "publisher" in lower_map else ""
         subset_from_path = _normalize_info_subset(row.get("__default_subset", ""))
         raw_info_type = row[lower_map["info_type"]] if "info_type" in lower_map else ""
@@ -312,6 +363,7 @@ def load_v2_info_items(
             publisher=publisher,
             event_tag=event_tag,
             event_id=event_id,
+            publish_datetime=publish_datetime,
         )
         key = (
             item.date,

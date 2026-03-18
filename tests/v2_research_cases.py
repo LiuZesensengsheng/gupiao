@@ -252,6 +252,25 @@ def test_load_v2_runtime_settings_resolves_training_window_days(tmp_path: Path) 
     assert disabled_settings["training_window_days"] is None
 
 
+def test_load_v2_runtime_settings_reads_info_cutoff_time(tmp_path: Path) -> None:
+    config_path = tmp_path / "api.json"
+    config_path.write_text(
+        json.dumps(
+            {
+                "common": {"source": "local"},
+                "daily": {"info_cutoff_time": "15:00:00"},
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    settings = _load_v2_runtime_settings(config_path=str(config_path))
+    override_settings = _load_v2_runtime_settings(config_path=str(config_path), info_cutoff_time="14:30:00")
+
+    assert settings["info_cutoff_time"] == "15:00:00"
+    assert override_settings["info_cutoff_time"] == "14:30:00"
+
+
 def test_load_v2_runtime_settings_prefers_generated_base_file_for_dynamic_universe(tmp_path: Path) -> None:
     config_path = tmp_path / "api.json"
     config_path.write_text(
@@ -379,6 +398,12 @@ def test_run_v2_cli_accepts_dynamic_universe_overrides() -> None:
     assert args.generator_coarse_size == 1000
     assert args.generator_theme_aware is True
     assert args.generator_use_concepts is True
+
+
+def test_run_v2_cli_accepts_info_cutoff_time_override() -> None:
+    parser = build_parser()
+    args = parser.parse_args(["research-run", "--info-cutoff-time", "15:00:00"])
+    assert args.info_cutoff_time == "15:00:00"
 
 
 def test_explicit_universe_file_disables_default_universe_tier(tmp_path: Path) -> None:

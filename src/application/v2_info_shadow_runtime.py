@@ -8,6 +8,7 @@ import numpy as np
 import pandas as pd
 
 from src.application.v2_contracts import CompositeState, InfoAggregateState, InfoItem
+from src.domain.info_clock import DEFAULT_INFO_CUTOFF_TIME, as_of_day_cutoff, filter_items_as_of
 from src.domain.news import blend_probability
 from src.infrastructure.info_repository import load_v2_info_items
 from src.infrastructure.modeling import LogisticBinaryModel
@@ -107,6 +108,7 @@ def load_v2_info_items_for_date(
         source_mode=str(settings.get("info_source_mode", "layered")),
         info_types=settings.get("info_types", ("news", "announcement", "research")),
         info_subsets=settings.get("info_subsets", ("market_news", "announcements", "research")),
+        cutoff_time=str(settings.get("info_cutoff_time", DEFAULT_INFO_CUTOFF_TIME)),
         announcement_event_tags=settings.get(
             "announcement_event_tags",
             (
@@ -199,6 +201,18 @@ def enrich_state_with_info(
     market_models: dict[str, object] | None = None,
     deps: InfoShadowRuntimeDependencies,
 ) -> CompositeState:
+    cutoff_time = str(settings.get("info_cutoff_time", DEFAULT_INFO_CUTOFF_TIME))
+    availability_cutoff = as_of_day_cutoff(as_of_date, cutoff_time=cutoff_time)
+    info_items = [
+        item
+        for item in filter_items_as_of(
+            info_items,
+            as_of_date,
+            cutoff_time=cutoff_time,
+            availability_cutoff=availability_cutoff,
+        )
+        if isinstance(item, InfoItem)
+    ]
     sector_map = deps.build_sector_map_from_state(state)
     market_info_state, sector_info_states, stock_info_states = deps.build_info_state_maps(
         info_items=info_items,
@@ -209,6 +223,8 @@ def enrich_state_with_info(
         info_half_life_days=float(settings.get("info_half_life_days", 10.0)),
         market_info_strength=float(settings.get("market_info_strength", 0.9)),
         stock_info_strength=float(settings.get("stock_info_strength", 1.1)),
+        cutoff_time=cutoff_time,
+        availability_cutoff=availability_cutoff,
     )
 
     market_shadow_1d, _ = deps.predict_info_shadow_prob(
