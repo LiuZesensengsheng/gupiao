@@ -274,6 +274,24 @@ def test_load_v2_runtime_settings_prefers_generated_base_file_for_dynamic_univer
     assert settings["universe_file"] == "config/universe_all_a_full.json"
 
 
+def test_load_v2_runtime_settings_defaults_to_generated_300_tiers_for_large_universe(tmp_path: Path) -> None:
+    config_path = tmp_path / "api.json"
+    config_path.write_text(
+        json.dumps(
+            {
+                "common": {"source": "local"},
+                "daily": {"universe_limit": 300},
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    settings = _load_v2_runtime_settings(config_path=str(config_path))
+
+    assert settings["active_default_universe_tier"] == "generated_300"
+    assert settings["candidate_default_universe_tier"] == "generated_300"
+
+
 def test_load_v2_runtime_settings_reads_main_board_recommendation_flag(tmp_path: Path) -> None:
     config_path = tmp_path / "api.json"
     config_path.write_text(

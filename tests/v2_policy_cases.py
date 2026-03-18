@@ -2669,6 +2669,87 @@ def test_v2_policy_allows_small_trim_when_alpha_breaks_down() -> None:
     assert adjusted["AAA"] == pytest.approx(0.169)
 
 
+def test_v2_policy_retains_high_rank_current_holding_within_buffer() -> None:
+    adjusted, notes = policy_runtime.finalize_target_weights(
+        desired_weights={"BBB": 0.18, "CCC": 0.16},
+        current_weights={"AAA": 0.14},
+        current_holding_days={"AAA": 9},
+        stocks=[
+            StockForecastState(
+                "AAA",
+                "强",
+                0.61,
+                0.65,
+                0.69,
+                0.58,
+                0.12,
+                0.90,
+                alpha_score=0.69,
+                up_2d_prob=0.62,
+                up_3d_prob=0.64,
+                up_10d_prob=0.67,
+            ),
+            StockForecastState(
+                "BBB",
+                "强",
+                0.64,
+                0.68,
+                0.72,
+                0.60,
+                0.14,
+                0.92,
+                alpha_score=0.72,
+                up_2d_prob=0.65,
+                up_3d_prob=0.67,
+                up_10d_prob=0.70,
+            ),
+            StockForecastState(
+                "CCC",
+                "强",
+                0.56,
+                0.60,
+                0.64,
+                0.54,
+                0.08,
+                0.88,
+                alpha_score=0.63,
+                up_2d_prob=0.58,
+                up_3d_prob=0.59,
+                up_10d_prob=0.62,
+            ),
+        ],
+        target_exposure=0.40,
+        min_trade_delta=0.02,
+        min_holding_days=5,
+        deps=legacy_services._policy_runtime_dependencies(),
+    )
+
+    assert adjusted.get("AAA", 0.0) > 0.0
+    assert any("retained by hold buffer" in note for note in notes)
+
+
+def test_v2_policy_hold_buffer_respects_sector_name_cap() -> None:
+    adjusted, notes = policy_runtime.finalize_target_weights(
+        desired_weights={"A1": 0.18, "A2": 0.17, "A3": 0.16, "B1": 0.15},
+        current_weights={},
+        current_holding_days={},
+        stocks=[
+            StockForecastState("A1", "芯片", 0.63, 0.67, 0.72, 0.60, 0.12, 0.92, alpha_score=0.72, up_2d_prob=0.64, up_3d_prob=0.66),
+            StockForecastState("A2", "芯片", 0.61, 0.65, 0.70, 0.58, 0.10, 0.90, alpha_score=0.69, up_2d_prob=0.62, up_3d_prob=0.64),
+            StockForecastState("A3", "芯片", 0.59, 0.63, 0.68, 0.56, 0.09, 0.88, alpha_score=0.66, up_2d_prob=0.60, up_3d_prob=0.61),
+            StockForecastState("B1", "电力", 0.55, 0.59, 0.64, 0.55, 0.08, 0.86, alpha_score=0.62, up_2d_prob=0.56, up_3d_prob=0.58),
+        ],
+        target_exposure=0.66,
+        min_trade_delta=0.02,
+        min_holding_days=5,
+        deps=legacy_services._policy_runtime_dependencies(),
+    )
+
+    assert len([symbol for symbol in adjusted if symbol.startswith("A")]) <= 2
+    assert "B1" in adjusted
+    assert any("sector name cap" in note for note in notes)
+
+
 def test_v2_policy_suppresses_small_rebalance_gap() -> None:
     market, sectors, stocks, cross_section = _make_demo_state()
     composite_state = compose_state(

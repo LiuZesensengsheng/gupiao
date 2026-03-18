@@ -774,6 +774,205 @@ def _role_rank(role: str) -> int:
     }.get(str(role or "").strip().lower(), 99)
 
 
+def _theme_episode_for_symbol(
+    *,
+    symbol: str,
+    role_states: dict[str, object],
+    theme_episodes: dict[str, object],
+) -> object | None:
+    role_state = role_states.get(str(symbol))
+    if role_state is None:
+        return None
+    return theme_episodes.get(str(getattr(role_state, "theme", "")))
+
+
+def _build_hold_buffer_rank_context(
+    *,
+    desired_weights: dict[str, float],
+    current_weights: dict[str, float],
+    state_map: dict[str, StockForecastState],
+    holding_profiles: dict[str, dict[str, float | bool]],
+    role_states: dict[str, object],
+    theme_episodes: dict[str, object],
+    deps: PolicyRuntimeDependencies,
+) -> tuple[list[dict[str, object]], dict[str, int], int, int, int]:
+    desired_active = [symbol for symbol, weight in desired_weights.items() if float(weight) > 1e-9]
+    current_active = [symbol for symbol, weight in current_weights.items() if float(weight) > 1e-9]
+    target_slot_count = max(1, len(desired_active) or len(current_active))
+    entries: list[dict[str, object]] = []
+
+    for symbol, stock_state in state_map.items():
+        current = max(0.0, float(current_weights.get(symbol, 0.0)))
+        desired = max(0.0, float(desired_weights.get(symbol, 0.0)))
+        holding_profile = holding_profiles.get(symbol, {})
+        role_state = role_states.get(symbol)
+        theme_episode = _theme_episode_for_symbol(
+            symbol=symbol,
+            role_states=role_states,
+            theme_episodes=theme_episodes,
+        )
+        role = str(getattr(role_state, "role", "")).strip().lower()
+        status = str(getattr(stock_state, "tradability_status", "normal") or "normal")
+        theme_phase = str(getattr(theme_episode, "phase", "")).strip().lower()
+        theme_fading = theme_phase == "fading"
+        role_downgrade = bool(getattr(role_state, "role_downgrade", False))
+        laggard_role = role == "laggard"
+        strong_theme_holder = bool(theme_phase == "strengthening" and role in {"leader", "core"})
+        actionable = bool(deps.is_actionable_status(status))
+        persistence_score = float(holding_profile.get("persistence_score", 0.0))
+        exit_pressure = float(holding_profile.get("breakdown_risk", holding_profile.get("exit_risk", 0.0)))
+        keep_score = float(
+            np.clip(
+                0.48 * stock_policy_score(stock_state, deps=deps)
+                + 0.26 * persistence_score
+                + 0.08 * float(getattr(stock_state, "excess_vs_sector_prob", 0.5))
+                + 0.05 * (1.0 if desired > 1e-9 else 0.0)
+                + 0.06 * (1.0 if current > 1e-9 else 0.0)
+                + 0.04 * (1.0 if strong_theme_holder else 0.0)
+                - 0.12 * (1.0 if theme_fading else 0.0)
+                - 0.10 * (1.0 if role_downgrade else 0.0)
+                - 0.10 * (1.0 if laggard_role else 0.0)
+                - 0.14 * exit_pressure,
+                0.0,
+                1.0,
+            )
+        )
+        buffer_hold_eligible = bool(
+            actionable
+            and current > 1e-9
+            and not bool(holding_profile.get("urgent_exit", False))
+            and not theme_fading
+            and not role_downgrade
+            and not laggard_role
+            and keep_score >= 0.52
+        )
+        entries.append(
+            {
+                "symbol": symbol,
+                "sector": str(getattr(stock_state, "sector", "") or "其他"),
+                "score": keep_score,
+                "current": current,
+                "desired": desired,
+                "role": role,
+                "buffer_hold_eligible": buffer_hold_eligible,
+            }
+        )
+
+    entries.sort(
+        key=lambda item: (
+            -float(item["score"]),
+            -float(item["desired"]),
+            -float(item["current"]),
+            _role_rank(str(item["role"])),
+            str(item["symbol"]),
+        )
+    )
+    rank_map = {str(item["symbol"]): idx for idx, item in enumerate(entries, start=1)}
+    for item in entries:
+        item["rank"] = int(rank_map[str(item["symbol"])])
+
+    hold_until_rank = min(len(entries), max(target_slot_count + 2, target_slot_count * 2))
+    available_sectors = {str(item["sector"]) for item in entries if float(item["score"]) > 0.0}
+    sector_name_cap = 0
+    if len(available_sectors) > 1:
+        sector_name_cap = 2 if target_slot_count >= 3 else 1
+    return entries, rank_map, hold_until_rank, sector_name_cap, target_slot_count
+
+
+def _apply_hold_buffer_retention(
+    *,
+    adjusted: dict[str, float],
+    current_weights: dict[str, float],
+    rank_entries: list[dict[str, object]],
+    hold_until_rank: int,
+    sector_name_cap: int,
+    target_slot_count: int,
+    target_exposure: float,
+) -> tuple[dict[str, float], list[str]]:
+    out = {str(symbol): max(0.0, float(weight)) for symbol, weight in adjusted.items()}
+    notes: list[str] = []
+    active_symbols = {symbol for symbol, weight in out.items() if float(weight) > 1e-9}
+    sector_counts: dict[str, int] = {}
+    for symbol in active_symbols:
+        current_entry = next((item for item in rank_entries if str(item["symbol"]) == symbol), None)
+        sector = str(current_entry["sector"]) if current_entry is not None else ""
+        if sector:
+            sector_counts[sector] = sector_counts.get(sector, 0) + 1
+
+    baseline_slot_weight = float(target_exposure) / max(1, int(target_slot_count))
+    rank_entry_map = {str(item["symbol"]): item for item in rank_entries}
+    for symbol, current_weight in current_weights.items():
+        current = max(0.0, float(current_weight))
+        if current <= 1e-9 or symbol in active_symbols:
+            continue
+        entry = rank_entry_map.get(str(symbol))
+        if entry is None or not bool(entry.get("buffer_hold_eligible", False)):
+            continue
+        rank = int(entry.get("rank", 999999))
+        if rank > int(hold_until_rank):
+            continue
+        sector = str(entry.get("sector", ""))
+        if sector_name_cap > 0 and sector and sector_counts.get(sector, 0) >= int(sector_name_cap):
+            continue
+        retained_weight = min(current, baseline_slot_weight * (0.90 if rank <= target_slot_count else 0.75))
+        retained_weight = max(retained_weight, min(current, baseline_slot_weight * 0.50))
+        if retained_weight <= 1e-9:
+            continue
+        out[str(symbol)] = max(float(out.get(str(symbol), 0.0)), float(retained_weight))
+        active_symbols.add(str(symbol))
+        if sector:
+            sector_counts[sector] = sector_counts.get(sector, 0) + 1
+        notes.append(f"{symbol}: retained by hold buffer (rank {rank}/{hold_until_rank}).")
+    return out, notes
+
+
+def _enforce_sector_name_cap_on_weights(
+    *,
+    adjusted: dict[str, float],
+    current_weights: dict[str, float],
+    state_map: dict[str, StockForecastState],
+    rank_map: dict[str, int],
+    sector_name_cap: int,
+) -> tuple[dict[str, float], list[str]]:
+    out = {
+        str(symbol): max(0.0, float(weight))
+        for symbol, weight in adjusted.items()
+        if float(weight) > 1e-9
+    }
+    if sector_name_cap <= 0 or len(out) <= sector_name_cap:
+        return out, []
+
+    active_sectors = {
+        str(getattr(state_map.get(symbol), "sector", "") or "其他")
+        for symbol in out
+        if state_map.get(symbol) is not None
+    }
+    if len(active_sectors) <= 1:
+        return out, []
+
+    notes: list[str] = []
+    kept: dict[str, float] = {}
+    sector_counts: dict[str, int] = {}
+    ordered_symbols = sorted(
+        out,
+        key=lambda symbol: (
+            int(rank_map.get(str(symbol), 999999)),
+            -max(0.0, float(current_weights.get(str(symbol), 0.0))),
+            -max(0.0, float(out.get(str(symbol), 0.0))),
+            str(symbol),
+        ),
+    )
+    for symbol in ordered_symbols:
+        stock_state = state_map.get(str(symbol))
+        sector = str(getattr(stock_state, "sector", "") or "其他")
+        if sector_counts.get(sector, 0) < int(sector_name_cap):
+            kept[str(symbol)] = float(out[str(symbol)])
+            sector_counts[sector] = sector_counts.get(sector, 0) + 1
+            continue
+        notes.append(f"{symbol}: dropped by sector name cap ({sector_name_cap}) for {sector}.")
+    return kept, notes
+
+
 def finalize_target_weights(
     *,
     desired_weights: dict[str, float],
@@ -801,8 +1000,35 @@ def finalize_target_weights(
         str(symbol): payload
         for symbol, payload in (getattr(composite_state, "stock_role_states", {}) or {}).items()
     } if composite_state is not None else {}
+    rank_entries, rank_map, hold_until_rank, sector_name_cap, target_slot_count = _build_hold_buffer_rank_context(
+        desired_weights=adjusted,
+        current_weights=current_weights,
+        state_map=state_map,
+        holding_profiles=holding_profiles,
+        role_states=role_states,
+        theme_episodes=theme_episodes,
+        deps=deps,
+    )
     notes: list[str] = []
     locked_symbols: set[str] = set()
+    adjusted, hold_buffer_notes = _apply_hold_buffer_retention(
+        adjusted=adjusted,
+        current_weights=current_weights,
+        rank_entries=rank_entries,
+        hold_until_rank=hold_until_rank,
+        sector_name_cap=sector_name_cap,
+        target_slot_count=target_slot_count,
+        target_exposure=target_exposure,
+    )
+    notes.extend(hold_buffer_notes)
+    adjusted, sector_cap_notes = _enforce_sector_name_cap_on_weights(
+        adjusted=adjusted,
+        current_weights=current_weights,
+        state_map=state_map,
+        rank_map=rank_map,
+        sector_name_cap=sector_name_cap,
+    )
+    notes.extend(sector_cap_notes)
 
     all_symbols = sorted(set(adjusted) | set(current_weights))
     for symbol in all_symbols:

@@ -92,18 +92,44 @@ def _stock_fragility(stock: StockForecastState) -> float:
     )
 
 
+def _durability_alignment(stock: StockForecastState) -> float:
+    up_1d = float(getattr(stock, "up_1d_prob", 0.5))
+    up_5d = float(getattr(stock, "up_5d_prob", 0.5))
+    up_20d = float(getattr(stock, "up_20d_prob", 0.5))
+    excess_vs_sector = float(getattr(stock, "excess_vs_sector_prob", 0.5))
+    tradeability = float(getattr(stock, "tradeability_score", 0.5))
+    event_impact = float(getattr(stock, "event_impact_score", 0.5))
+    short_spike = max(0.0, up_1d - max(up_5d, up_20d))
+    return float(
+        _clip(
+            0.34 * max(0.0, up_20d - 0.50) / 0.20
+            + 0.24 * max(0.0, up_5d - 0.50) / 0.16
+            + 0.18 * max(0.0, excess_vs_sector - 0.50) / 0.14
+            + 0.12 * max(0.0, tradeability - 0.80) / 0.16
+            + 0.08 * max(0.0, event_impact - 0.10) / 0.20
+            - 0.14 * short_spike / 0.12,
+            0.0,
+            1.0,
+        )
+    )
+
+
 def _stock_selection_priority(stock: StockForecastState, *, stock_score: float, risk_penalty: float) -> float:
     up_5d = float(getattr(stock, "up_5d_prob", 0.5))
     up_20d = float(getattr(stock, "up_20d_prob", 0.5))
     excess_vs_sector = float(getattr(stock, "excess_vs_sector_prob", 0.5))
     tradeability = float(getattr(stock, "tradeability_score", 0.5))
+    event_impact = float(getattr(stock, "event_impact_score", 0.5))
+    short_spike = max(0.0, float(getattr(stock, "up_1d_prob", 0.5)) - max(up_5d, up_20d))
     stability_bonus = (
-        0.40 * max(0.0, up_20d - 0.50)
-        + 0.28 * max(0.0, up_5d - 0.50)
-        + 0.18 * max(0.0, excess_vs_sector - 0.50)
-        + 0.14 * max(0.0, tradeability - 0.78)
+        0.34 * max(0.0, up_20d - 0.50)
+        + 0.24 * max(0.0, up_5d - 0.50)
+        + 0.16 * max(0.0, excess_vs_sector - 0.50)
+        + 0.10 * max(0.0, tradeability - 0.78)
+        + 0.08 * max(0.0, event_impact - 0.10)
+        + 0.18 * _durability_alignment(stock)
     )
-    return float(stock_score + stability_bonus - risk_penalty)
+    return float(stock_score + stability_bonus - risk_penalty - 0.10 * short_spike / 0.12)
 
 
 def _mainline_priority_maps(mainlines: Iterable[MainlineState]) -> tuple[dict[str, float], dict[str, float]]:
@@ -117,12 +143,21 @@ def _mainline_priority_maps(mainlines: Iterable[MainlineState]) -> tuple[dict[st
         event_risk = float(getattr(mainline, "event_risk_level", 0.0))
         if conviction < cutoff or event_risk >= 0.60:
             continue
+        breadth = float(getattr(mainline, "breadth", 0.0))
+        leadership = float(getattr(mainline, "leadership", 0.0))
+        catalyst = float(getattr(mainline, "catalyst_strength", 0.0))
+        capital_support = float(getattr(mainline, "capital_support", 0.0))
+        macro_alignment = float(getattr(mainline, "macro_alignment", 0.0))
         boost = float(
             _clip(
-                0.08
-                + 0.24 * max(0.0, conviction - cutoff)
-                + 0.06 * float(getattr(mainline, "leadership", 0.0))
-                + 0.05 * float(getattr(mainline, "catalyst_strength", 0.0))
+                0.06
+                + 0.22 * max(0.0, conviction - cutoff)
+                + 0.05 * leadership
+                + 0.04 * breadth
+                + 0.04 * catalyst
+                + 0.03 * capital_support
+                + 0.02 * macro_alignment
+                - 0.05 * event_risk
                 - 0.03 * rank,
                 0.04,
                 0.22,
@@ -155,6 +190,14 @@ def _sector_stock_support(
         strong_ratio = float(
             sum(1 for score in strong_window if score >= strong_cut) / max(1, len(strong_window))
         )
+        durability = float(
+            np.mean(
+                [
+                    _durability_alignment(stock)
+                    for stock, _, _ in items[: min(3, len(items))]
+                ]
+            )
+        )
         resilience = float(
             np.mean(
                 [
@@ -165,9 +208,10 @@ def _sector_stock_support(
         )
         support[sector] = float(
             _clip(
-                0.55 * max(0.0, top_mean - max(0.54, float(median_score))) / 0.10
+                0.46 * max(0.0, top_mean - max(0.54, float(median_score))) / 0.10
                 + 0.25 * strong_ratio
-                + 0.20 * resilience,
+                + 0.16 * durability
+                + 0.13 * resilience,
                 0.0,
                 1.0,
             )

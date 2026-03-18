@@ -32,6 +32,34 @@ def _write_daily(
     frame.to_csv(root / f"{symbol}.csv", index=False)
 
 
+def _write_compound_daily(
+    root: Path,
+    symbol: str,
+    *,
+    periods: int,
+    amount: float,
+    daily_return: float,
+    amount_ratio20: float = 1.0,
+) -> None:
+    dates = pd.date_range("2023-01-02", periods=periods, freq="B")
+    close = 10.0 * ((1.0 + daily_return) ** pd.Series(range(periods), dtype=float))
+    amount_series = pd.Series([amount] * periods, dtype=float)
+    if periods >= 20:
+        amount_series.iloc[-20:] = float(amount) * float(amount_ratio20)
+    frame = pd.DataFrame(
+        {
+            "date": dates,
+            "open": close,
+            "high": close * 1.01,
+            "low": close * 0.99,
+            "close": close,
+            "volume": 1000000,
+            "amount": amount_series,
+        }
+    )
+    frame.to_csv(root / f"{symbol}.csv", index=False)
+
+
 def test_dynamic_universe_generator_filters_and_applies_theme_caps(monkeypatch, tmp_path: Path) -> None:
     data_dir = tmp_path / "data"
     data_dir.mkdir(parents=True, exist_ok=True)
@@ -245,3 +273,53 @@ def test_dynamic_universe_generator_can_limit_to_main_board(monkeypatch, tmp_pat
 
     assert [item["symbol"] for item in result.selected_300] == ["002409.SZ"]
     assert result.generator_manifest.source_universe_size == 1
+
+
+def test_dynamic_universe_generator_prefers_fresh_pool_names_and_exports_funnel(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    data_dir = tmp_path / "data"
+    data_dir.mkdir(parents=True, exist_ok=True)
+    universe_file = tmp_path / "universe.json"
+    universe_file.write_text(
+        json.dumps(
+            {
+                "stocks": [
+                    {"symbol": "600010.SH", "name": "FreshA", "sector": "科技"},
+                    {"symbol": "600011.SH", "name": "HotA", "sector": "科技"},
+                ]
+            },
+            ensure_ascii=False,
+            indent=2,
+        ),
+        encoding="utf-8",
+    )
+    _write_compound_daily(data_dir, "600010.SH", periods=520, amount=9.0e7, daily_return=0.0022, amount_ratio20=1.12)
+    _write_compound_daily(data_dir, "600011.SH", periods=520, amount=9.0e7, daily_return=0.0120, amount_ratio20=1.55)
+    monkeypatch.setattr("src.application.v2_universe_generator._load_tushare_stock_basic", lambda: {})
+    monkeypatch.setattr("src.application.v2_universe_generator._load_symbol_concepts", lambda symbols: {})
+
+    result = generate_dynamic_universe(
+        universe_file=str(universe_file),
+        data_dir=str(data_dir),
+        cache_root=str(tmp_path / "cache"),
+        target_size=1,
+        coarse_size=2,
+        theme_aware=False,
+        use_concepts=False,
+        end_date="2026-03-11",
+        min_history_days=480,
+        min_recent_amount=2.0e7,
+        theme_cap_ratio=1.0,
+        theme_floor_count=0,
+        turnover_quality_weight=0.25,
+        theme_weight=0.20,
+        refresh_cache=True,
+    )
+
+    assert result.selected_300[0]["symbol"] == "600010.SH"
+    assert result.selected_300[0]["fresh_pool_pass"] is True
+    assert result.coarse_pool[0]["fresh_pool_score"] >= result.coarse_pool[1]["fresh_pool_score"]
+    assert result.generator_manifest.config["fresh_pool_pass_count"] >= 1
+    assert result.generator_manifest.config["fresh_pool_funnel"][-1]["count"] >= 1

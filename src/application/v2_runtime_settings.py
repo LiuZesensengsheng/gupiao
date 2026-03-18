@@ -157,6 +157,12 @@ def load_v2_runtime_settings(
         if universe_limit is not None
         else int(pick("universe_limit", 5))
     )
+    default_generated_tier = (
+        "generated_300"
+        if resolved_universe_limit >= 250
+        else ("generated_150" if resolved_universe_limit >= 120 else "generated_80")
+    )
+    default_active_tier = default_generated_tier if resolved_universe_limit >= 150 else "favorites_16"
     default_dynamic_universe = resolved_universe_limit >= 150
     requested_dynamic_universe = (
         bool(dynamic_universe)
@@ -230,8 +236,8 @@ def load_v2_runtime_settings(
         "use_cn_etf_context": parse_boolish(pick("use_cn_etf_context", False), False),
         "cn_etf_source": str(pick("cn_etf_source", "akshare")).strip(),
         "universe_tier": resolved_universe_tier,
-        "active_default_universe_tier": str(pick("active_default_universe_tier", "favorites_16")),
-        "candidate_default_universe_tier": str(pick("candidate_default_universe_tier", "generated_80")),
+        "active_default_universe_tier": str(pick("active_default_universe_tier", default_active_tier)),
+        "candidate_default_universe_tier": str(pick("candidate_default_universe_tier", default_generated_tier)),
         "favorites_universe_file": str(pick("favorites_universe_file", "config/universe_favorites.json")),
         "generated_universe_base_file": str(
             pick("generated_universe_base_file", "config/universe_all_a_3y_local_ready_nost_no_kc_cy_stable3y.json")
