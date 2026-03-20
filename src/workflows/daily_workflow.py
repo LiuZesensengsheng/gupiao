@@ -247,6 +247,7 @@ def run_daily_v2_live_impl(
             current_weights=current_weights,
             current_holding_days={symbol: 5 for symbol in current_weights},
             symbol_names=symbol_names,
+            settings=settings,
         )
         composite_state = replace(composite_state, execution_plans=execution_plans)
     trade_actions = dependencies.build_trade_actions_fn(

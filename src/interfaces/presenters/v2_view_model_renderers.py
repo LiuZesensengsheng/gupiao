@@ -25,6 +25,36 @@ def _money(value: float) -> str:
     return f"{value:,.0f}"
 
 
+def _intraday_signal_text(item: dict[str, object]) -> str:
+    signal = str(item.get("intraday_signal", "") or "").strip()
+    if not signal:
+        return "NA"
+    timeframe = str(item.get("intraday_timeframe", "") or "").strip()
+    data_date = str(item.get("intraday_data_date", "") or "").strip()
+    parts = [signal]
+    if timeframe:
+        parts.append(timeframe)
+    if data_date:
+        parts.append(data_date)
+    return " | ".join(parts)
+
+
+def _intraday_levels_text(item: dict[str, object]) -> str:
+    stop_price = float(item.get("intraday_stop_price", float("nan")))
+    take_profit_price = float(item.get("intraday_take_profit_price", float("nan")))
+    parts: list[str] = []
+    if not pd.isna(stop_price):
+        parts.append(f"stop {_num(stop_price)}")
+    if not pd.isna(take_profit_price):
+        parts.append(f"tp {_num(take_profit_price)}")
+    return " | ".join(parts) if parts else "NA"
+
+
+def _intraday_reason_text(item: dict[str, object]) -> str:
+    reason = str(item.get("intraday_reason", "") or "").strip()
+    return reason or "NA"
+
+
 def render_daily_markdown(view_model: DailyReportViewModel) -> str:
     metadata = view_model.metadata
     market_summary = view_model.market_summary
@@ -243,15 +273,28 @@ def render_daily_markdown(view_model: DailyReportViewModel) -> str:
 
     lines.append("## 次日执行计划")
     lines.append("")
-    lines.append("| 股票 | bias | buy_zone | avoid_zone | reduce_if | exit_if | reason |")
-    lines.append("|---|---|---|---|---|---|---|")
+    lines.append("| 股票 | bias | buy_zone | avoid_zone | intraday | levels | reduce_if | exit_if | reason |")
+    lines.append("|---|---|---|---|---|---|---|---|---|")
     if not view_model.execution_plans:
-        lines.append("| NA | NA | NA | NA | NA | NA | 暂无执行计划 |")
+        lines.append("| NA | NA | NA | NA | NA | NA | NA | NA | 暂无执行计划 |")
     else:
         for item in view_model.execution_plans:
             lines.append(
                 f"| {item.get('name', 'NA')} ({item.get('symbol', 'NA')}) | {item.get('bias', 'NA')} | {item.get('buy_zone', 'NA')} | "
-                f"{item.get('avoid_zone', 'NA')} | {item.get('reduce_if', 'NA')} | {item.get('exit_if', 'NA')} | {item.get('reason', 'NA')} |"
+                f"{item.get('avoid_zone', 'NA')} | {_intraday_signal_text(item)} | {_intraday_levels_text(item)} | "
+                f"{item.get('reduce_if', 'NA')} | {item.get('exit_if', 'NA')} | {item.get('reason', 'NA')} |"
+            )
+    lines.append("")
+    lines.append("## Intraday Overlay")
+    lines.append("")
+    intraday_items = [item for item in view_model.execution_plans if str(item.get("intraday_signal", "")).strip()]
+    if not intraday_items:
+        lines.append("- 暂无分钟级执行覆盖")
+    else:
+        for item in intraday_items:
+            lines.append(
+                f"- {item.get('name', 'NA')} ({item.get('symbol', 'NA')}): {_intraday_signal_text(item)} | "
+                f"{_intraday_levels_text(item)} | {_intraday_reason_text(item)}"
             )
     lines.append("")
 
@@ -552,11 +595,24 @@ def render_daily_html(view_model: DailyReportViewModel) -> str:
         f"<td>{escape(str(item.get('bias', 'NA')))}</td>"
         f"<td>{escape(str(item.get('buy_zone', 'NA')))}</td>"
         f"<td>{escape(str(item.get('avoid_zone', 'NA')))}</td>"
+        f"<td>{escape(_intraday_signal_text(item))}</td>"
+        f"<td>{escape(_intraday_levels_text(item))}</td>"
         f"<td>{escape(str(item.get('reduce_if', 'NA')))}</td>"
         f"<td>{escape(str(item.get('exit_if', 'NA')))}</td>"
         f"<td>{escape(str(item.get('reason', 'NA')))}</td>"
         "</tr>"
         for item in view_model.execution_plans
+    )
+    intraday_plan_cards = "".join(
+        "<article class='stock-card'>"
+        f"<h3>{escape(str(item.get('name', 'NA')))} <span>{escape(str(item.get('symbol', 'NA')))}</span></h3>"
+        f"<p class='meta'>{escape(_intraday_signal_text(item))} | {escape(_intraday_levels_text(item))}</p>"
+        f"<p><strong>盘中说明</strong>: {escape(_intraday_reason_text(item))}</p>"
+        f"<p><strong>Reduce If</strong>: {escape(str(item.get('reduce_if', 'NA')))}</p>"
+        f"<p><strong>Exit If</strong>: {escape(str(item.get('exit_if', 'NA')))}</p>"
+        "</article>"
+        for item in view_model.execution_plans
+        if str(item.get("intraday_signal", "")).strip()
     )
     cards_html = "".join(
         "<article class='stock-card'>"
@@ -701,7 +757,8 @@ def render_daily_html(view_model: DailyReportViewModel) -> str:
     <section class="panel"><h2>可执行候选榜</h2><div class="table-wrap"><table><thead><tr><th>排名</th><th>股票</th><th>行业</th><th>可执行分</th><th>目标权重</th><th>下一交易日区间</th><th>1日上涨概率</th><th>备注</th></tr></thead><tbody>{actionable_rows or "<tr><td colspan='8'>当前无新开仓候选</td></tr>"}</tbody></table></div></section>
     <section class="panel"><h2>实际操作</h2><div class="table-wrap"><table><thead><tr><th>股票</th><th>动作</th><th>当前权重</th><th>目标权重</th><th>权重变化</th><th>操作理由</th></tr></thead><tbody>{action_rows or "<tr><td colspan='6'>当前不触发调仓</td></tr>"}</tbody></table></div></section>
     <section class="panel"><h2>持仓角色变化</h2><div class="table-wrap"><table><thead><tr><th>股票</th><th>主线</th><th>当前角色</th><th>前序角色</th><th>角色降级</th><th>备注</th></tr></thead><tbody>{role_change_rows or "<tr><td colspan='6'>暂无角色变化</td></tr>"}</tbody></table></div></section>
-    <section class="panel"><h2>次日执行计划</h2><div class="table-wrap"><table><thead><tr><th>股票</th><th>bias</th><th>buy_zone</th><th>avoid_zone</th><th>reduce_if</th><th>exit_if</th><th>reason</th></tr></thead><tbody>{execution_plan_rows or "<tr><td colspan='7'>暂无执行计划</td></tr>"}</tbody></table></div></section>
+    <section class="panel"><h2>次日执行计划</h2><div class="table-wrap"><table><thead><tr><th>股票</th><th>bias</th><th>buy_zone</th><th>avoid_zone</th><th>intraday</th><th>levels</th><th>reduce_if</th><th>exit_if</th><th>reason</th></tr></thead><tbody>{execution_plan_rows or "<tr><td colspan='9'>暂无执行计划</td></tr>"}</tbody></table></div></section>
+    <section class="panel"><h2>盘中执行覆盖</h2><div class="stock-grid">{intraday_plan_cards or "<div class='stock-card'>暂无分钟级执行覆盖</div>"}</div></section>
     <section class="stock-grid">{cards_html or "<div class='panel'>暂无解释卡</div>"}</section>
     <section class="panel"><h2>Mainline Radar</h2><ul class="list">{mainline_rows or "<li>暂无主线</li>"}</ul></section>
     <section class="panel"><h2>预测复盘</h2><div class="table-wrap"><table><thead><tr><th>窗口</th><th>命中参考</th><th>平均边际</th><th>近窗表现</th><th>样本数</th><th>说明</th></tr></thead><tbody>{review_rows or "<tr><td colspan='6'>暂无复盘数据</td></tr>"}</tbody></table></div><p class="muted">{escape('；'.join(str(item) for item in view_model.prediction_review.get('notes', [])))}</p></section>

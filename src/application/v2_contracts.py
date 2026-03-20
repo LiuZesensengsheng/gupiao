@@ -238,6 +238,15 @@ class ExecutionPlan:
     trim_score: float = 0.0
     trim_rank: int = 0
     trim_label: str = ""
+    intraday_signal: str = ""
+    intraday_timeframe: str = ""
+    intraday_data_date: str = ""
+    intraday_stop_price: float = float("nan")
+    intraday_take_profit_price: float = float("nan")
+    intraday_vwap_gap: float = float("nan")
+    intraday_drawdown_from_high: float = float("nan")
+    intraday_break_state: str = ""
+    intraday_reason: str = ""
 
 
 @dataclass(frozen=True)

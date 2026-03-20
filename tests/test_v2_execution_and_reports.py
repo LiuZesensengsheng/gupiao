@@ -14,6 +14,7 @@ from src.application.v2_contracts import (
     CompositeState,
     CrossSectionForecastState,
     DailyRunResult,
+    ExecutionPlan,
     LearnedPolicyModel,
     MainlineState,
     MarketForecastState,
@@ -28,6 +29,7 @@ from src.application.v2_contracts import (
     V2CalibrationResult,
     V2PolicyLearningResult,
 )
+from src.application.v2_intraday_execution_runtime import IntradayExecutionAssessment
 from src.domain.entities import TradeAction
 from src.interfaces.presenters.html_dashboard import (
     write_v2_daily_dashboard,
@@ -49,6 +51,50 @@ def _simulate_execution_day(**kwargs: object):
         deps=legacy_services._backtest_execution_dependencies(),
         **kwargs,
     )
+
+
+def _make_intraday_assessment(signal: str) -> IntradayExecutionAssessment:
+    return IntradayExecutionAssessment(
+        symbol="AAA",
+        signal=signal,
+        timeframe="15m",
+        data_date="2024-01-02",
+        stop_price=9.80,
+        take_profit_price=10.20,
+        vwap_gap=-0.012 if signal != "hold_strong" else 0.006,
+        drawdown_from_high=0.032 if signal != "hold_strong" else 0.006,
+        break_state="trend_intact" if signal == "hold_strong" else "failed_rebound",
+        reason=f"intraday {signal}",
+    )
+
+
+def test_resolve_backtest_intraday_overlay_stays_sell_side_and_disables_fetch(monkeypatch: pytest.MonkeyPatch) -> None:
+    captured: dict[str, object] = {}
+
+    def _fake_build(*, settings: dict[str, object] | None, symbols: list[str], as_of_date: str = "") -> dict[str, IntradayExecutionAssessment]:
+        captured["settings"] = dict(settings or {})
+        captured["symbols"] = list(symbols)
+        captured["as_of_date"] = as_of_date
+        return {"AAA": _make_intraday_assessment("reduce_on_bounce")}
+
+    monkeypatch.setattr(v2_backtest_runtime, "build_intraday_execution_overlay", _fake_build)
+
+    overlay = v2_backtest_runtime._resolve_backtest_intraday_overlay(
+        settings={
+            "enable_intraday_execution_overlay": True,
+            "intraday_auto_fetch": True,
+        },
+        as_of_date="2024-01-02",
+        current_weights={"AAA": 0.20, "BBB": 0.10},
+        target_weights={"AAA": 0.12, "BBB": 0.16},
+        overlay_cache={},
+    )
+
+    assert captured["symbols"] == ["AAA"]
+    assert captured["as_of_date"] == "2024-01-02"
+    assert captured["settings"]["intraday_auto_fetch"] is False
+    assert "AAA" in overlay
+    assert "BBB" not in overlay
 
 
 def _make_daily_result() -> DailyRunResult:
@@ -102,6 +148,29 @@ def _make_daily_result() -> DailyRunResult:
                 event_risk_level=0.12,
                 sectors=["鏈夎壊"],
                 representative_symbols=["AAA"],
+            )
+        ],
+        execution_plans=[
+            ExecutionPlan(
+                symbol="AAA",
+                name="样例股",
+                theme="资源",
+                role="leader",
+                bias="hold",
+                buy_zone="10.10 ~ 10.35",
+                avoid_zone="avoid gap-up chase",
+                reduce_if="trim if 15m strength breaks",
+                exit_if="exit if 15m stop fails",
+                reason="leader with intact trend",
+                intraday_signal="hold_strong",
+                intraday_timeframe="15m",
+                intraday_data_date="2026-03-01",
+                intraday_stop_price=10.12,
+                intraday_take_profit_price=10.48,
+                intraday_vwap_gap=0.004,
+                intraday_drawdown_from_high=0.012,
+                intraday_break_state="trend_intact",
+                intraday_reason="15m trend intact above VWAP",
             )
         ],
         capital_flow_state=CapitalFlowState(
@@ -477,6 +546,103 @@ def test_simulate_execution_day_skips_trades_for_halted_status() -> None:
     assert next_cash < 0.90
 
 
+def test_simulate_execution_day_intraday_exit_overlay_turns_hold_into_exit() -> None:
+    date = pd.Timestamp("2024-01-02")
+    next_date = pd.Timestamp("2024-01-03")
+    decision = PolicyDecision(
+        target_exposure=0.20,
+        target_position_count=1,
+        rebalance_now=False,
+        rebalance_intensity=0.0,
+        intraday_t_allowed=False,
+        turnover_cap=0.20,
+        sector_budgets={"鏈夎壊": 0.20},
+        symbol_target_weights={"AAA": 0.20},
+    )
+    common_kwargs = dict(
+        date=date,
+        next_date=next_date,
+        decision=decision,
+        current_weights={"AAA": 0.20},
+        current_cash=0.80,
+        stock_states=[StockForecastState("AAA", "鏈夎壊", 0.58, 0.60, 0.64, 0.55, 0.05, 0.90)],
+        stock_frames={
+            "AAA": pd.DataFrame(
+                {
+                    "date": [date],
+                    "open": [10.0],
+                    "close": [9.9],
+                    "low": [9.8],
+                    "high": [10.1],
+                    "ret_1": [-0.01],
+                    "fwd_ret_1": [0.0],
+                }
+            )
+        },
+        total_commission_rate=0.001,
+        base_slippage_rate=0.0005,
+    )
+
+    baseline = _simulate_execution_day(**common_kwargs)
+    overlay = _simulate_execution_day(
+        intraday_assessments={"AAA": _make_intraday_assessment("exit_on_weak_rebound")},
+        **common_kwargs,
+    )
+
+    assert baseline[1] == 0.0
+    assert overlay[1] > 0.10
+    assert overlay[5].get("AAA", 0.0) < 0.08
+    assert overlay[6] > baseline[6]
+
+
+def test_simulate_execution_day_intraday_hold_strong_dampens_trim() -> None:
+    date = pd.Timestamp("2024-01-02")
+    next_date = pd.Timestamp("2024-01-03")
+    decision = PolicyDecision(
+        target_exposure=0.05,
+        target_position_count=1,
+        rebalance_now=True,
+        rebalance_intensity=0.20,
+        intraday_t_allowed=False,
+        turnover_cap=0.20,
+        sector_budgets={"鏈夎壊": 0.05},
+        symbol_target_weights={"AAA": 0.05},
+    )
+    common_kwargs = dict(
+        date=date,
+        next_date=next_date,
+        decision=decision,
+        current_weights={"AAA": 0.20},
+        current_cash=0.80,
+        stock_states=[StockForecastState("AAA", "鏈夎壊", 0.58, 0.60, 0.64, 0.55, 0.05, 0.90)],
+        stock_frames={
+            "AAA": pd.DataFrame(
+                {
+                    "date": [date],
+                    "open": [10.0],
+                    "close": [10.1],
+                    "low": [9.9],
+                    "high": [10.2],
+                    "ret_1": [0.01],
+                    "fwd_ret_1": [0.0],
+                }
+            )
+        },
+        total_commission_rate=0.001,
+        base_slippage_rate=0.0005,
+    )
+
+    baseline = _simulate_execution_day(**common_kwargs)
+    overlay = _simulate_execution_day(
+        intraday_assessments={"AAA": _make_intraday_assessment("hold_strong")},
+        **common_kwargs,
+    )
+
+    assert overlay[1] < baseline[1]
+    assert overlay[5]["AAA"] > baseline[5]["AAA"]
+    assert overlay[6] < baseline[6]
+
+
 def test_simulate_execution_day_blocks_add_on_for_data_insufficient_status() -> None:
     date = pd.Timestamp("2024-01-02")
     next_date = pd.Timestamp("2024-01-03")
@@ -517,6 +683,55 @@ def test_simulate_execution_day_blocks_add_on_for_data_insufficient_status() -> 
     assert slip_bps == 0.0
     assert next_weights["AAA"] == 0.10
     assert next_cash == 0.90
+
+
+def test_simulate_execution_day_empty_intraday_overlay_is_backward_compatible() -> None:
+    date = pd.Timestamp("2024-01-02")
+    next_date = pd.Timestamp("2024-01-03")
+    decision = PolicyDecision(
+        target_exposure=0.20,
+        target_position_count=1,
+        rebalance_now=True,
+        rebalance_intensity=0.10,
+        intraday_t_allowed=False,
+        turnover_cap=0.20,
+        sector_budgets={"鏈夎壊": 0.20},
+        symbol_target_weights={"AAA": 0.20},
+    )
+    common_kwargs = dict(
+        date=date,
+        next_date=next_date,
+        decision=decision,
+        current_weights={},
+        current_cash=1.0,
+        stock_states=[StockForecastState("AAA", "鏈夎壊", 0.58, 0.60, 0.64, 0.55, 0.05, 0.90)],
+        stock_frames={
+            "AAA": pd.DataFrame(
+                {
+                    "date": [date],
+                    "open": [10.0],
+                    "close": [10.0],
+                    "low": [9.9],
+                    "high": [10.1],
+                    "ret_1": [0.0],
+                    "fwd_ret_1": [0.0],
+                }
+            )
+        },
+        total_commission_rate=0.001,
+        base_slippage_rate=0.0005,
+    )
+
+    baseline = _simulate_execution_day(**common_kwargs)
+    empty_overlay = _simulate_execution_day(intraday_assessments={}, **common_kwargs)
+
+    assert empty_overlay[0] == pytest.approx(baseline[0])
+    assert empty_overlay[1] == pytest.approx(baseline[1])
+    assert empty_overlay[2] == pytest.approx(baseline[2])
+    assert empty_overlay[3] == pytest.approx(baseline[3])
+    assert empty_overlay[4] == pytest.approx(baseline[4])
+    assert empty_overlay[5]["AAA"] == pytest.approx(baseline[5]["AAA"])
+    assert empty_overlay[6] == pytest.approx(baseline[6])
 
 
 def test_simulate_execution_day_charges_more_slippage_on_adverse_gap_open() -> None:
@@ -1009,10 +1224,16 @@ def test_v2_presenters_can_render_from_view_models(tmp_path: Path) -> None:
     assert "可执行候选榜" in daily_md
     assert "generator manifest path" in daily_md
     assert "info shadow enabled" in daily_md
+    assert "Intraday Overlay" in daily_md
+    assert "hold_strong | 15m | 2026-03-01" in daily_md
+    assert "stop 10.12 | tp 10.48" in daily_md
     assert "Dynamic Universe Funnel" in daily_html
     assert "info shadow enabled" in daily_html
     assert "Mainline Radar" in daily_html
     assert "AAA, BBB" in daily_html
+    assert "盘中执行覆盖" in daily_html
+    assert "hold_strong | 15m | 2026-03-01" in daily_html
+    assert "stop 10.12 | tp 10.48" in daily_html
 
     baseline = _make_backtest(0.24)
     calibrated = _make_backtest(0.26)
@@ -1089,9 +1310,11 @@ def test_v2_decision_outputs_include_new_forecast_sections(tmp_path: Path) -> No
     assert "可执行候选榜" in daily_md
     assert "推荐解释卡" in daily_md
     assert "预测复盘" in daily_md
+    assert "Intraday Overlay" in daily_md
 
     assert "次日决策面板" in daily_html
     assert "预测监控榜" in daily_html
     assert "可执行候选榜" in daily_html
     assert "预测复盘" in daily_html
+    assert "盘中执行覆盖" in daily_html
 

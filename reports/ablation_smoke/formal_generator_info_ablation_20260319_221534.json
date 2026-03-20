@@ -1,0 +1,84 @@
+{
+  "created_at": "2026-03-19T22:42:53",
+  "base_config": "D:\\gupiao\\config\\api_generated300_train_5y.json",
+  "source": "local",
+  "training_window_days": 480,
+  "split_mode": "purged_wf",
+  "embargo_days": 20,
+  "results": [
+    {
+      "combo": "v2_leaders__info_off",
+      "generator_mode": "v2_leaders",
+      "info_mode": "off",
+      "effective_generator_version": "git:01ce465:dynamic_universe_v2_leaders",
+      "config_path": "D:\\gupiao\\reports\\ablation_smoke\\configs\\api_generated300_train_5y.info_off.json",
+      "cache_root": "D:\\gupiao\\artifacts\\v2\\cache\\ablation_compare\\v2_leaders__info_off",
+      "holdout": {
+        "start_date": "2025-06-23",
+        "end_date": "2026-02-10",
+        "n_days": 159,
+        "annual_return": 0.31698261067286415,
+        "excess_annual_return": -0.04913728076210755,
+        "information_ratio": -0.30927887761446815,
+        "max_drawdown": -0.021771859387582193,
+        "excess_total_return": -0.031290884227782256
+      },
+      "full_cycle": {
+        "start_date": "2022-06-14",
+        "end_date": "2026-02-10",
+        "n_days": 892,
+        "annual_return": 0.17233074025594797,
+        "excess_annual_return": 0.13319763733971568,
+        "information_ratio": 1.0249689063699017,
+        "max_drawdown": -0.07369094960711675,
+        "excess_total_return": 0.5567712329144319
+      },
+      "calibration_best_score": -0.41111627544489326,
+      "learning_model_present": true
+    }
+  ],
+  "references": [
+    {
+      "name": "formal_best_holdout_20260316_132232",
+      "summary": {
+        "start_date": "2025-06-20",
+        "end_date": "2026-02-06",
+        "n_days": 158,
+        "annual_return": 1.101337705166535,
+        "excess_annual_return": 0.5539360057276852,
+        "information_ratio": 2.8637687314716636,
+        "max_drawdown": -0.020031490890435766,
+        "excess_total_return": 0.3183342457786882
+      },
+      "path": "D:\\gupiao\\artifacts\\v2\\swing_v2\\20260316_132232\\backtest_summary.json"
+    },
+    {
+      "name": "formal_current_holdout_20260319_100152",
+      "summary": {
+        "start_date": "2025-06-23",
+        "end_date": "2026-02-10",
+        "n_days": 159,
+        "annual_return": 0.10280962789131287,
+        "excess_annual_return": -0.20377038156737193,
+        "information_ratio": -1.620537220462035,
+        "max_drawdown": -0.035719516912048555,
+        "excess_total_return": -0.13391623479259895
+      },
+      "path": "D:\\gupiao\\artifacts\\v2\\swing_v2\\20260319_100152\\backtest_summary.json"
+    },
+    {
+      "name": "fast_rule_20260318",
+      "summary": {
+        "start_date": "2025-09-12",
+        "end_date": "2026-03-18",
+        "n_days": 120,
+        "annual_return": 1.2608672762636846,
+        "excess_annual_return": 1.1241502972535713,
+        "information_ratio": 2.5478794707750554,
+        "max_drawdown": -0.1321500602185104,
+        "excess_total_return": 0.4315367331889486
+      },
+      "path": "D:\\gupiao\\reports\\dynamic300_rule_fast_backtest_20260318.json"
+    }
+  ]
+}

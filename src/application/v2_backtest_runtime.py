@@ -7,6 +7,7 @@ import numpy as np
 import pandas as pd
 
 from src.application.v2_contracts import LearnedPolicyModel, PolicyInput, PolicySpec, StockForecastState, V2BacktestSummary
+from src.application.v2_intraday_execution_runtime import IntradayExecutionAssessment, build_intraday_execution_overlay
 
 
 FrameRow = dict[str, object]
@@ -67,6 +68,102 @@ def _build_backtest_frame_lookups(
         },
         market_valid_by_date=_build_first_row_lookup(market_valid),
     )
+
+
+def _parse_boolish(value: object, default: bool = False) -> bool:
+    if value is None:
+        return bool(default)
+    if isinstance(value, bool):
+        return bool(value)
+    text = str(value).strip().lower()
+    if not text:
+        return bool(default)
+    if text in {"1", "true", "yes", "y", "on"}:
+        return True
+    if text in {"0", "false", "no", "n", "off"}:
+        return False
+    return bool(default)
+
+
+def _backtest_intraday_candidate_symbols(
+    *,
+    current_weights: dict[str, float],
+    target_weights: dict[str, float],
+) -> list[str]:
+    ordered: list[str] = []
+    for symbol, raw_current in sorted(current_weights.items(), key=lambda item: float(item[1]), reverse=True):
+        current_weight = float(raw_current)
+        target_weight = float(target_weights.get(symbol, 0.0))
+        if current_weight <= 1e-6:
+            continue
+        # Keep the intraday overlay on the sell / hold side only.
+        if target_weight > current_weight + 1e-6:
+            continue
+        ordered.append(str(symbol))
+    return ordered
+
+
+def _resolve_backtest_intraday_overlay(
+    *,
+    settings: dict[str, object] | None,
+    as_of_date: str,
+    current_weights: dict[str, float],
+    target_weights: dict[str, float],
+    overlay_cache: dict[tuple[str, str], IntradayExecutionAssessment | None],
+) -> dict[str, IntradayExecutionAssessment]:
+    cfg = dict(settings or {})
+    if not _parse_boolish(cfg.get("enable_intraday_execution_overlay", True), True):
+        return {}
+    symbols = _backtest_intraday_candidate_symbols(
+        current_weights=current_weights,
+        target_weights=target_weights,
+    )
+    if not symbols:
+        return {}
+    date_key = str(pd.Timestamp(as_of_date).date()) if str(as_of_date).strip() else ""
+    if not _parse_boolish(cfg.get("intraday_backtest_auto_fetch", False), False):
+        cfg["intraday_auto_fetch"] = False
+    missing_symbols: list[str] = []
+    for symbol in symbols:
+        cache_key = (date_key, symbol)
+        if cache_key not in overlay_cache:
+            missing_symbols.append(symbol)
+    if missing_symbols:
+        built_overlay = build_intraday_execution_overlay(
+            settings=cfg,
+            symbols=missing_symbols,
+            as_of_date=date_key,
+        )
+        for symbol in missing_symbols:
+            overlay_cache[(date_key, symbol)] = built_overlay.get(symbol)
+    resolved: dict[str, IntradayExecutionAssessment] = {}
+    for symbol in symbols:
+        cached = overlay_cache.get((date_key, symbol))
+        if cached is not None:
+            resolved[symbol] = cached
+    return resolved
+
+
+def _adjust_target_weight_for_intraday(
+    *,
+    current_weight: float,
+    target_weight: float,
+    assessment: IntradayExecutionAssessment | None,
+) -> float:
+    if assessment is None or current_weight <= 1e-6:
+        return float(target_weight)
+    # Do not let the intraday layer change buy-side adds.
+    if target_weight > current_weight + 1e-6:
+        return float(target_weight)
+    signal = str(assessment.signal or "")
+    if signal == "exit_on_weak_rebound":
+        return 0.0
+    if signal == "reduce_on_bounce":
+        return min(float(target_weight), float(current_weight) * 0.65)
+    if signal == "hold_strong" and 1e-6 < float(target_weight) < float(current_weight) - 1e-6:
+        sell_gap = float(current_weight) - float(target_weight)
+        return max(float(target_weight), float(current_weight) - sell_gap * 0.45)
+    return float(target_weight)
 
 
 def _lookup_stock_row(
@@ -198,11 +295,13 @@ def simulate_execution_day(
     stock_frames: dict[str, pd.DataFrame],
     total_commission_rate: float,
     base_slippage_rate: float,
+    intraday_assessments: dict[str, IntradayExecutionAssessment] | None = None,
     stock_rows_by_symbol_date: dict[str, dict[pd.Timestamp, FrameRow]] | None = None,
     deps: BacktestExecutionDependencies,
 ) -> tuple[float, float, float, float, float, dict[str, float], float]:
     _ = next_date, current_cash
     state_map = {item.symbol: item for item in stock_states}
+    intraday_assessments = dict(intraday_assessments or {})
     day_rows: dict[str, FrameRow | None] = {}
 
     def _get_day_row(symbol: str) -> FrameRow | None:
@@ -216,10 +315,16 @@ def simulate_execution_day(
         return day_rows[symbol]
 
     symbols = sorted(set(current_weights) | set(decision.symbol_target_weights))
-    raw_deltas = {
-        symbol: float(decision.symbol_target_weights.get(symbol, 0.0)) - float(current_weights.get(symbol, 0.0))
-        for symbol in symbols
-    }
+    adjusted_deltas: dict[str, float] = {}
+    for symbol in symbols:
+        current_weight = float(current_weights.get(symbol, 0.0))
+        target_weight = float(decision.symbol_target_weights.get(symbol, 0.0))
+        adjusted_target_weight = _adjust_target_weight_for_intraday(
+            current_weight=current_weight,
+            target_weight=target_weight,
+            assessment=intraday_assessments.get(symbol),
+        )
+        adjusted_deltas[symbol] = float(adjusted_target_weight - current_weight)
 
     executed_deltas: dict[str, float] = {}
     fill_ratios: list[float] = []
@@ -228,9 +333,9 @@ def simulate_execution_day(
     total_turnover_budget = float(max(0.0, decision.turnover_cap))
     used_turnover = 0.0
 
-    ordered_symbols = sorted(symbols, key=lambda sym: abs(raw_deltas.get(sym, 0.0)), reverse=True)
+    ordered_symbols = sorted(symbols, key=lambda sym: abs(adjusted_deltas.get(sym, 0.0)), reverse=True)
     for symbol in ordered_symbols:
-        delta = float(raw_deltas.get(symbol, 0.0))
+        delta = float(adjusted_deltas.get(symbol, 0.0))
         if abs(delta) <= 1e-4:
             continue
         state = state_map.get(symbol)
@@ -391,6 +496,7 @@ def execute_v2_backtest_trajectory(
         stock_frames=trajectory.prepared.stock_frames,
         market_valid=trajectory.prepared.market_valid,
     )
+    intraday_overlay_cache: dict[tuple[str, str], IntradayExecutionAssessment | None] = {}
 
     for step in trajectory.steps:
         step_stock_rows = frame_lookups.stock_rows_by_symbol_date
@@ -424,6 +530,16 @@ def execute_v2_backtest_trajectory(
             ),
             policy_spec=active_policy_spec,
         )
+        intraday_assessments = _resolve_backtest_intraday_overlay(
+            settings=getattr(trajectory.prepared, "settings", {}),
+            as_of_date=str(getattr(getattr(step.composite_state, "market", None), "as_of_date", "") or step.date.date()),
+            current_weights=prev_weights,
+            target_weights={
+                str(symbol): float(weight)
+                for symbol, weight in decision.symbol_target_weights.items()
+            },
+            overlay_cache=intraday_overlay_cache,
+        )
         gross_ret = 0.0
         for symbol, weight in decision.symbol_target_weights.items():
             row = step_stock_rows.get(symbol, {}).get(step_date_key)
@@ -441,6 +557,7 @@ def execute_v2_backtest_trajectory(
             stock_frames=trajectory.prepared.stock_frames,
             total_commission_rate=commission_rate,
             base_slippage_rate=slippage_rate,
+            intraday_assessments=intraday_assessments,
             stock_rows_by_symbol_date=step_stock_rows,
             deps=deps,
         )
