@@ -13,7 +13,7 @@ if str(PROJECT_ROOT) not in sys.path:
 
 from src.domain.symbols import normalize_symbol
 
-HEADER = "date,target_type,target,horizon,direction,strength,confidence,source_weight,title\n"
+HEADER = "date,publish_datetime,target_type,target,horizon,direction,strength,confidence,source_weight,title\n"
 
 
 def _load_watchlist_symbols(path: Path) -> list[str]:

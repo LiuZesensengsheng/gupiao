@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from src.application.v2_contracts import CompositeState, ExecutionPlan, PolicyDecision, StockRoleSnapshot, ThemeEpisode
+from src.application.v2_intraday_execution_runtime import build_intraday_execution_overlay
 
 
 def _price_band_text(*, low: float, high: float) -> str:
@@ -26,6 +27,29 @@ def _theme_for_symbol(
     return None
 
 
+def _overlay_priority_symbols(
+    *,
+    current_weights: dict[str, float],
+    target_weights: dict[str, float],
+    trim_ranks: dict[str, int],
+) -> list[str]:
+    ordered: list[str] = []
+    seen: set[str] = set()
+    for bucket in [
+        sorted(current_weights.items(), key=lambda item: float(item[1]), reverse=True),
+        sorted(target_weights.items(), key=lambda item: float(item[1]), reverse=True),
+        sorted(trim_ranks.items(), key=lambda item: int(item[1]) if int(item[1]) > 0 else 10**9),
+    ]:
+        for raw_symbol, raw_value in bucket:
+            symbol = str(raw_symbol).strip()
+            score = float(raw_value) if not isinstance(raw_value, int) else float(raw_value)
+            if not symbol or symbol in seen or score <= 0.0:
+                continue
+            ordered.append(symbol)
+            seen.add(symbol)
+    return ordered
+
+
 def build_execution_plans(
     *,
     state: CompositeState,
@@ -33,6 +57,7 @@ def build_execution_plans(
     current_weights: dict[str, float],
     current_holding_days: dict[str, int] | None = None,
     symbol_names: dict[str, str] | None = None,
+    settings: dict[str, object] | None = None,
 ) -> list[ExecutionPlan]:
     current_holding_days = dict(current_holding_days or {})
     name_map = dict(symbol_names or {})
@@ -51,6 +76,15 @@ def build_execution_plans(
         str(symbol): str(label)
         for symbol, label in getattr(policy_decision, "trim_candidate_labels", {}).items()
     }
+    intraday_overlay = build_intraday_execution_overlay(
+        settings=settings,
+        symbols=_overlay_priority_symbols(
+            current_weights={str(k): float(v) for k, v in current_weights.items()},
+            target_weights={str(k): float(v) for k, v in policy_decision.symbol_target_weights.items()},
+            trim_ranks=trim_ranks,
+        ),
+        as_of_date=str(getattr(getattr(state, "market", None), "as_of_date", "")),
+    )
     all_symbols = sorted(
         {
             symbol
@@ -128,6 +162,46 @@ def build_execution_plans(
             reasons.append("relative edge is no longer strong")
         if current_holding_days.get(symbol, 0) > 0:
             reasons.append(f"held {int(current_holding_days.get(symbol, 0))}d")
+        intraday = intraday_overlay.get(symbol)
+        intraday_signal = ""
+        intraday_timeframe = ""
+        intraday_data_date = ""
+        intraday_stop_price = float("nan")
+        intraday_take_profit_price = float("nan")
+        intraday_vwap_gap = float("nan")
+        intraday_drawdown_from_high = float("nan")
+        intraday_break_state = ""
+        intraday_reason = ""
+        if intraday is not None:
+            intraday_signal = str(intraday.signal)
+            intraday_timeframe = str(intraday.timeframe)
+            intraday_data_date = str(intraday.data_date)
+            intraday_stop_price = float(intraday.stop_price)
+            intraday_take_profit_price = float(intraday.take_profit_price)
+            intraday_vwap_gap = float(intraday.vwap_gap)
+            intraday_drawdown_from_high = float(intraday.drawdown_from_high)
+            intraday_break_state = str(intraday.break_state)
+            intraday_reason = str(intraday.reason)
+            reasons.append(intraday_reason)
+            if current_weight > 1e-9:
+                if intraday_signal == "exit_on_weak_rebound":
+                    reduce_if = (
+                        f"{reduce_if}; intraday rebound keeps failing below {intraday_timeframe} VWAP "
+                        f"and support near {intraday_stop_price:.2f}"
+                    )
+                    exit_if = (
+                        f"{exit_if}; if price loses {intraday_stop_price:.2f} on the {intraday_timeframe} tape, exit"
+                    )
+                elif intraday_signal == "reduce_on_bounce":
+                    reduce_if = (
+                        f"{reduce_if}; trim into rebounds while price stays below "
+                        f"{intraday_take_profit_price:.2f} intraday resistance"
+                    )
+                elif intraday_signal == "hold_strong" and bias == "hold":
+                    reduce_if = (
+                        f"only trim if {intraday_timeframe} strength breaks and price loses "
+                        f"{intraday_stop_price:.2f}"
+                    )
 
         plans.append(
             ExecutionPlan(
@@ -144,6 +218,15 @@ def build_execution_plans(
                 trim_score=trim_score,
                 trim_rank=trim_rank,
                 trim_label=trim_label,
+                intraday_signal=intraday_signal,
+                intraday_timeframe=intraday_timeframe,
+                intraday_data_date=intraday_data_date,
+                intraday_stop_price=intraday_stop_price,
+                intraday_take_profit_price=intraday_take_profit_price,
+                intraday_vwap_gap=intraday_vwap_gap,
+                intraday_drawdown_from_high=intraday_drawdown_from_high,
+                intraday_break_state=intraday_break_state,
+                intraday_reason=intraday_reason,
             )
         )
     plans.sort(

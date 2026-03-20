@@ -32,6 +32,7 @@ class _BaseRuntimeOptions:
     info_types: str | None = None
     info_source_mode: str | None = None
     info_subsets: str | None = None
+    info_cutoff_time: str | None = None
     external_signals: bool | None = None
     event_file: str | None = None
     capital_flow_file: str | None = None
@@ -65,6 +66,7 @@ class _BaseRuntimeOptions:
             "info_types": self.info_types,
             "info_source_mode": self.info_source_mode,
             "info_subsets": self.info_subsets,
+            "info_cutoff_time": self.info_cutoff_time,
             "external_signals": self.external_signals,
             "event_file": self.event_file,
             "capital_flow_file": self.capital_flow_file,
@@ -111,6 +113,7 @@ class ResearchRunOptions(_BaseRuntimeOptions):
             info_types=args.info_types,
             info_source_mode=args.info_source_mode,
             info_subsets=args.info_subsets,
+            info_cutoff_time=getattr(args, "info_cutoff_time", None),
             external_signals=args.external_signals,
             event_file=args.event_file,
             capital_flow_file=args.capital_flow_file,
@@ -197,6 +200,7 @@ class DailyRunOptions(_BaseRuntimeOptions):
             info_types=args.info_types,
             info_source_mode=args.info_source_mode,
             info_subsets=args.info_subsets,
+            info_cutoff_time=getattr(args, "info_cutoff_time", None),
             external_signals=args.external_signals,
             event_file=args.event_file,
             capital_flow_file=args.capital_flow_file,

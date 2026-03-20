@@ -18,12 +18,14 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 from src.application.watchlist import load_watchlist
+from src.domain.info_clock import derive_publish_timestamp_from_source_url, parse_timestamp
 from src.domain.symbols import SymbolError, normalize_symbol
 
 EASTMONEY_NOTICE_URL = "https://np-anotice-stock.eastmoney.com/api/security/ann"
 
 REQUIRED_COLUMNS = [
     "date",
+    "publish_datetime",
     "target_type",
     "target",
     "horizon",
@@ -95,6 +97,7 @@ class NoticeRow:
     symbol: str
     title: str
     source_url: str
+    publish_datetime: str = ""
 
 
 def _parse_args() -> argparse.Namespace:
@@ -191,12 +194,22 @@ def _iter_notices_for_symbol_year(
                 continue
             art_code = str(item.get("art_code", "")).strip()
             source_url = f"https://data.eastmoney.com/notices/detail/{raw_code}/{art_code}.html" if art_code else ""
+            publish_datetime = ""
+            raw_notice_time = parse_timestamp(item.get("notice_date"))
+            raw_notice_text = str(item.get("notice_date") or "").strip()
+            if raw_notice_time is not None and (":" in raw_notice_text or "T" in raw_notice_text):
+                publish_datetime = str(raw_notice_time.isoformat())
+            elif source_url:
+                derived_publish = derive_publish_timestamp_from_source_url(source_url)
+                if derived_publish is not None:
+                    publish_datetime = str(derived_publish.isoformat())
             out.append(
                 NoticeRow(
                     date=str(pd.Timestamp(notice_date).date()),
                     symbol=symbol,
                     title=title,
                     source_url=source_url,
+                    publish_datetime=publish_datetime,
                 )
             )
 
@@ -260,6 +273,7 @@ def _to_news_frame(rows: Iterable[NoticeRow]) -> pd.DataFrame:
         records.append(
             {
                 "date": row.date,
+                "publish_datetime": row.publish_datetime,
                 "target_type": "stock",
                 "target": row.symbol,
                 "horizon": horizon,

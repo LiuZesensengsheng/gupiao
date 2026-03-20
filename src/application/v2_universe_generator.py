@@ -34,7 +34,19 @@ from src.infrastructure.universe_feature_cache import (
     store_universe_generator_cache,
 )
 
-_GENERATOR_VERSION = "dynamic_universe_v2_leaders"
+_GENERATOR_VERSION = "dynamic_universe_v3_fresh_pool"
+
+_FRESH_POOL_RULES: dict[str, float] = {
+    "min_close": 5.0,
+    "min_ret20": 0.02,
+    "max_ret20": 0.24,
+    "min_ret60": 0.05,
+    "max_ret60": 0.60,
+    "max_volatility20": 0.045,
+    "min_recent_high_gap20": -0.10,
+    "min_amount_ratio20": 0.75,
+    "max_amount_ratio20": 2.20,
+}
 
 
 def _stable_hash(payload: object) -> str:
@@ -151,6 +163,111 @@ def _amount_trend(frame: pd.DataFrame) -> float:
     return float(np.clip((ratio - 0.85) / 0.45, 0.0, 1.0))
 
 
+def _moving_average(frame: pd.DataFrame, lookback: int) -> float:
+    if frame.empty or len(frame) < max(lookback, 3):
+        return 0.0
+    closes = pd.to_numeric(frame["close"], errors="coerce")
+    value = closes.rolling(lookback).mean().iloc[-1]
+    if not np.isfinite(value):
+        return 0.0
+    return float(value)
+
+
+def _recent_high_gap(frame: pd.DataFrame, lookback: int = 20) -> float:
+    if frame.empty:
+        return 0.0
+    closes = pd.to_numeric(frame.tail(max(lookback, 5))["close"], errors="coerce").dropna()
+    if closes.empty:
+        return 0.0
+    high = float(closes.max())
+    last = float(closes.iloc[-1])
+    if not np.isfinite(high) or high <= 0.0 or not np.isfinite(last):
+        return 0.0
+    return float(last / high - 1.0)
+
+
+def _amount_ratio(frame: pd.DataFrame, short: int = 20, long: int = 60) -> float:
+    if frame.empty:
+        return 0.0
+    amount = pd.to_numeric(frame.get("amount"), errors="coerce")
+    short_value = float(amount.tail(max(short, 5)).median(skipna=True))
+    long_value = float(amount.tail(max(long, short, 5)).median(skipna=True))
+    if not np.isfinite(short_value) or not np.isfinite(long_value) or long_value <= 0.0:
+        return 0.0
+    return float(short_value / long_value)
+
+
+def _triangle_score(value: float, low: float, ideal: float, high: float) -> float:
+    if not np.isfinite(value) or value <= low or value >= high:
+        return 0.0
+    if abs(value - ideal) <= 1e-12:
+        return 1.0
+    if value < ideal:
+        return float(np.clip((value - low) / max(ideal - low, 1e-9), 0.0, 1.0))
+    return float(np.clip((high - value) / max(high - ideal, 1e-9), 0.0, 1.0))
+
+
+def _descending_score(value: float, good: float, bad: float) -> float:
+    if not np.isfinite(value):
+        return 0.0
+    if value <= good:
+        return 1.0
+    if value >= bad:
+        return 0.0
+    return float(np.clip(1.0 - ((value - good) / max(bad - good, 1e-9)), 0.0, 1.0))
+
+
+def _liquidity_score(amount_value: float) -> float:
+    if not np.isfinite(amount_value) or amount_value <= 0.0:
+        return 0.0
+    low = math.log10(2.0e7)
+    high = math.log10(2.0e8)
+    value = math.log10(max(amount_value, 1.0))
+    if value <= low:
+        return 0.0
+    if value >= high:
+        return 1.0
+    return float(np.clip((value - low) / max(high - low, 1e-9), 0.0, 1.0))
+
+
+def _passes_fresh_pool_gate(row: pd.Series) -> bool:
+    close = float(row.get("close", 0.0))
+    ma20 = float(row.get("ma20", 0.0))
+    ma60 = float(row.get("ma60", 0.0))
+    if close < float(_FRESH_POOL_RULES["min_close"]):
+        return False
+    if not (close > ma20 > ma60 > 0.0):
+        return False
+    ret20 = float(row.get("ret20", 0.0))
+    ret60 = float(row.get("ret60", 0.0))
+    if not (float(_FRESH_POOL_RULES["min_ret20"]) <= ret20 <= float(_FRESH_POOL_RULES["max_ret20"])):
+        return False
+    if not (float(_FRESH_POOL_RULES["min_ret60"]) <= ret60 <= float(_FRESH_POOL_RULES["max_ret60"])):
+        return False
+    if float(row.get("volatility20", 0.0)) > float(_FRESH_POOL_RULES["max_volatility20"]):
+        return False
+    if float(row.get("recent_high_gap20", 0.0)) < float(_FRESH_POOL_RULES["min_recent_high_gap20"]):
+        return False
+    amount_ratio20 = float(row.get("amount_ratio20", 0.0))
+    return bool(
+        float(_FRESH_POOL_RULES["min_amount_ratio20"]) <= amount_ratio20 <= float(_FRESH_POOL_RULES["max_amount_ratio20"])
+    )
+
+
+def _fresh_pool_score(row: pd.Series) -> float:
+    ma_alignment = 1.0 if float(row.get("close", 0.0)) > float(row.get("ma20", 0.0)) > float(row.get("ma60", 0.0)) else 0.0
+    score = (
+        0.24 * _triangle_score(float(row.get("ret20", 0.0)), 0.02, 0.11, 0.25)
+        + 0.22 * _triangle_score(float(row.get("ret60", 0.0)), 0.05, 0.22, 0.65)
+        + 0.18 * _triangle_score(float(row.get("recent_high_gap20", 0.0)), -0.12, -0.02, 0.01)
+        + 0.14 * _triangle_score(float(row.get("amount_ratio20", 0.0)), 0.70, 1.15, 2.10)
+        + 0.10 * _descending_score(float(row.get("volatility20", 0.0)), 0.018, 0.050)
+        + 0.08 * _liquidity_score(float(row.get("median_amount20", 0.0)))
+        + 0.04 * ma_alignment
+    )
+    return float(np.clip(score, 0.0, 1.0))
+
+
 def _safe_rank(frame: pd.DataFrame, column: str, ascending: bool = False) -> pd.Series:
     if column not in frame.columns or frame.empty:
         return pd.Series([0.5] * len(frame), index=frame.index, dtype=float)
@@ -178,6 +295,47 @@ def _weighted_theme_strength(frame: pd.DataFrame) -> dict[str, float]:
         + grouped["mean_amount"].rank(method="average", pct=True) * 0.10
     )
     return {str(idx): float(value) for idx, value in grouped["strength"].items()}
+
+
+def _fresh_pool_funnel(frame: pd.DataFrame) -> list[dict[str, object]]:
+    if frame.empty:
+        return []
+
+    def _numeric(column: str) -> pd.Series:
+        if column not in frame.columns:
+            return pd.Series([np.nan] * len(frame), index=frame.index, dtype=float)
+        return pd.to_numeric(frame[column], errors="coerce")
+
+    cumulative = pd.Series([True] * len(frame), index=frame.index, dtype=bool)
+    results = [{"key": "eligible", "label": "post_min_history_liquidity", "count": int(cumulative.sum())}]
+    stage_masks = [
+        ("price_floor", "close>=5", _numeric("close") >= float(_FRESH_POOL_RULES["min_close"])),
+        ("ma_alignment", "close>ma20>ma60", (_numeric("close") > _numeric("ma20")) & (_numeric("ma20") > _numeric("ma60"))),
+        (
+            "ret20_band",
+            "ret20 band",
+            (_numeric("ret20") >= float(_FRESH_POOL_RULES["min_ret20"]))
+            & (_numeric("ret20") <= float(_FRESH_POOL_RULES["max_ret20"])),
+        ),
+        (
+            "ret60_band",
+            "ret60 band",
+            (_numeric("ret60") >= float(_FRESH_POOL_RULES["min_ret60"]))
+            & (_numeric("ret60") <= float(_FRESH_POOL_RULES["max_ret60"])),
+        ),
+        ("volatility", "volatility20<=cap", _numeric("volatility20") <= float(_FRESH_POOL_RULES["max_volatility20"])),
+        ("near_high", "within_20d_high_gap", _numeric("recent_high_gap20") >= float(_FRESH_POOL_RULES["min_recent_high_gap20"])),
+        (
+            "amount_ratio",
+            "amount_ratio20 band",
+            (_numeric("amount_ratio20") >= float(_FRESH_POOL_RULES["min_amount_ratio20"]))
+            & (_numeric("amount_ratio20") <= float(_FRESH_POOL_RULES["max_amount_ratio20"])),
+        ),
+    ]
+    for key, label, stage_mask in stage_masks:
+        cumulative &= stage_mask.fillna(False)
+        results.append({"key": key, "label": label, "count": int(cumulative.sum())})
+    return results
 
 
 def _compute_theme_allocations(
@@ -255,7 +413,9 @@ def _serialize_records(frame: pd.DataFrame, columns: Iterable[str]) -> list[dict
     return [
         {
             str(column): (
-                float(value)
+                bool(value)
+                if isinstance(value, (np.bool_, bool))
+                else float(value)
                 if isinstance(value, (np.floating, float))
                 else int(value)
                 if isinstance(value, (np.integer, int))
@@ -368,11 +528,15 @@ def generate_dynamic_universe(
         if not np.isfinite(median_amount60) or median_amount60 < float(min_recent_amount):
             continue
         tradeability = float(min(1.0, median_amount60 / max(float(min_recent_amount) * 6.0, 1.0)))
+        close_value = float(pd.to_numeric(frame["close"], errors="coerce").iloc[-1])
         record = {
             "symbol": str(row.symbol),
             "name": name,
             "sector": str(row.sector or "其他"),
             "theme": _normalize_theme(str(row.sector or "其他")),
+            "close": close_value if np.isfinite(close_value) else 0.0,
+            "ma20": _moving_average(frame, 20),
+            "ma60": _moving_average(frame, 60),
             "history_days": history_days,
             "median_amount60": median_amount60,
             "median_amount20": median_amount20 if np.isfinite(median_amount20) else median_amount60,
@@ -382,7 +546,9 @@ def generate_dynamic_universe(
             "volatility20": _volatility(frame, 20),
             "tradeability": tradeability,
             "breakout_pos_120": _breakout_position(frame, 120),
+            "recent_high_gap20": _recent_high_gap(frame, 20),
             "trend_persistence": _trend_persistence(frame),
+            "amount_ratio20": _amount_ratio(frame, 20, 60),
             "amount_trend": _amount_trend(frame),
         }
         records.append(record)
@@ -417,6 +583,9 @@ def generate_dynamic_universe(
         return result
 
     eligible["theme"] = eligible["theme"].map(_normalize_theme)
+    eligible["fresh_pool_score"] = eligible.apply(_fresh_pool_score, axis=1)
+    eligible["fresh_pool_pass"] = eligible.apply(_passes_fresh_pool_gate, axis=1)
+    fresh_pool_funnel = _fresh_pool_funnel(eligible)
     theme_strength = _weighted_theme_strength(eligible)
     eligible["theme_strength"] = eligible["theme"].map(lambda item: float(theme_strength.get(str(item), 0.0)))
     eligible["amount_rank"] = _safe_rank(eligible, "median_amount60")
@@ -430,6 +599,7 @@ def generate_dynamic_universe(
     eligible["breakout_rank"] = _safe_rank(eligible, "breakout_pos_120")
     eligible["trend_rank"] = _safe_rank(eligible, "trend_persistence")
     eligible["amount_trend_rank"] = _safe_rank(eligible, "amount_trend")
+    eligible["fresh_pool_rank"] = _safe_rank(eligible, "fresh_pool_score")
     eligible["leadership_score"] = (
         eligible["amount_rank"] * 0.58
         + eligible["ret20_rank"] * 0.10
@@ -447,10 +617,12 @@ def generate_dynamic_universe(
         + eligible["volatility_rank"] * 0.06
         + eligible["tradeability_rank"] * (0.06 + float(turnover_quality_weight) * 0.08)
         + eligible["theme_strength_rank"] * float(theme_weight)
+        + eligible["fresh_pool_rank"] * 0.10
+        + eligible["fresh_pool_pass"].astype(float) * 0.04
     )
     eligible = eligible.sort_values(
-        ["coarse_score", "leadership_score", "median_amount60", "history_days"],
-        ascending=[False, False, False, False],
+        ["fresh_pool_pass", "coarse_score", "fresh_pool_score", "leadership_score", "median_amount60", "history_days"],
+        ascending=[False, False, False, False, False, False],
     )
     coarse = eligible.head(max(int(target_size), int(coarse_size))).copy()
 
@@ -473,6 +645,7 @@ def generate_dynamic_universe(
     coarse["breakout_rank"] = _safe_rank(coarse, "breakout_pos_120")
     coarse["trend_rank"] = _safe_rank(coarse, "trend_persistence")
     coarse["amount_trend_rank"] = _safe_rank(coarse, "amount_trend")
+    coarse["fresh_pool_rank"] = _safe_rank(coarse, "fresh_pool_score")
     coarse["leadership_score"] = (
         coarse["amount_rank"] * 0.60
         + coarse["ret20_rank"] * 0.10
@@ -489,12 +662,19 @@ def generate_dynamic_universe(
         + coarse["tradeability_rank"] * 0.08
         + coarse["volatility_rank"] * 0.03
         + coarse["history_rank"] * 0.03
+        + coarse["fresh_pool_rank"] * 0.10
+        + coarse["fresh_pool_pass"].astype(float) * 0.04
     )
     coarse["theme_score"] = coarse["theme_rank"] * 0.65 + coarse["ret20_rank"] * 0.20 + coarse["ret60_rank"] * 0.15
-    coarse["refined_score"] = coarse["quality_score"] * (1.0 - float(theme_weight)) + coarse["theme_score"] * float(theme_weight)
+    coarse["refined_score"] = (
+        coarse["quality_score"] * (1.0 - float(theme_weight))
+        + coarse["theme_score"] * float(theme_weight)
+        + coarse["fresh_pool_score"] * 0.10
+        + coarse["fresh_pool_pass"].astype(float) * 0.04
+    )
     coarse = coarse.sort_values(
-        ["refined_score", "leadership_score", "quality_score", "median_amount60"],
-        ascending=[False, False, False, False],
+        ["fresh_pool_pass", "refined_score", "fresh_pool_score", "leadership_score", "quality_score", "median_amount60"],
+        ascending=[False, False, False, False, False, False],
     )
     refined = coarse.head(max(int(target_size), min(len(coarse), max(120, int(target_size) * 2)))).copy()
 
@@ -512,8 +692,8 @@ def generate_dynamic_universe(
             if slot_count <= 0:
                 continue
             picked = theme_frame.sort_values(
-                ["refined_score", "leadership_score", "quality_score"],
-                ascending=[False, False, False],
+                ["fresh_pool_pass", "refined_score", "fresh_pool_score", "leadership_score", "quality_score"],
+                ascending=[False, False, False, False, False],
             ).head(slot_count)
             if not picked.empty:
                 selected_frames.append(picked)
@@ -539,8 +719,8 @@ def generate_dynamic_universe(
         if not top_up.empty:
             selected = pd.concat([selected, top_up], ignore_index=True)
     selected = selected.sort_values(
-        ["refined_score", "leadership_score", "quality_score", "median_amount60"],
-        ascending=[False, False, False, False],
+        ["fresh_pool_pass", "refined_score", "fresh_pool_score", "leadership_score", "quality_score", "median_amount60"],
+        ascending=[False, False, False, False, False, False],
     ).head(int(target_size))
 
     if not allocations_raw:
@@ -572,6 +752,10 @@ def generate_dynamic_universe(
             "quality_score": float(row["quality_score"]),
             "leadership_score": float(row["leadership_score"]),
             "median_amount60": float(row["median_amount60"]),
+            "fresh_pool_score": float(row["fresh_pool_score"]),
+            "fresh_pool_pass": bool(row["fresh_pool_pass"]),
+            "recent_high_gap20": float(row["recent_high_gap20"]),
+            "amount_ratio20": float(row["amount_ratio20"]),
         }
         for _, row in selected.iterrows()
     ]
@@ -614,18 +798,48 @@ def generate_dynamic_universe(
         manifest_path=str(generator_manifest_path.resolve()),
         theme_allocations=allocations_raw,
         warnings=warnings,
-        config=cache_payload,
+        config={
+            **cache_payload,
+            "fresh_pool_rules": dict(_FRESH_POOL_RULES),
+            "fresh_pool_funnel": fresh_pool_funnel,
+            "fresh_pool_pass_count": int(eligible["fresh_pool_pass"].sum()),
+        },
     )
     generator_manifest_path.write_text(json.dumps(asdict(generator_manifest), ensure_ascii=False, indent=2), encoding="utf-8")
     result = DynamicUniverseResult(
         eligible_symbols=[str(item) for item in eligible["symbol"].tolist()],
         coarse_pool=_serialize_records(
             coarse,
-            ("symbol", "name", "theme", "coarse_score", "leadership_score", "median_amount60", "ret20", "ret60"),
+            (
+                "symbol",
+                "name",
+                "theme",
+                "coarse_score",
+                "leadership_score",
+                "median_amount60",
+                "ret20",
+                "ret60",
+                "fresh_pool_score",
+                "fresh_pool_pass",
+                "recent_high_gap20",
+                "amount_ratio20",
+            ),
         ),
         refined_pool=_serialize_records(
             refined,
-            ("symbol", "name", "theme", "refined_score", "leadership_score", "theme_score", "quality_score"),
+            (
+                "symbol",
+                "name",
+                "theme",
+                "refined_score",
+                "leadership_score",
+                "theme_score",
+                "quality_score",
+                "fresh_pool_score",
+                "fresh_pool_pass",
+                "recent_high_gap20",
+                "amount_ratio20",
+            ),
         ),
         selected_300=selected_rows,
         theme_allocations=allocations_raw,

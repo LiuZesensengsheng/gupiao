@@ -1,5 +1,5 @@
-date,target_type,target,horizon,direction,strength,confidence,source_weight,title
-2026-02-20,market,MARKET,short,bullish,4,0.8,0.9,稳增长政策继续推进
-2026-02-20,stock,600160.SH,mid,bullish,3,0.7,0.8,制冷剂价格维持高位
-2026-02-20,stock,603619.SH,short,bearish,3,0.6,0.7,油价短期波动加大
-2026-02-19,stock,000630.SZ,mid,bullish,4,0.8,0.8,有色金属需求预期改善
+date,publish_datetime,target_type,target,horizon,direction,strength,confidence,source_weight,title
+2026-02-20,2026-02-20T09:12:00,market,MARKET,short,bullish,4,0.8,0.9,macro support sample
+2026-02-20,2026-02-20T10:08:00,stock,600160.SH,mid,bullish,3,0.7,0.8,stock demand support sample
+2026-02-20,2026-02-20T13:46:00,stock,603619.SH,short,bearish,3,0.6,0.7,oil volatility pressure sample
+2026-02-19,2026-02-19T21:05:00,stock,000630.SZ,mid,bullish,4,0.8,0.8,sector demand recovery sample

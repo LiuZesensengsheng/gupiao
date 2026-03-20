@@ -58,6 +58,100 @@ def test_load_v2_info_items_filters_by_info_type(tmp_path) -> None:
     assert {item.info_type for item in items} == {"announcement", "research"}
 
 
+def test_load_v2_info_items_keeps_publish_datetime_when_available(tmp_path) -> None:
+    info_path = tmp_path / "info.csv"
+    info_path.write_text(
+        "\n".join(
+            [
+                "date,publish_datetime,target_type,target,horizon,direction,title",
+                "2026-03-01,2026-03-01T09:35:00,stock,600160.SH,short,bullish,open news",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    items = load_v2_info_items(
+        info_path,
+        as_of_date=pd.Timestamp("2026-03-01"),
+        lookback_days=5,
+    )
+
+    assert len(items) == 1
+    assert items[0].publish_datetime == "2026-03-01T09:35:00"
+
+
+def test_load_v2_info_items_filters_rows_published_after_as_of_cutoff(tmp_path) -> None:
+    info_path = tmp_path / "info.csv"
+    info_path.write_text(
+        "\n".join(
+            [
+                "date,publish_datetime,target_type,target,horizon,direction,title",
+                "2026-03-01,2026-03-02T09:35:00,stock,600160.SH,short,bullish,future publish",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    items = load_v2_info_items(
+        info_path,
+        as_of_date=pd.Timestamp("2026-03-01"),
+        lookback_days=5,
+    )
+
+    assert items == []
+
+
+def test_load_v2_info_items_derives_publish_datetime_from_eastmoney_source_url(tmp_path) -> None:
+    info_path = tmp_path / "info.csv"
+    info_path.write_text(
+        "\n".join(
+            [
+                "date,target_type,target,horizon,direction,info_type,title,source_url,event_tag",
+                "2026-03-02,stock,600160.SH,mid,bullish,announcement,业绩预增公告,https://data.eastmoney.com/notices/detail/600160/AN202603011642298303.html,earnings_positive",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    items = load_v2_info_items(
+        info_path,
+        as_of_date=pd.Timestamp("2026-03-02"),
+        lookback_days=5,
+    )
+
+    assert len(items) == 1
+    assert items[0].publish_datetime == "2026-03-01T16:42:29"
+
+
+def test_load_v2_info_items_respects_cutoff_time_for_same_day_timestamped_rows(tmp_path) -> None:
+    info_path = tmp_path / "info.csv"
+    info_path.write_text(
+        "\n".join(
+            [
+                "date,publish_datetime,target_type,target,horizon,direction,title",
+                "2026-03-01,2026-03-01T16:42:00,stock,600160.SH,mid,bullish,after close notice",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    strict_items = load_v2_info_items(
+        info_path,
+        as_of_date=pd.Timestamp("2026-03-01"),
+        lookback_days=5,
+        cutoff_time="15:00:00",
+    )
+    relaxed_items = load_v2_info_items(
+        info_path,
+        as_of_date=pd.Timestamp("2026-03-01"),
+        lookback_days=5,
+        cutoff_time="23:59:59",
+    )
+
+    assert strict_items == []
+    assert len(relaxed_items) == 1
+
+
 def test_load_v2_info_items_infers_announcement_and_event_tag_from_legacy_notice(tmp_path) -> None:
     info_path = tmp_path / "legacy_notice.csv"
     info_path.write_text(

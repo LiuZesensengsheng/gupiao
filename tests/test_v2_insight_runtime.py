@@ -4,6 +4,7 @@ import json
 from dataclasses import asdict
 
 import pandas as pd
+import pytest
 
 from src.application.v2_contracts import (
     CompositeState,
@@ -13,6 +14,7 @@ from src.application.v2_contracts import (
     HorizonForecast,
     InfoAggregateState,
     InfoDivergenceRecord,
+    InfoItem,
     InfoSignalRecord,
     LearnedPolicyModel,
     MainlineState,
@@ -167,6 +169,66 @@ def test_build_viewpoints_from_notes_deduplicates_and_keeps_conflicts(tmp_path) 
     assert bullish.reason == "demand improving"
     assert bullish.invalid_if == "loses breakout"
     assert bullish.weight == expected_weight
+
+
+def test_build_viewpoints_from_notes_skips_future_ingest_time(tmp_path) -> None:
+    note_dir = tmp_path / "notes"
+    note_dir.mkdir(parents=True, exist_ok=True)
+    (note_dir / "2026-03-10.md").write_text(
+        "\n".join(
+            [
+                "---",
+                "effective_time: 2026-03-10",
+                "ingest_time: 2026-03-13T09:30:00",
+                "---",
+                "- target_type: stock",
+                "- target: AAA",
+                "- direction: bullish",
+                "- confidence: 0.8",
+                "- importance: 0.8",
+                "- horizon: mid",
+                "- reason: backfilled after the fact",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    viewpoints = build_viewpoints(
+        settings={
+            "insight_notes_dir": str(note_dir),
+            "insight_lookback_days": 10,
+            "info_half_life_days": 10.0,
+        },
+        as_of_date=pd.Timestamp("2026-03-12"),
+        info_items=[],
+    )
+
+    assert viewpoints == []
+
+
+def test_build_viewpoints_from_info_items_skips_future_publish_datetime() -> None:
+    viewpoints = build_viewpoints(
+        settings={
+            "insight_notes_dir": "missing",
+            "insight_lookback_days": 10,
+            "info_half_life_days": 10.0,
+        },
+        as_of_date=pd.Timestamp("2026-03-12"),
+        info_items=[
+            InfoItem(
+                date="2026-03-12",
+                publish_datetime="2026-03-13T08:00:00",
+                target_type="stock",
+                target="AAA",
+                horizon="mid",
+                direction="bullish",
+                info_type="news",
+                title="future-published item",
+            )
+        ],
+    )
+
+    assert viewpoints == []
 
 
 def test_attach_insight_memory_to_state_returns_empty_overlay_when_disabled() -> None:
@@ -421,6 +483,15 @@ def test_snapshot_round_trip_preserves_insight_fields() -> None:
                 reduce_if="breakout fails",
                 exit_if="trend breaks",
                 reason="leader in chips",
+                intraday_signal="hold_strong",
+                intraday_timeframe="15m",
+                intraday_data_date="2026-03-12",
+                intraday_stop_price=9.92,
+                intraday_take_profit_price=10.35,
+                intraday_vwap_gap=0.004,
+                intraday_drawdown_from_high=0.011,
+                intraday_break_state="trend_intact",
+                intraday_reason="15m trend intact",
             )
         ],
     )
@@ -434,6 +505,163 @@ def test_snapshot_round_trip_preserves_insight_fields() -> None:
     assert restored.theme_episodes[0].phase == "strengthening"
     assert restored.stock_role_states["AAA"].role == "leader"
     assert restored.execution_plans[0].bias == "hold"
+    assert restored.execution_plans[0].intraday_signal == "hold_strong"
+
+
+def test_build_execution_plans_merges_intraday_exit_overlay_from_local_bars(tmp_path) -> None:
+    intraday_dir = tmp_path / "intraday" / "15m"
+    intraday_dir.mkdir(parents=True)
+    frame = pd.DataFrame(
+        {
+            "datetime": pd.date_range("2026-03-12 09:30:00", periods=12, freq="15min"),
+            "open": [10.40, 10.32, 10.24, 10.18, 10.12, 10.08, 10.02, 9.98, 9.94, 9.90, 9.88, 9.86],
+            "high": [10.42, 10.33, 10.26, 10.20, 10.14, 10.09, 10.03, 9.99, 9.95, 9.91, 9.89, 9.87],
+            "low": [10.30, 10.22, 10.16, 10.10, 10.04, 9.99, 9.95, 9.90, 9.86, 9.83, 9.80, 9.78],
+            "close": [10.31, 10.24, 10.17, 10.11, 10.05, 10.00, 9.96, 9.92, 9.88, 9.85, 9.82, 9.80],
+            "volume": [1200, 1300, 1100, 1000, 950, 980, 1020, 990, 970, 940, 930, 920],
+        }
+    )
+    frame.to_csv(intraday_dir / "AAA.csv", index=False)
+    state = CompositeState(
+        market=_base_composite_state().market,
+        cross_section=_base_composite_state().cross_section,
+        sectors=[SectorForecastState("chips", 0.58, 0.62, 0.10, 0.18, 0.25)],
+        stocks=[
+            StockForecastState(
+                "AAA",
+                "chips",
+                0.49,
+                0.45,
+                0.47,
+                0.46,
+                0.02,
+                0.90,
+                alpha_score=0.42,
+                latest_close=9.8,
+            )
+        ],
+        strategy_mode="trend_follow",
+        risk_regime="risk_on",
+    )
+    decision = PolicyDecision(
+        target_exposure=0.05,
+        target_position_count=1,
+        rebalance_now=True,
+        rebalance_intensity=0.5,
+        intraday_t_allowed=False,
+        turnover_cap=0.20,
+        symbol_target_weights={"AAA": 0.10},
+    )
+
+    plans = build_execution_plans(
+        state=state,
+        policy_decision=decision,
+        current_weights={"AAA": 0.15},
+        current_holding_days={"AAA": 4},
+        symbol_names={"AAA": "Alpha"},
+        settings={
+            "enable_intraday_execution_overlay": True,
+            "intraday_data_dir": str(tmp_path / "intraday"),
+            "intraday_primary_timeframe": "15m",
+            "intraday_secondary_timeframe": "",
+            "intraday_lookback_bars": 32,
+            "intraday_symbol_limit": 10,
+        },
+    )
+
+    assert len(plans) == 1
+    plan = plans[0]
+    assert plan.intraday_signal == "exit_on_weak_rebound"
+    assert plan.intraday_timeframe == "15m"
+    assert plan.intraday_data_date == "2026-03-12"
+    assert plan.intraday_stop_price == pytest.approx(9.8, rel=1e-6)
+    assert "15m" in plan.reduce_if
+    assert "exit" in plan.exit_if.lower()
+    assert "breakdown" in plan.intraday_reason
+
+
+def test_build_execution_plans_auto_fetches_intraday_and_writes_cache(tmp_path, monkeypatch: pytest.MonkeyPatch) -> None:
+    fetched_calls: list[tuple[str, str]] = []
+
+    def _fake_fetch_tushare_intraday(*, symbol: str, timeframe: str, start, end, timeout: int):
+        fetched_calls.append((symbol, timeframe))
+        return pd.DataFrame(
+            {
+                "datetime": pd.date_range("2026-03-12 09:30:00", periods=12, freq="15min"),
+                "open": [10.00, 10.02, 10.03, 10.05, 10.06, 10.08, 10.09, 10.10, 10.12, 10.13, 10.14, 10.15],
+                "high": [10.03, 10.04, 10.06, 10.07, 10.08, 10.10, 10.11, 10.13, 10.14, 10.15, 10.17, 10.19],
+                "low": [9.99, 10.00, 10.02, 10.03, 10.05, 10.07, 10.08, 10.09, 10.10, 10.12, 10.13, 10.14],
+                "close": [10.02, 10.03, 10.05, 10.06, 10.08, 10.09, 10.10, 10.12, 10.13, 10.14, 10.16, 10.18],
+                "volume": [1000, 1100, 1050, 1200, 1150, 1220, 1180, 1260, 1300, 1320, 1350, 1380],
+                "amount": [10020, 11033, 10552, 12072, 11592, 12309, 11918, 12751, 13169, 13385, 13716, 14048],
+                "symbol": ["AAA"] * 12,
+            }
+        )
+
+    monkeypatch.setattr(
+        "src.application.v2_intraday_execution_runtime._fetch_tushare_intraday",
+        _fake_fetch_tushare_intraday,
+    )
+
+    state = CompositeState(
+        market=_base_composite_state().market,
+        cross_section=_base_composite_state().cross_section,
+        sectors=[SectorForecastState("chips", 0.58, 0.62, 0.10, 0.18, 0.25)],
+        stocks=[
+            StockForecastState(
+                "AAA",
+                "chips",
+                0.53,
+                0.58,
+                0.61,
+                0.57,
+                0.01,
+                0.92,
+                alpha_score=0.45,
+                latest_close=10.18,
+            )
+        ],
+        strategy_mode="trend_follow",
+        risk_regime="risk_on",
+    )
+    decision = PolicyDecision(
+        target_exposure=0.10,
+        target_position_count=1,
+        rebalance_now=True,
+        rebalance_intensity=0.5,
+        intraday_t_allowed=False,
+        turnover_cap=0.20,
+        symbol_target_weights={"AAA": 0.12},
+    )
+
+    plans = build_execution_plans(
+        state=state,
+        policy_decision=decision,
+        current_weights={"AAA": 0.12},
+        current_holding_days={"AAA": 3},
+        symbol_names={"AAA": "Alpha"},
+        settings={
+            "enable_intraday_execution_overlay": True,
+            "intraday_data_dir": str(tmp_path / "intraday"),
+            "intraday_source": "tushare",
+            "intraday_auto_fetch": True,
+            "intraday_primary_timeframe": "15m",
+            "intraday_secondary_timeframe": "",
+            "intraday_lookback_bars": 32,
+            "intraday_fetch_lookback_days": 3,
+            "intraday_fetch_timeout_seconds": 6,
+            "intraday_symbol_limit": 10,
+        },
+    )
+
+    assert fetched_calls == [("AAA", "15m")]
+    assert len(plans) == 1
+    plan = plans[0]
+    assert plan.intraday_signal == "hold_strong"
+    assert plan.intraday_timeframe == "15m"
+    assert "trend intact" in plan.intraday_reason
+    assert 10.0 < float(plan.intraday_stop_price) < 10.18
+    assert (tmp_path / "intraday" / "15m" / "AAA.csv").exists()
 
 
 def test_write_and_report_view_models_surface_insight_outputs(tmp_path) -> None:

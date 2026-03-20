@@ -12,6 +12,7 @@ import pandas as pd
 import requests
 
 from src.application.watchlist import load_watchlist
+from src.domain.info_clock import derive_publish_timestamp_from_source_url, parse_timestamp
 from src.domain.symbols import SymbolError, normalize_symbol
 from src.infrastructure.discovery import _load_universe_file
 from src.infrastructure.info_repository import _infer_event_tag
@@ -19,6 +20,7 @@ from src.infrastructure.info_repository import _infer_event_tag
 EASTMONEY_NOTICE_URL = "https://np-anotice-stock.eastmoney.com/api/security/ann"
 INFO_COLUMNS = [
     "date",
+    "publish_datetime",
     "target_type",
     "target",
     "horizon",
@@ -217,6 +219,18 @@ def _pick_first_column(frame: pd.DataFrame, candidates: Sequence[str]) -> str:
     return ""
 
 
+def _publish_datetime_text(raw_value: object) -> str:
+    text = str(raw_value or "").strip()
+    if not text:
+        return ""
+    ts = parse_timestamp(text)
+    if ts is None:
+        return ""
+    if ":" not in text and "T" not in text and len(text) <= 10:
+        return ""
+    return str(ts.isoformat())
+
+
 def _fetch_tushare_market_news(
     *,
     start: str,
@@ -246,9 +260,11 @@ def _fetch_tushare_market_news(
         if pd.isna(dt) or not title:
             continue
         direction, strength, confidence = _score_text_direction(title)
+        publish_datetime = _publish_datetime_text(row.get(date_col))
         records.append(
             {
                 "date": str(pd.Timestamp(dt).date()),
+                "publish_datetime": publish_datetime,
                 "target_type": "market",
                 "target": "MARKET",
                 "horizon": _horizon_for_text(title, default="short"),
@@ -288,6 +304,7 @@ def _fetch_tushare_research(
     if symbols:
         frame = frame[frame["ts_code"].astype(str).isin(set(symbols))].copy()
     records: list[dict[str, object]] = []
+    datetime_col = _pick_first_column(frame, ("pub_time", "datetime", "publish_time", "report_time"))
     for _, row in frame.iterrows():
         title = _clean_text(row.get("report_title"))
         symbol = str(row.get("ts_code", "")).strip()
@@ -299,9 +316,11 @@ def _fetch_tushare_research(
         rating = _clean_text(row.get("rating"))
         report_type = _clean_text(row.get("report_type"))
         direction, strength, confidence = _score_research_direction(title, rating, report_type)
+        publish_datetime = _publish_datetime_text(row.get(datetime_col)) if datetime_col else ""
         records.append(
             {
                 "date": str(pd.Timestamp(dt).date()),
+                "publish_datetime": publish_datetime,
                 "target_type": "stock",
                 "target": symbol,
                 "horizon": "mid",
@@ -412,9 +431,15 @@ def _fetch_eastmoney_announcements(
                 normalized_symbol = _extract_notice_symbol(item, symbol)
                 art_code = str(item.get("art_code", "")).strip()
                 source_url = f"https://data.eastmoney.com/notices/detail/{code}/{art_code}.html" if art_code else ""
+                publish_datetime = _publish_datetime_text(item.get("notice_date"))
+                if not publish_datetime and source_url:
+                    derived_publish = derive_publish_timestamp_from_source_url(source_url)
+                    if derived_publish is not None:
+                        publish_datetime = str(derived_publish.isoformat())
                 records.append(
                     {
                         "date": str(notice_ts.date()),
+                        "publish_datetime": publish_datetime,
                         "target_type": "stock",
                         "target": normalized_symbol,
                         "horizon": _horizon_for_text(title),

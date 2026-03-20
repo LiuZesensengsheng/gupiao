@@ -1,0 +1,97 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Dynamic 300 参数扫描</title>
+  <style>
+    :root {
+      --bg: #f6f0e7;
+      --panel: rgba(255,255,255,0.86);
+      --ink: #152126;
+      --muted: #5d6b6b;
+      --line: #ddd1c1;
+      --accent: #8f4a1d;
+      --accent-soft: #f6ddc8;
+      --shadow: 0 18px 42px rgba(36, 27, 16, 0.08);
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      color: var(--ink);
+      font-family: "Avenir Next", "PingFang SC", "Microsoft YaHei", sans-serif;
+      background:
+        radial-gradient(circle at top right, rgba(143,74,29,0.10), transparent 22%),
+        radial-gradient(circle at left top, rgba(24,117,104,0.08), transparent 26%),
+        linear-gradient(180deg, #fbf8f1 0%, var(--bg) 100%);
+    }
+    .page { max-width: 1320px; margin: 0 auto; padding: 24px 18px 48px; }
+    .hero, .panel, .card {
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: 24px;
+      box-shadow: var(--shadow);
+      backdrop-filter: blur(10px);
+    }
+    .hero, .panel, .card { padding: 20px; }
+    .hero { margin-bottom: 18px; }
+    .cards { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 16px; margin-bottom: 18px; }
+    .rank {
+      display: inline-block;
+      padding: 6px 10px;
+      border-radius: 999px;
+      background: var(--accent-soft);
+      color: var(--accent);
+      font-weight: 800;
+      font-size: 12px;
+    }
+    table { width: 100%; border-collapse: collapse; }
+    th, td { padding: 10px; border-bottom: 1px solid #eadfce; text-align: left; font-size: 13px; }
+    th { color: var(--muted); font-size: 11px; text-transform: uppercase; background: rgba(249,242,231,0.9); }
+    .table-wrap { overflow: auto; border: 1px solid var(--line); border-radius: 18px; background: rgba(255,255,255,0.5); }
+    h1 { margin: 0 0 8px; font-size: 34px; }
+    h2 { margin: 0 0 12px; font-size: 19px; }
+    h3 { margin-top: 0; }
+    p, li { line-height: 1.6; }
+    @media (max-width: 1080px) {
+      .cards { grid-template-columns: 1fr; }
+    }
+  </style>
+</head>
+<body>
+  <main class="page">
+    <section class="hero">
+      <h1>Dynamic 300 轻量规则快回测参数扫描</h1>
+      <p>截止日期 2026-03-18，基准 000300.SH。这份扫描用来判断轻量规则版是否具备参数稳健性，而不是只在某一组参数上碰巧跑得好。</p>
+    </section>
+    <section class="cards">
+      <article class='card'><div class='rank'>#1</div><h3>lookback=120 / rebalance=10</h3><p>top_n=4 | max_theme=1</p><p><strong>超额总收益</strong>: 43.15%</p><p><strong>年化超额</strong>: 112.42%</p><p><strong>最大回撤</strong>: -13.22%</p><p><strong>IR</strong>: 2.548</p><ul><li>中船防务(600685.SH)</li><li>特变电工(600089.SH)</li><li>光迅科技(002281.SZ)</li><li>中国船舶(600150.SH)</li></ul></article><article class='card'><div class='rank'>#2</div><h3>lookback=240 / rebalance=10</h3><p>top_n=4 | max_theme=1</p><p><strong>超额总收益</strong>: 46.16%</p><p><strong>年化超额</strong>: 48.96%</p><p><strong>最大回撤</strong>: -18.07%</p><p><strong>IR</strong>: 1.600</p><ul><li>中船防务(600685.SH)</li><li>特变电工(600089.SH)</li><li>光迅科技(002281.SZ)</li><li>中国船舶(600150.SH)</li></ul></article><article class='card'><div class='rank'>#3</div><h3>lookback=480 / rebalance=10</h3><p>top_n=4 | max_theme=1</p><p><strong>超额总收益</strong>: 77.81%</p><p><strong>年化超额</strong>: 35.28%</p><p><strong>最大回撤</strong>: -28.59%</p><p><strong>IR</strong>: 1.277</p><ul><li>中船防务(600685.SH)</li><li>特变电工(600089.SH)</li><li>光迅科技(002281.SZ)</li><li>中国船舶(600150.SH)</li></ul></article>
+    </section>
+    <section class="panel">
+      <h2>全部组合</h2>
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>排名</th>
+              <th>lookback</th>
+              <th>rebalance</th>
+              <th>top_n</th>
+              <th>max_theme</th>
+              <th>总收益</th>
+              <th>超额总收益</th>
+              <th>年化超额</th>
+              <th>回撤</th>
+              <th>IR</th>
+              <th>robust_score</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr><td>1</td><td>120</td><td>10</td><td>4</td><td>1</td><td>47.47%</td><td>43.15%</td><td>112.42%</td><td>-13.22%</td><td>2.548</td><td>1.460</td></tr><tr><td>2</td><td>240</td><td>10</td><td>4</td><td>1</td><td>73.92%</td><td>46.16%</td><td>48.96%</td><td>-18.07%</td><td>1.600</td><td>0.666</td></tr><tr><td>3</td><td>480</td><td>10</td><td>4</td><td>1</td><td>133.65%</td><td>77.81%</td><td>35.28%</td><td>-28.59%</td><td>1.277</td><td>0.444</td></tr><tr><td>4</td><td>720</td><td>10</td><td>4</td><td>1</td><td>46.14%</td><td>25.87%</td><td>8.39%</td><td>-52.20%</td><td>0.436</td><td>-0.033</td></tr><tr><td>5</td><td>1200</td><td>10</td><td>4</td><td>1</td><td>47.16%</td><td>63.06%</td><td>10.81%</td><td>-62.33%</td><td>0.501</td><td>-0.035</td></tr><tr><td>6</td><td>960</td><td>10</td><td>4</td><td>1</td><td>55.87%</td><td>42.34%</td><td>9.71%</td><td>-58.92%</td><td>0.481</td><td>-0.037</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+  </main>
+</body>
+</html>

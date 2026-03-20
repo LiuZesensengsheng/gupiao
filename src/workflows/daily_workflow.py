@@ -61,6 +61,7 @@ def run_daily_v2_live_impl(
     info_types: str | None = None,
     info_source_mode: str | None = None,
     info_subsets: str | None = None,
+    info_cutoff_time: str | None = None,
     external_signals: bool | None = None,
     event_file: str | None = None,
     capital_flow_file: str | None = None,
@@ -97,6 +98,7 @@ def run_daily_v2_live_impl(
         info_types=info_types,
         info_source_mode=info_source_mode,
         info_subsets=info_subsets,
+        info_cutoff_time=info_cutoff_time,
         external_signals=external_signals,
         event_file=event_file,
         capital_flow_file=capital_flow_file,
@@ -245,6 +247,7 @@ def run_daily_v2_live_impl(
             current_weights=current_weights,
             current_holding_days={symbol: 5 for symbol in current_weights},
             symbol_names=symbol_names,
+            settings=settings,
         )
         composite_state = replace(composite_state, execution_plans=execution_plans)
     trade_actions = dependencies.build_trade_actions_fn(

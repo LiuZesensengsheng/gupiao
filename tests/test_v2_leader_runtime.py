@@ -1,12 +1,15 @@
 from __future__ import annotations
 
+from dataclasses import replace
 from types import SimpleNamespace
 
 import pandas as pd
 
 from src.application.v2_contracts import (
+    CandidateSelectionState,
     CompositeState,
     CrossSectionForecastState,
+    InfoAggregateState,
     MainlineState,
     MarketForecastState,
     SectorForecastState,
@@ -97,6 +100,79 @@ def test_build_leader_score_snapshots_separates_strong_and_weak_names() -> None:
     assert snapshot_map["CCC"].hard_negative is True
     assert "theme strengthening" in snapshot_map["AAA"].reasons
     assert "role downgrade active" in snapshot_map["CCC"].reasons
+
+
+def test_build_leader_score_snapshots_uses_info_and_shortlist_support() -> None:
+    state = _leader_state()
+    state = replace(
+        state,
+        stocks=[
+            replace(state.stocks[0], alpha_score=0.60, tradeability_score=0.87),
+            replace(state.stocks[1], excess_vs_sector_prob=0.53, tradeability_score=0.80, alpha_score=0.64),
+            state.stocks[2],
+        ],
+        candidate_selection=CandidateSelectionState(
+            shortlisted_symbols=["AAA", "BBB", "CCC"],
+            shortlisted_sectors=["chips"],
+            total_scored=300,
+            shortlist_size=2,
+            shortlist_ratio=2.0 / 300.0,
+            selection_mode="macro_sector_ranking",
+            selection_notes=["macro shortlist"],
+        ),
+        market_info_state=InfoAggregateState(
+            info_prob_5d=0.58,
+            info_prob_20d=0.60,
+            source_diversity=0.40,
+        ),
+        stock_info_states={
+            "AAA": InfoAggregateState(
+                catalyst_strength=0.58,
+                coverage_ratio=0.84,
+                coverage_confidence=0.76,
+                info_prob_5d=0.74,
+                info_prob_20d=0.76,
+                source_diversity=0.72,
+                event_risk_level=0.08,
+            ),
+            "BBB": InfoAggregateState(
+                catalyst_strength=0.04,
+                coverage_ratio=0.18,
+                coverage_confidence=0.16,
+                info_prob_5d=0.44,
+                info_prob_20d=0.45,
+                source_diversity=0.14,
+                event_risk_level=0.62,
+                negative_event_risk=0.28,
+            ),
+        },
+        theme_episodes=[
+            ThemeEpisode(
+                theme="chips",
+                phase="crowded",
+                conviction=0.72,
+                breadth=0.30,
+                leadership=0.29,
+                catalyst_strength=0.26,
+                event_risk=0.46,
+                crowding=0.64,
+                capital_support=0.42,
+                macro_alignment=0.38,
+                viewpoint_score=0.08,
+                viewpoint_conflict=0.31,
+                sectors=["chips"],
+                representative_symbols=["AAA", "BBB"],
+            )
+        ],
+    )
+
+    snapshots = build_leader_score_snapshots(state=state)
+    snapshot_map = {item.symbol: item for item in snapshots}
+
+    assert snapshot_map["AAA"].negative_score < snapshot_map["BBB"].negative_score
+    assert snapshot_map["AAA"].candidate_score > snapshot_map["BBB"].candidate_score
+    assert "info catalysts aligned" in snapshot_map["AAA"].reasons
+    assert "macro shortlist confirmed" in snapshot_map["AAA"].reasons
 
 
 def test_evaluate_leader_candidates_uses_future_theme_relative_returns() -> None:

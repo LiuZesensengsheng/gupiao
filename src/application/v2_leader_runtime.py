@@ -107,6 +107,11 @@ def _rank_percentile(rank: int, size: int) -> float:
     return float(max(0.0, min(1.0, 1.0 - ((rank - 1) / max(1, size - 1)))))
 
 
+def _signed_prob_edge(value: object, scale: float = 0.20) -> float:
+    centered = (_safe_float(value, 0.5) - 0.5) / max(1e-9, float(scale))
+    return float(max(-1.0, min(1.0, centered)))
+
+
 def _theme_episode_map(state: CompositeState) -> dict[str, ThemeEpisode]:
     return {
         _normalize_text(item.theme): item
@@ -203,6 +208,156 @@ def _base_negative_score(
     )
 
 
+def _durability_score(stock: object) -> float:
+    up_1d = _safe_float(getattr(stock, "up_1d_prob", 0.5), 0.5)
+    up_5d = _safe_float(getattr(stock, "up_5d_prob", 0.5), 0.5)
+    up_20d = _safe_float(getattr(stock, "up_20d_prob", 0.5), 0.5)
+    excess = _safe_float(getattr(stock, "excess_vs_sector_prob", 0.5), 0.5)
+    tradeability = _safe_float(getattr(stock, "tradeability_score", 0.5), 0.5)
+    short_spike = max(0.0, up_1d - max(up_5d, up_20d))
+    return _clip01(
+        0.34 * max(0.0, up_20d - 0.50) / 0.20
+        + 0.24 * max(0.0, up_5d - 0.50) / 0.16
+        + 0.20 * max(0.0, excess - 0.50) / 0.14
+        + 0.14 * max(0.0, tradeability - 0.80) / 0.16
+        - 0.18 * short_spike / 0.12
+    )
+
+
+def _info_support_components(
+    *,
+    stock_info: object | None,
+    sector_info: object | None,
+    market_info: object | None,
+) -> tuple[float, float, float, float]:
+    stock_positive_edge = max(
+        _signed_prob_edge(getattr(stock_info, "info_prob_5d", 0.5) if stock_info is not None else 0.5),
+        _signed_prob_edge(getattr(stock_info, "info_prob_20d", 0.5) if stock_info is not None else 0.5),
+    )
+    sector_positive_edge = max(
+        _signed_prob_edge(getattr(sector_info, "info_prob_5d", 0.5) if sector_info is not None else 0.5),
+        _signed_prob_edge(getattr(sector_info, "info_prob_20d", 0.5) if sector_info is not None else 0.5),
+    )
+    market_positive_edge = max(
+        _signed_prob_edge(getattr(market_info, "info_prob_5d", 0.5) if market_info is not None else 0.5),
+        _signed_prob_edge(getattr(market_info, "info_prob_20d", 0.5) if market_info is not None else 0.5),
+    )
+    stock_catalyst = _safe_float(getattr(stock_info, "catalyst_strength", 0.0) if stock_info is not None else 0.0, 0.0)
+    sector_catalyst = _safe_float(
+        getattr(sector_info, "catalyst_strength", 0.0) if sector_info is not None else 0.0,
+        0.0,
+    )
+    market_catalyst = _safe_float(
+        getattr(market_info, "catalyst_strength", 0.0) if market_info is not None else 0.0,
+        0.0,
+    )
+    coverage_ratio = max(
+        _safe_float(getattr(stock_info, "coverage_ratio", 0.0) if stock_info is not None else 0.0, 0.0),
+        _safe_float(getattr(sector_info, "coverage_ratio", 0.0) if sector_info is not None else 0.0, 0.0),
+        _safe_float(getattr(stock_info, "coverage_confidence", 0.0) if stock_info is not None else 0.0, 0.0),
+    )
+    source_diversity = max(
+        _safe_float(getattr(stock_info, "source_diversity", 0.0) if stock_info is not None else 0.0, 0.0),
+        _safe_float(getattr(sector_info, "source_diversity", 0.0) if sector_info is not None else 0.0, 0.0),
+        _safe_float(getattr(market_info, "source_diversity", 0.0) if market_info is not None else 0.0, 0.0),
+    )
+    info_support = _clip01(
+        0.32 * max(stock_catalyst, sector_catalyst)
+        + 0.18 * max(0.0, stock_positive_edge)
+        + 0.12 * max(0.0, sector_positive_edge)
+        + 0.08 * max(0.0, market_positive_edge)
+        + 0.18 * coverage_ratio
+        + 0.12 * source_diversity
+    )
+    info_risk = _clip01(
+        0.42
+        * max(
+            _safe_float(getattr(stock_info, "event_risk_level", 0.0) if stock_info is not None else 0.0, 0.0),
+            _safe_float(getattr(sector_info, "event_risk_level", 0.0) if sector_info is not None else 0.0, 0.0),
+            _safe_float(getattr(market_info, "event_risk_level", 0.0) if market_info is not None else 0.0, 0.0),
+        )
+        + 0.20 * max(0.0, -stock_positive_edge)
+        + 0.12 * max(0.0, -sector_positive_edge)
+        + 0.08 * max(0.0, -market_positive_edge)
+        + 0.18
+        * max(
+            _safe_float(getattr(stock_info, "negative_event_risk", 0.0) if stock_info is not None else 0.0, 0.0),
+            _safe_float(getattr(sector_info, "negative_event_risk", 0.0) if sector_info is not None else 0.0, 0.0),
+        )
+    )
+    info_confidence = _clip01(max(coverage_ratio, source_diversity))
+    catalyst_strength = _clip01(max(stock_catalyst, sector_catalyst, market_catalyst))
+    return info_support, info_risk, info_confidence, catalyst_strength
+
+
+def _theme_support_components(
+    *,
+    episode: ThemeEpisode | None,
+    theme_conviction: float,
+    theme_leadership: float,
+    theme_event_risk: float,
+) -> dict[str, float]:
+    breadth = _safe_float(getattr(episode, "breadth", 0.0) if episode is not None else 0.0, 0.0)
+    crowding = _safe_float(getattr(episode, "crowding", 0.0) if episode is not None else 0.0, 0.0)
+    capital_support = _safe_float(getattr(episode, "capital_support", 0.0) if episode is not None else 0.0, 0.0)
+    macro_alignment = _safe_float(getattr(episode, "macro_alignment", 0.0) if episode is not None else 0.0, 0.0)
+    viewpoint_support = _clip01(
+        max(0.0, _safe_float(getattr(episode, "viewpoint_score", 0.0) if episode is not None else 0.0, 0.0))
+    )
+    viewpoint_conflict = _clip01(
+        _safe_float(getattr(episode, "viewpoint_conflict", 0.0) if episode is not None else 0.0, 0.0)
+    )
+    quality = _clip01(
+        0.30 * theme_conviction
+        + 0.18 * breadth
+        + 0.16 * theme_leadership
+        + 0.12 * capital_support
+        + 0.10 * macro_alignment
+        + 0.08 * (1.0 - theme_event_risk)
+        + 0.08 * viewpoint_support
+        - 0.10 * crowding
+        - 0.08 * viewpoint_conflict
+    )
+    return {
+        "quality": quality,
+        "breadth": breadth,
+        "crowding": crowding,
+        "capital_support": capital_support,
+        "macro_alignment": macro_alignment,
+        "viewpoint_support": viewpoint_support,
+        "viewpoint_conflict": viewpoint_conflict,
+    }
+
+
+def _shortlist_rank_maps(
+    selection: CandidateSelectionState,
+) -> tuple[dict[str, int], int, int]:
+    symbols = [str(item) for item in getattr(selection, "shortlisted_symbols", []) if str(item).strip()]
+    shortlist_size = int(getattr(selection, "shortlist_size", 0) or 0)
+    if shortlist_size <= 0:
+        shortlist_size = len(symbols)
+    total_scored = int(getattr(selection, "total_scored", 0) or 0)
+    if total_scored <= 0:
+        total_scored = len(symbols)
+    return {symbol: idx for idx, symbol in enumerate(symbols)}, shortlist_size, total_scored
+
+
+def _shortlist_support(
+    *,
+    symbol: str,
+    shortlist_rank_map: dict[str, int],
+    shortlist_size: int,
+    total_scored: int,
+) -> float:
+    rank = shortlist_rank_map.get(symbol)
+    if rank is None or shortlist_size <= 0:
+        return 0.0
+    if rank < shortlist_size:
+        return float(max(0.20, 1.0 - (rank / max(1, shortlist_size))))
+    tail_window = max(1, total_scored - shortlist_size)
+    return float(max(0.0, 0.25 - 0.25 * ((rank - shortlist_size) / tail_window)))
+
+
 def _fallback_role(
     *,
     stock: object,
@@ -292,6 +447,12 @@ def _reason_list(
     conviction_score: float,
     theme_rank: int,
     theme_size: int,
+    info_support: float,
+    info_risk: float,
+    crowding: float,
+    viewpoint_conflict: float,
+    shortlist_support: float,
+    durability: float,
 ) -> list[str]:
     reasons: list[str] = []
     excess = _safe_float(getattr(stock, "excess_vs_sector_prob", 0.5), 0.5)
@@ -303,6 +464,8 @@ def _reason_list(
         reasons.append("theme emerging")
     elif phase == "fading":
         reasons.append("theme fading")
+    elif phase == "crowded":
+        reasons.append("theme crowded")
     if role_downgrade:
         reasons.append("role downgrade active")
     if role in {"leader", "core"}:
@@ -321,6 +484,18 @@ def _reason_list(
         reasons.append("tradeability supportive")
     elif tradeability <= 0.75:
         reasons.append("tradeability below comfort zone")
+    if info_support >= 0.42:
+        reasons.append("info catalysts aligned")
+    elif info_risk >= 0.45:
+        reasons.append("info risk elevated")
+    if shortlist_support >= 0.65:
+        reasons.append("macro shortlist confirmed")
+    if crowding >= 0.60:
+        reasons.append("theme crowding elevated")
+    if viewpoint_conflict >= 0.28:
+        reasons.append("viewpoints conflicted")
+    if durability >= 0.58:
+        reasons.append("multi-day trend durable")
     if negative_score >= 0.55:
         reasons.append("hard negative risk elevated")
     elif candidate_score >= 0.65 and conviction_score >= 0.65:
@@ -332,7 +507,7 @@ def _reason_list(
             continue
         seen.add(item)
         deduped.append(item)
-        if len(deduped) >= 5:
+        if len(deduped) >= 6:
             break
     return deduped
 
@@ -347,6 +522,12 @@ def build_leader_score_snapshots(
     theme_episode_map = _theme_episode_map(state)
     role_states = dict(getattr(state, "stock_role_states", {}) or {})
     mainlines = list(getattr(state, "mainlines", []) or [])
+    market_info = getattr(state, "market_info_state", None)
+    sector_info_states = dict(getattr(state, "sector_info_states", {}) or {})
+    stock_info_states = dict(getattr(state, "stock_info_states", {}) or {})
+    shortlist_rank_map, shortlist_size, total_scored = _shortlist_rank_maps(
+        getattr(state, "candidate_selection", CandidateSelectionState())
+    )
     themed_rows: dict[str, list[dict[str, object]]] = {}
 
     for stock in stocks:
@@ -390,6 +571,8 @@ def build_leader_score_snapshots(
         for idx, row in enumerate(ranked, start=1):
             stock = row["stock"]
             role_state = row.get("role_state")
+            symbol = _normalize_text(getattr(stock, "symbol", ""))
+            sector = _normalize_text(getattr(stock, "sector", ""))
             role = _normalize_text(getattr(role_state, "role", "")) or _fallback_role(
                 stock=stock,
                 rank=idx,
@@ -401,6 +584,33 @@ def build_leader_score_snapshots(
             theme_conviction = _safe_float(row.get("theme_conviction", 0.0), 0.0)
             theme_leadership = _safe_float(row.get("theme_leadership", 0.0), 0.0)
             theme_event_risk = _safe_float(row.get("theme_event_risk", 0.0), 0.0)
+            episode = theme_episode_map.get(theme)
+            theme_metrics = _theme_support_components(
+                episode=episode,
+                theme_conviction=theme_conviction,
+                theme_leadership=theme_leadership,
+                theme_event_risk=theme_event_risk,
+            )
+            info_support, info_risk, info_confidence, info_catalyst = _info_support_components(
+                stock_info=stock_info_states.get(symbol),
+                sector_info=sector_info_states.get(sector),
+                market_info=market_info,
+            )
+            durability = _durability_score(stock)
+            shortlist_support = _shortlist_support(
+                symbol=symbol,
+                shortlist_rank_map=shortlist_rank_map,
+                shortlist_size=shortlist_size,
+                total_scored=max(total_scored, len(stocks)),
+            )
+            short_spike = max(
+                0.0,
+                _safe_float(getattr(stock, "up_1d_prob", 0.5), 0.5)
+                - max(
+                    _safe_float(getattr(stock, "up_5d_prob", 0.5), 0.5),
+                    _safe_float(getattr(stock, "up_20d_prob", 0.5), 0.5),
+                ),
+            )
             negative_score = _clip01(
                 _safe_float(row.get("base_negative", 0.0), 0.0)
                 + _negative_adjustment_for_role_and_phase(
@@ -408,31 +618,54 @@ def build_leader_score_snapshots(
                     phase=phase,
                     role_downgrade=role_downgrade,
                 )
+                + 0.12 * info_risk
+                + 0.08 * max(0.0, float(theme_metrics["crowding"]) - 0.55) / 0.25
+                + 0.08 * float(theme_metrics["viewpoint_conflict"])
+                + 0.06 * short_spike / 0.12
+                - 0.05 * info_support
+                - 0.04 * durability
             )
             theme_support = (
-                0.45 * theme_conviction
-                + 0.30 * theme_leadership
-                + 0.25 * (1.0 - theme_event_risk)
+                0.40 * theme_conviction
+                + 0.16 * float(theme_metrics["quality"])
+                + 0.14 * float(theme_metrics["breadth"])
+                + 0.12 * theme_leadership
+                + 0.10 * float(theme_metrics["capital_support"])
+                + 0.08 * float(theme_metrics["macro_alignment"])
+                + 0.10 * (1.0 - theme_event_risk)
             )
             candidate_score = _clip01(
-                0.24 * _safe_float(getattr(stock, "alpha_score", 0.0), 0.0)
-                + 0.22 * _safe_float(getattr(stock, "excess_vs_sector_prob", 0.5), 0.5)
-                + 0.14 * _safe_float(getattr(stock, "up_5d_prob", 0.5), 0.5)
-                + 0.10 * _safe_float(getattr(stock, "up_20d_prob", 0.5), 0.5)
+                0.18 * _safe_float(getattr(stock, "alpha_score", 0.0), 0.0)
+                + 0.18 * _safe_float(getattr(stock, "excess_vs_sector_prob", 0.5), 0.5)
+                + 0.10 * _safe_float(getattr(stock, "up_5d_prob", 0.5), 0.5)
+                + 0.09 * _safe_float(getattr(stock, "up_20d_prob", 0.5), 0.5)
                 + 0.08 * _safe_float(getattr(stock, "tradeability_score", 0.5), 0.5)
                 + 0.12 * theme_support
+                + 0.07 * info_support
+                + 0.05 * durability
+                + 0.04 * info_confidence
+                + 0.04 * shortlist_support
+                + 0.03 * info_catalyst
+                + 0.03 * float(theme_metrics["viewpoint_support"])
                 + 0.05 * (1.0 - float(idx / max(1, theme_size)))
                 + _role_bonus(role)
                 + _phase_bonus(phase)
                 - 0.22 * negative_score
             )
             conviction_score = _clip01(
-                0.26 * _safe_float(getattr(stock, "alpha_score", 0.0), 0.0)
-                + 0.24 * _safe_float(getattr(stock, "excess_vs_sector_prob", 0.5), 0.5)
-                + 0.16 * _safe_float(getattr(stock, "up_5d_prob", 0.5), 0.5)
-                + 0.10 * _safe_float(getattr(stock, "up_20d_prob", 0.5), 0.5)
-                + 0.14 * theme_conviction
-                + 0.04 * theme_leadership
+                0.20 * _safe_float(getattr(stock, "alpha_score", 0.0), 0.0)
+                + 0.19 * _safe_float(getattr(stock, "excess_vs_sector_prob", 0.5), 0.5)
+                + 0.12 * _safe_float(getattr(stock, "up_20d_prob", 0.5), 0.5)
+                + 0.08 * _safe_float(getattr(stock, "up_5d_prob", 0.5), 0.5)
+                + 0.12 * theme_conviction
+                + 0.06 * float(theme_metrics["breadth"])
+                + 0.05 * theme_leadership
+                + 0.05 * float(theme_metrics["capital_support"])
+                + 0.03 * float(theme_metrics["macro_alignment"])
+                + 0.05 * info_support
+                + 0.05 * durability
+                + 0.04 * info_catalyst
+                + 0.03 * shortlist_support
                 + 0.60 * _role_bonus(role)
                 + 0.50 * _phase_bonus(phase)
                 - 0.28 * negative_score
@@ -442,15 +675,18 @@ def build_leader_score_snapshots(
                 negative_score >= 0.58
                 or (role == "laggard" and candidate_score < 0.56)
                 or (
-                    phase == "fading"
-                    and theme_event_risk >= 0.55
+                    phase in {"fading", "diverging"}
+                    and max(theme_event_risk, float(theme_metrics["crowding"])) >= 0.55
+                    and info_support < 0.18
                     and _safe_float(getattr(stock, "excess_vs_sector_prob", 0.5), 0.5) < 0.54
                 )
+                or (info_risk >= 0.62 and durability <= 0.36)
+                or (float(theme_metrics["viewpoint_conflict"]) >= 0.35 and candidate_score < 0.60)
             )
             out.append(
                 LeaderScoreSnapshot(
-                    symbol=_normalize_text(getattr(stock, "symbol", "")),
-                    sector=_normalize_text(getattr(stock, "sector", "")),
+                    symbol=symbol,
+                    sector=sector,
                     theme=theme,
                     theme_phase=phase,
                     role=role,
@@ -471,6 +707,12 @@ def build_leader_score_snapshots(
                         conviction_score=conviction_score,
                         theme_rank=idx,
                         theme_size=theme_size,
+                        info_support=info_support,
+                        info_risk=info_risk,
+                        crowding=float(theme_metrics["crowding"]),
+                        viewpoint_conflict=float(theme_metrics["viewpoint_conflict"]),
+                        shortlist_support=shortlist_support,
+                        durability=durability,
                     ),
                 )
             )

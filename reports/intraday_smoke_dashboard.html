@@ -1,0 +1,94 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>次日决策面板</title>
+  <style>
+    :root {
+      --bg: #f4efe6;
+      --panel: #fffaf2;
+      --ink: #1e2730;
+      --muted: #6f766d;
+      --line: #ddd1bc;
+      --shadow: 0 18px 46px rgba(45, 33, 12, 0.08);
+    }
+    * { box-sizing: border-box; }
+    body { margin: 0; color: var(--ink); font-family: "Avenir Next", "PingFang SC", "Microsoft YaHei", sans-serif; background: radial-gradient(circle at top right, rgba(197, 91, 53, 0.10), transparent 26%), radial-gradient(circle at left top, rgba(31, 111, 120, 0.10), transparent 24%), linear-gradient(180deg, #faf5ec 0%, var(--bg) 100%); }
+    .page { max-width: 1380px; margin: 0 auto; padding: 24px 18px 40px; }
+    .hero, .panel { background: var(--panel); border: 1px solid var(--line); border-radius: 24px; box-shadow: var(--shadow); }
+    .hero { padding: 24px; }
+    .hero-grid, .triple, .stock-grid { display: grid; gap: 16px; }
+    .hero-grid { grid-template-columns: 1.2fr 1fr; align-items: start; }
+    .triple { grid-template-columns: repeat(3, minmax(0, 1fr)); margin-top: 18px; }
+    .stock-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); margin-top: 18px; }
+    .panel { padding: 18px; margin-top: 18px; }
+    h1 { margin: 0; font-size: 36px; line-height: 1; }
+    h2 { margin: 0 0 12px; font-size: 18px; }
+    h3 { margin: 0 0 8px; font-size: 18px; }
+    h3 span { color: var(--muted); font-size: 12px; font-weight: 600; }
+    p, li { line-height: 1.6; }
+    .muted { color: var(--muted); }
+    .facts { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; }
+    .fact { padding: 14px; border: 1px solid var(--line); border-radius: 18px; background: rgba(255,255,255,0.52); }
+    .fact .eyebrow { font-size: 11px; text-transform: uppercase; color: var(--muted); letter-spacing: .08em; }
+    .fact strong { display: block; margin-top: 8px; font-size: 28px; }
+    .pill { display: inline-flex; padding: 7px 12px; border-radius: 999px; border: 1px solid rgba(0,0,0,.08); background: rgba(255,255,255,.72); margin-right: 8px; font-size: 12px; font-weight: 700; }
+    .list { margin: 10px 0 0; padding-left: 18px; }
+    table { width: 100%; border-collapse: collapse; }
+    th, td { padding: 10px; border-bottom: 1px solid #e9dece; font-size: 13px; text-align: left; vertical-align: top; }
+    th { background: #faf5eb; font-size: 11px; text-transform: uppercase; color: #67706a; letter-spacing: .06em; }
+    .table-wrap { overflow: auto; border: 1px solid var(--line); border-radius: 18px; background: rgba(255,255,255,.55); }
+    .ticker { font-weight: 800; }
+    .ticker-sub { color: var(--muted); font-size: 12px; margin-top: 2px; }
+    .stock-card { border: 1px solid var(--line); border-radius: 18px; background: rgba(255,255,255,.62); padding: 16px; }
+    .stock-card .meta { color: var(--muted); margin-top: 0; }
+    @media (max-width: 1080px) { .hero-grid, .triple, .stock-grid, .facts { grid-template-columns: 1fr; } }
+  </style>
+</head>
+<body>
+  <main class="page">
+    <section class="hero">
+      <div class="hero-grid">
+        <div>
+          <h1>次日决策面板</h1>
+          <p class="muted">数据日期 2026-03-18，下一交易日 2026-03-19。当前为 trend_follow / risk_on。</p>
+          <p class="muted">strategy swing_v2 | universe intraday_smoke | generator  | source akshare</p>
+          <p class="muted">1 names scored | Full ranking in use.</p>
+          <div>
+            <span class="pill">情绪阶段: 中性</span>
+            <span class="pill">情绪分: 50.0/100</span>
+            <span class="pill">目标仓位: 15.0%</span>
+            <span class="pill">目标持仓: 1</span>
+          </div>
+          <ul class="list"></ul>
+        </div>
+        <div class="facts">
+          <div class="fact"><div class="eyebrow">涨跌家数</div><strong>0/0</strong><div class="muted">平家数 0</div></div>
+          <div class="fact"><div class="eyebrow">涨停 / 跌停</div><strong>0/0</strong><div class="muted">新高/新低 0/0</div></div>
+          <div class="fact"><div class="eyebrow">样本中位涨跌幅</div><strong>0.0%</strong><div class="muted">样本覆盖 0</div></div>
+        </div>
+      </div>
+      <div class="triple">
+        <div class="panel"><h2>大盘情绪</h2><p></p><p class="muted">样本成交额 0，成交热度 50.0%，两融变化 0.000</p></div>
+        <div class="panel"><h2>外部信号</h2><p>资金状态 neutral，北向强度 0.000，大单偏向 0.000</p><p class="muted">宏观风险 neutral，风格 balanced</p></div>
+        <div class="panel"><h2>策略记忆</h2><p>暂无策略记忆摘要</p><p class="muted">高频标的: NA</p></div>
+      </div>
+    </section>
+    <section class="panel"><h2>大盘多周期预测</h2><div class="table-wrap"><table><thead><tr><th>周期</th><th>上涨概率</th><th>预期区间</th><th>中位预期</th><th>置信度</th></tr></thead><tbody></tbody></table></div></section>
+    <section class="panel"><h2>Dynamic Universe Funnel</h2><p class="muted">coarse 0 | refined 0 | selected 0</p><p class="muted"> | 1 names scored</p><p class="muted">Full ranking in use.</p></section>
+    <section class="panel"><h2>当日主线列表</h2><div class="table-wrap"><table><thead><tr><th>主线</th><th>phase</th><th>conviction</th><th>breadth</th><th>leadership</th><th>event_risk</th><th>说明</th></tr></thead><tbody><tr><td colspan='7'>暂无 insight 主线</td></tr></tbody></table></div></section>
+    <section class="panel"><h2>龙头候选</h2><div class="table-wrap"><table><thead><tr><th>股票</th><th>主线</th><th>phase</th><th>role</th><th>candidate</th><th>conviction</th><th>negative</th><th>说明</th></tr></thead><tbody><tr><td>???? (600000.SH)</td><td>??</td><td></td><td>core</td><td>33.7%</td><td>21.8%</td><td>18.0%</td><td>theme role core | theme rank 1/1 | weak excess vs sector</td></tr></tbody></table></div></section>
+    <section class="panel"><h2>预测监控榜</h2><div class="table-wrap"><table><thead><tr><th>排名</th><th>股票</th><th>行业</th><th>下一交易日区间</th><th>5日中位预期</th><th>20日中位预期</th><th>1日上涨概率</th><th>可执行分</th><th>状态</th></tr></thead><tbody><tr><td>1</td><td><div class='ticker'>????</div><div class='ticker-sub'>600000.SH</div></td><td>??</td><td>10.22 ~ 10.48</td><td>1.8%</td><td>5.2%</td><td>51.0%</td><td>NA</td><td>selected</td></tr></tbody></table></div></section>
+    <section class="panel"><h2>可执行候选榜</h2><div class="table-wrap"><table><thead><tr><th>排名</th><th>股票</th><th>行业</th><th>可执行分</th><th>目标权重</th><th>下一交易日区间</th><th>1日上涨概率</th><th>备注</th></tr></thead><tbody><tr><td colspan='8'>当前无新开仓候选</td></tr></tbody></table></div></section>
+    <section class="panel"><h2>实际操作</h2><div class="table-wrap"><table><thead><tr><th>股票</th><th>动作</th><th>当前权重</th><th>目标权重</th><th>权重变化</th><th>操作理由</th></tr></thead><tbody><tr><td colspan='6'>当前不触发调仓</td></tr></tbody></table></div></section>
+    <section class="panel"><h2>持仓角色变化</h2><div class="table-wrap"><table><thead><tr><th>股票</th><th>主线</th><th>当前角色</th><th>前序角色</th><th>角色降级</th><th>备注</th></tr></thead><tbody><tr><td colspan='6'>暂无角色变化</td></tr></tbody></table></div></section>
+    <section class="panel"><h2>次日执行计划</h2><div class="table-wrap"><table><thead><tr><th>股票</th><th>bias</th><th>buy_zone</th><th>avoid_zone</th><th>intraday</th><th>levels</th><th>reduce_if</th><th>exit_if</th><th>reason</th></tr></thead><tbody><tr><td><div class='ticker'>????</div><div class='ticker-sub'>600000.SH</div></td><td>reduce</td><td>10.22 ~ 10.48</td><td>gap-up chase above forecast range</td><td>hold_neutral | 15m | 2026-03-18</td><td>stop 10.36 | tp 10.42</td><td>near-term edge weakens</td><td>20d probability breaks below 0.48</td><td>held 6d; 15m close 10.37, VWAP gap +0.1%, drawdown 0.5%, close-pos 58%</td></tr></tbody></table></div></section>
+    <section class="panel"><h2>盘中执行覆盖</h2><div class="stock-grid"><article class='stock-card'><h3>???? <span>600000.SH</span></h3><p class='meta'>hold_neutral | 15m | 2026-03-18 | stop 10.36 | tp 10.42</p><p><strong>盘中说明</strong>: 15m close 10.37, VWAP gap +0.1%, drawdown 0.5%, close-pos 58%</p><p><strong>Reduce If</strong>: near-term edge weakens</p><p><strong>Exit If</strong>: 20d probability breaks below 0.48</p></article></div></section>
+    <section class="stock-grid"><article class='stock-card'><h3>???? <span>600000.SH</span></h3><p class='meta'>?? | 最新收盘 10.37</p><p><strong>下一交易日(2026-03-19)</strong>: 10.22 ~ 10.48，上涨概率 51.0%，置信度 56.0%</p><p><strong>入池原因</strong>: liquidity strong</p><p><strong>排名原因</strong>: defensive relative strength</p><p><strong>可执行状态</strong>: selected | 可执行分 NA | prediction-only monitor</p><p><strong>操作原因</strong>: smoke test position</p><p><strong>风险点</strong>: 暂无显著硬风险</p><p><strong>失效条件</strong>: 跌破预期下沿且5日概率转弱</p></article></section>
+    <section class="panel"><h2>Mainline Radar</h2><ul class="list"><li>暂无主线</li></ul></section>
+    <section class="panel"><h2>预测复盘</h2><div class="table-wrap"><table><thead><tr><th>窗口</th><th>命中参考</th><th>平均边际</th><th>近窗表现</th><th>样本数</th><th>说明</th></tr></thead><tbody><tr><td colspan='6'>暂无复盘数据</td></tr></tbody></table></div><p class="muted"></p></section>
+    <section class="panel"><h2>淇℃伅灞傛憳瑕?</h2><div class="table-wrap"><table><thead><tr><th>metric</th><th>value</th></tr></thead><tbody><tr><td>info shadow enabled</td><td>false</td></tr><tr><td>info items</td><td>0</td></tr><tr><td>market catalyst</td><td>0.0%</td></tr><tr><td>market event risk</td><td>0.0%</td></tr><tr><td>market negative risk</td><td>0.0%</td></tr><tr><td>market coverage</td><td>0.0%</td></tr></tbody></table></div><ul class="list"><li>NA</li></ul></section>
+  </main>
+</body>
+</html>

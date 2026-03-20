@@ -87,6 +87,7 @@ def test_info_manifest_payload_captures_counts_and_hash(tmp_path: Path) -> None:
             "info_types": ["news", "announcement"],
             "info_subsets": ["market_news", "announcements"],
             "announcement_event_tags": ["earnings"],
+            "info_cutoff_time": "15:00:00",
         },
         info_file=str(info_file),
         info_items=info_items,
@@ -100,6 +101,9 @@ def test_info_manifest_payload_captures_counts_and_hash(tmp_path: Path) -> None:
     assert payload["info_hash"] == "file_hash"
     assert payload["announcement_count"] == 1
     assert payload["market_news_count"] == 1
+    assert payload["publish_timestamp_count"] == 0
+    assert payload["publish_timestamp_coverage_ratio"] == 0.0
     assert payload["date_window"] == {"start": "2026-03-15", "end": "2026-03-16"}
     assert payload["market_coverage_ratio"] == 0.7
     assert payload["stock_coverage_ratio"] == 0.5
+    assert payload["info_cutoff_time"] == "15:00:00"

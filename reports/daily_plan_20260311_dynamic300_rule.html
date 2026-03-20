@@ -1,0 +1,131 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Dynamic 300 轻量规则操作单</title>
+  <style>
+    :root {
+      --bg: #f7f3ea;
+      --panel: rgba(255,255,255,0.82);
+      --ink: #172126;
+      --muted: #5e6a67;
+      --line: #d9d0c2;
+      --accent: #9a4d1f;
+      --accent-soft: #f1d4bf;
+      --shadow: 0 18px 40px rgba(42, 29, 12, 0.08);
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      color: var(--ink);
+      font-family: "Avenir Next", "PingFang SC", "Microsoft YaHei", sans-serif;
+      background:
+        radial-gradient(circle at top right, rgba(154,77,31,0.10), transparent 24%),
+        radial-gradient(circle at left top, rgba(29,113,103,0.10), transparent 26%),
+        linear-gradient(180deg, #fbf7ef 0%, var(--bg) 100%);
+    }
+    .page { max-width: 1360px; margin: 0 auto; padding: 24px 18px 48px; }
+    .hero, .panel, .card {
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: 24px;
+      box-shadow: var(--shadow);
+      backdrop-filter: blur(10px);
+    }
+    .hero { padding: 24px; }
+    .hero-grid, .triple, .cards { display: grid; gap: 16px; }
+    .hero-grid { grid-template-columns: 1.3fr 1fr; align-items: start; }
+    .triple { grid-template-columns: repeat(3, minmax(0, 1fr)); margin-top: 18px; }
+    .cards { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    .panel { padding: 18px; margin-top: 18px; }
+    .card { padding: 18px; position: relative; }
+    h1 { margin: 0; font-size: 38px; line-height: 1; }
+    h2 { margin: 0 0 12px; font-size: 19px; }
+    h3 { margin: 0 0 8px; font-size: 20px; }
+    h3 span { color: var(--muted); font-size: 12px; font-weight: 700; }
+    .muted { color: var(--muted); }
+    .facts { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; }
+    .fact { padding: 14px; border: 1px solid var(--line); border-radius: 18px; background: rgba(255,255,255,0.55); }
+    .fact .eyebrow { font-size: 11px; text-transform: uppercase; letter-spacing: .08em; color: var(--muted); }
+    .fact strong { display: block; margin-top: 8px; font-size: 28px; }
+    .pill {
+      display: inline-flex;
+      margin-right: 8px;
+      margin-bottom: 8px;
+      padding: 7px 12px;
+      border-radius: 999px;
+      background: rgba(255,255,255,0.74);
+      border: 1px solid rgba(0,0,0,0.08);
+      font-size: 12px;
+      font-weight: 700;
+    }
+    .rank {
+      position: absolute;
+      top: 14px;
+      right: 14px;
+      background: var(--accent-soft);
+      color: var(--accent);
+      border-radius: 999px;
+      padding: 6px 10px;
+      font-size: 12px;
+      font-weight: 800;
+    }
+    p, li { line-height: 1.6; }
+    table { width: 100%; border-collapse: collapse; }
+    th, td { padding: 10px; border-bottom: 1px solid #eadfce; text-align: left; vertical-align: top; font-size: 13px; }
+    th { font-size: 11px; text-transform: uppercase; color: var(--muted); background: rgba(249, 242, 231, 0.9); }
+    .table-wrap { overflow: auto; border: 1px solid var(--line); border-radius: 18px; background: rgba(255,255,255,0.48); }
+    .meta { color: var(--muted); margin-top: 0; }
+    @media (max-width: 1080px) {
+      .hero-grid, .triple, .cards, .facts { grid-template-columns: 1fr; }
+    }
+  </style>
+</head>
+<body>
+  <main class="page">
+    <section class="hero">
+      <div class="hero-grid">
+        <div>
+          <h1>Dynamic 300 轻量规则操作单</h1>
+          <p class="muted">数据日期 2026-03-11。这是今天补完数据后的轻量规则版，不等待完整 daily-run。</p>
+          <div>
+            <span class="pill">dynamic 300: 300</span>
+            <span class="pill">fresh gate 通过: 318</span>
+            <span class="pill">核心开仓: 4</span>
+            <span class="pill">主题分散: 默认 1 主题 1 只</span>
+          </div>
+          <p class="muted">这版更像“今天先上手”的明日计划，优先解决速度和可执行性，不冒充完整 learned policy。</p>
+        </div>
+        <div class="facts">
+          <div class="fact"><div class="eyebrow">核心候选</div><strong>4</strong><div class="muted">默认等价于 4 格仓位</div></div>
+          <div class="fact"><div class="eyebrow">观察名单</div><strong>8</strong><div class="muted">候选轮换缓冲区</div></div>
+          <div class="fact"><div class="eyebrow">主线聚焦</div><strong>光模块</strong><div class="muted">按今日 dynamic 300 统计</div></div>
+        </div>
+      </div>
+      <div class="triple">
+        <div class="panel"><h2>执行原则</h2><p>只做 fresh 分和 refined 分都靠前、且主题不太窄的票；高开过猛不追，跌破 20 日线不接。</p></div>
+        <div class="panel"><h2>组合结构</h2><p>核心仓位控制在 4 只左右；规则版优先降低同主题扎堆，先求稳定再求极致进攻。</p></div>
+        <div class="panel"><h2>风险声明</h2><p>这是轻量规则版，不含分钟级别择时，也不含完整 daily-run 的 learned policy / exit overlay。</p></div>
+      </div>
+    </section>
+    <section class="panel">
+      <h2>Fresh Funnel</h2>
+      <div class="table-wrap"><table><thead><tr><th>阶段</th><th>数量</th></tr></thead><tbody><tr><td>post_min_history_liquidity</td><td>2031</td></tr><tr><td>close&gt;=5</td><td>1807</td></tr><tr><td>close&gt;ma20&gt;ma60</td><td>651</td></tr><tr><td>ret20 band</td><td>454</td></tr><tr><td>ret60 band</td><td>385</td></tr><tr><td>volatility20&lt;=cap</td><td>358</td></tr><tr><td>within_20d_high_gap</td><td>345</td></tr><tr><td>amount_ratio20 band</td><td>318</td></tr></tbody></table></div>
+    </section>
+    <section class="panel">
+      <h2>当前主线</h2>
+      <div class="table-wrap"><table><thead><tr><th>主线</th><th>入池数</th><th>强度</th></tr></thead><tbody><tr><td>光模块</td><td>14</td><td>0.592</td></tr><tr><td>资源</td><td>14</td><td>0.396</td></tr><tr><td>煤化工</td><td>14</td><td>0.383</td></tr><tr><td>能源石油</td><td>14</td><td>0.381</td></tr><tr><td>新能源电力</td><td>14</td><td>0.372</td></tr><tr><td>航天军工</td><td>14</td><td>0.360</td></tr><tr><td>通信设备</td><td>14</td><td>0.358</td></tr><tr><td>电气设备</td><td>14</td><td>0.349</td></tr><tr><td>半导体</td><td>14</td><td>0.334</td></tr><tr><td>科技软件</td><td>14</td><td>0.328</td></tr></tbody></table></div>
+    </section>
+    <section class="panel">
+      <h2>明日买入候选</h2>
+      <div class="table-wrap"><table><thead><tr><th>排名</th><th>股票</th><th>主题</th><th>建议权重</th><th>买入区间</th><th>回避区间</th></tr></thead><tbody><tr><td>1</td><td>晋控煤业 (601001.SH)</td><td>煤炭</td><td>25.9%</td><td>17.04 - 17.38</td><td>&gt;17.81 不追高 / &lt;17.04 不接弱</td></tr><tr><td>2</td><td>万华化学 (600309.SH)</td><td>煤化工</td><td>24.9%</td><td>80.66 - 81.47</td><td>&gt;83.48 不追高 / &lt;87.84 不接弱</td></tr><tr><td>3</td><td>国电南瑞 (600406.SH)</td><td>新能源电力</td><td>24.6%</td><td>28.43 - 28.51</td><td>&gt;29.22 不追高 / &lt;28.43 不接弱</td></tr><tr><td>4</td><td>高新发展 (000628.SZ)</td><td>建筑工程</td><td>24.5%</td><td>53.41 - 53.94</td><td>&gt;55.28 不追高 / &lt;54.26 不接弱</td></tr></tbody></table></div>
+    </section>
+    <section class="panel">
+      <h2>观察名单</h2>
+      <div class="table-wrap"><table><thead><tr><th>股票</th><th>主题</th><th>备注</th></tr></thead><tbody><tr><td>神火股份 (000933.SZ)</td><td>煤炭</td><td>通过 fresh gate，但本轮被更高分主题/个股挤出核心组合。</td></tr><tr><td>华鲁恒升 (600426.SH)</td><td>煤化工</td><td>通过 fresh gate，但本轮被更高分主题/个股挤出核心组合。</td></tr><tr><td>思源电气 (002028.SZ)</td><td>新能源电力</td><td>通过 fresh gate，但本轮被更高分主题/个股挤出核心组合。</td></tr><tr><td>中国化学 (601117.SH)</td><td>煤化工</td><td>通过 fresh gate，但本轮被更高分主题/个股挤出核心组合。</td></tr><tr><td>三安光电 (600703.SH)</td><td>新能源电力</td><td>通过 fresh gate，但本轮被更高分主题/个股挤出核心组合。</td></tr><tr><td>君正集团 (601216.SH)</td><td>煤化工</td><td>通过 fresh gate，但本轮被更高分主题/个股挤出核心组合。</td></tr><tr><td>平高电气 (600312.SH)</td><td>新能源电力</td><td>通过 fresh gate，但本轮被更高分主题/个股挤出核心组合。</td></tr><tr><td>中国电建 (601669.SH)</td><td>新能源电力</td><td>通过 fresh gate，但本轮被更高分主题/个股挤出核心组合。</td></tr></tbody></table></div>
+    </section>
+    <section class="cards"><article class='card'><div class='rank'>#1</div><h3>晋控煤业 <span>601001.SH</span></h3><p class='meta'>煤炭 | 最新价 17.21 | 建议权重 25.9%</p><p><strong>买入区间</strong>: 17.04 - 17.38</p><p><strong>回避区间</strong>: &gt;17.81 不追高 / &lt;17.04 不接弱</p><p><strong>减仓条件</strong>: 冲高后回落且失守 17.21，或量比明显失衡</p><p><strong>退出条件</strong>: 日收盘跌破20日线 17.04；弱势延续则看60日线 15.28</p><ul><li>fresh 分 0.749，refined 分 1.137</li><li>距20日高点 2.4%，量能比 1.47</li><li>主题 煤炭 当前入选 11 只，主题强度 0.400</li></ul></article><article class='card'><div class='rank'>#2</div><h3>万华化学 <span>600309.SH</span></h3><p class='meta'>煤化工 | 最新价 80.66 | 建议权重 24.9%</p><p><strong>买入区间</strong>: 80.66 - 81.47</p><p><strong>回避区间</strong>: &gt;83.48 不追高 / &lt;87.84 不接弱</p><p><strong>减仓条件</strong>: 冲高后回落且失守 80.66，或量比明显失衡</p><p><strong>退出条件</strong>: 日收盘跌破20日线 87.84；弱势延续则看60日线 82.89</p><ul><li>fresh 分 0.704，refined 分 1.062</li><li>距20日高点 5.2%，量能比 1.22</li><li>主题 煤化工 当前入选 14 只，主题强度 0.383</li></ul></article><article class='card'><div class='rank'>#3</div><h3>国电南瑞 <span>600406.SH</span></h3><p class='meta'>新能源电力 | 最新价 28.23 | 建议权重 24.6%</p><p><strong>买入区间</strong>: 28.43 - 28.51</p><p><strong>回避区间</strong>: &gt;29.22 不追高 / &lt;28.43 不接弱</p><p><strong>减仓条件</strong>: 冲高后回落且失守 28.23，或量比明显失衡</p><p><strong>退出条件</strong>: 日收盘跌破20日线 28.43；弱势延续则看60日线 25.64</p><ul><li>fresh 分 0.669，refined 分 1.057</li><li>距20日高点 2.6%，量能比 1.41</li><li>主题 新能源电力 当前入选 14 只，主题强度 0.372</li></ul></article><article class='card'><div class='rank'>#4</div><h3>高新发展 <span>000628.SZ</span></h3><p class='meta'>建筑工程 | 最新价 53.41 | 建议权重 24.5%</p><p><strong>买入区间</strong>: 53.41 - 53.94</p><p><strong>回避区间</strong>: &gt;55.28 不追高 / &lt;54.26 不接弱</p><p><strong>减仓条件</strong>: 冲高后回落且失守 53.41，或量比明显失衡</p><p><strong>退出条件</strong>: 日收盘跌破20日线 54.26；弱势延续则看60日线 50.24</p><ul><li>fresh 分 0.729，refined 分 1.100</li><li>距20日高点 3.2%，量能比 1.91</li><li>主题 建筑工程 当前入选 10 只，主题强度 0.394</li></ul></article></section>
+  </main>
+</body>
+</html>
