@@ -1,0 +1,2545 @@
+{
+  "generated_at": "2026-03-20T00:20:54.696540",
+  "universe_id": "dynamic_300",
+  "universe_size": 300,
+  "source": "config/universe_all_a_3y_local_ready_nost_no_kc_cy_stable3y.json",
+  "generation_rule": "dynamic_universe_v3_fresh_pool: coarse->1000 refine->300",
+  "generator_manifest": "D:\\gupiao\\cache\\universe_catalog\\dynamic_300_e20175104221.generator.json",
+  "stocks": [
+    {
+      "symbol": "600150.SH",
+      "name": "中国船舶",
+      "sector": "船舶"
+    },
+    {
+      "symbol": "601857.SH",
+      "name": "中国石油",
+      "sector": "能源石油"
+    },
+    {
+      "symbol": "000333.SZ",
+      "name": "美的集团",
+      "sector": "消费"
+    },
+    {
+      "symbol": "603588.SH",
+      "name": "高能环境",
+      "sector": "环境保护"
+    },
+    {
+      "symbol": "601899.SH",
+      "name": "紫金矿业",
+      "sector": "资源"
+    },
+    {
+      "symbol": "600309.SH",
+      "name": "万华化学",
+      "sector": "化工原料"
+    },
+    {
+      "symbol": "601088.SH",
+      "name": "中国神华",
+      "sector": "煤炭"
+    },
+    {
+      "symbol": "000338.SZ",
+      "name": "潍柴动力",
+      "sector": "汽车"
+    },
+    {
+      "symbol": "600028.SH",
+      "name": "中国石化",
+      "sector": "能源石油"
+    },
+    {
+      "symbol": "601919.SH",
+      "name": "中远海控",
+      "sector": "水运"
+    },
+    {
+      "symbol": "600685.SH",
+      "name": "中船防务",
+      "sector": "船舶"
+    },
+    {
+      "symbol": "600690.SH",
+      "name": "海尔智家",
+      "sector": "消费"
+    },
+    {
+      "symbol": "601728.SH",
+      "name": "中国电信",
+      "sector": "电信运营"
+    },
+    {
+      "symbol": "601168.SH",
+      "name": "西部矿业",
+      "sector": "资源"
+    },
+    {
+      "symbol": "601985.SH",
+      "name": "中国核电",
+      "sector": "新能源电力"
+    },
+    {
+      "symbol": "000651.SZ",
+      "name": "格力电器",
+      "sector": "消费"
+    },
+    {
+      "symbol": "601600.SH",
+      "name": "中国铝业",
+      "sector": "资源"
+    },
+    {
+      "symbol": "600019.SH",
+      "name": "宝钢股份",
+      "sector": "普钢"
+    },
+    {
+      "symbol": "600031.SH",
+      "name": "三一重工",
+      "sector": "工程机械"
+    },
+    {
+      "symbol": "600660.SH",
+      "name": "福耀玻璃",
+      "sector": "汽车"
+    },
+    {
+      "symbol": "601800.SH",
+      "name": "中国交建",
+      "sector": "建筑工程"
+    },
+    {
+      "symbol": "601328.SH",
+      "name": "交通银行",
+      "sector": "金融"
+    },
+    {
+      "symbol": "600482.SH",
+      "name": "中国动力",
+      "sector": "船舶"
+    },
+    {
+      "symbol": "601766.SH",
+      "name": "中国中车",
+      "sector": "运输设备"
+    },
+    {
+      "symbol": "000157.SZ",
+      "name": "中联重科",
+      "sector": "工程机械"
+    },
+    {
+      "symbol": "601390.SH",
+      "name": "中国中铁",
+      "sector": "建筑工程"
+    },
+    {
+      "symbol": "601398.SH",
+      "name": "工商银行",
+      "sector": "金融"
+    },
+    {
+      "symbol": "601225.SH",
+      "name": "陕西煤业",
+      "sector": "煤炭"
+    },
+    {
+      "symbol": "600985.SH",
+      "name": "淮北矿业",
+      "sector": "煤炭"
+    },
+    {
+      "symbol": "600036.SH",
+      "name": "招商银行",
+      "sector": "金融"
+    },
+    {
+      "symbol": "002714.SZ",
+      "name": "牧原股份",
+      "sector": "农业综合"
+    },
+    {
+      "symbol": "600919.SH",
+      "name": "江苏银行",
+      "sector": "金融"
+    },
+    {
+      "symbol": "601939.SH",
+      "name": "建设银行",
+      "sector": "金融"
+    },
+    {
+      "symbol": "600900.SH",
+      "name": "长江电力",
+      "sector": "新能源电力"
+    },
+    {
+      "symbol": "600941.SH",
+      "name": "中国移动",
+      "sector": "电信运营"
+    },
+    {
+      "symbol": "600096.SH",
+      "name": "云天化",
+      "sector": "煤化工"
+    },
+    {
+      "symbol": "601668.SH",
+      "name": "中国建筑",
+      "sector": "建筑工程"
+    },
+    {
+      "symbol": "000807.SZ",
+      "name": "云铝股份",
+      "sector": "资源"
+    },
+    {
+      "symbol": "000425.SZ",
+      "name": "徐工机械",
+      "sector": "工程机械"
+    },
+    {
+      "symbol": "600406.SH",
+      "name": "国电南瑞",
+      "sector": "电气设备"
+    },
+    {
+      "symbol": "002648.SZ",
+      "name": "卫星化学",
+      "sector": "航天军工"
+    },
+    {
+      "symbol": "600737.SH",
+      "name": "中粮糖业",
+      "sector": "消费"
+    },
+    {
+      "symbol": "000975.SZ",
+      "name": "山金国际",
+      "sector": "资源"
+    },
+    {
+      "symbol": "601816.SH",
+      "name": "京沪高铁",
+      "sector": "铁路"
+    },
+    {
+      "symbol": "000933.SZ",
+      "name": "神火股份",
+      "sector": "资源"
+    },
+    {
+      "symbol": "600426.SH",
+      "name": "华鲁恒升",
+      "sector": "煤化工"
+    },
+    {
+      "symbol": "601872.SH",
+      "name": "招商轮船",
+      "sector": "水运"
+    },
+    {
+      "symbol": "002027.SZ",
+      "name": "分众传媒",
+      "sector": "广告包装"
+    },
+    {
+      "symbol": "002080.SZ",
+      "name": "中材科技",
+      "sector": "玻璃"
+    },
+    {
+      "symbol": "603799.SH",
+      "name": "华友钴业",
+      "sector": "资源"
+    },
+    {
+      "symbol": "000538.SZ",
+      "name": "云南白药",
+      "sector": "中成药"
+    },
+    {
+      "symbol": "603979.SH",
+      "name": "金诚信",
+      "sector": "资源"
+    },
+    {
+      "symbol": "000792.SZ",
+      "name": "盐湖股份",
+      "sector": "煤化工"
+    },
+    {
+      "symbol": "000423.SZ",
+      "name": "东阿阿胶",
+      "sector": "中成药"
+    },
+    {
+      "symbol": "002028.SZ",
+      "name": "思源电气",
+      "sector": "电气设备"
+    },
+    {
+      "symbol": "600886.SH",
+      "name": "国投电力",
+      "sector": "新能源电力"
+    },
+    {
+      "symbol": "600346.SH",
+      "name": "恒力石化",
+      "sector": "能源石油"
+    },
+    {
+      "symbol": "002155.SZ",
+      "name": "湖南黄金",
+      "sector": "资源"
+    },
+    {
+      "symbol": "601169.SH",
+      "name": "北京银行",
+      "sector": "金融"
+    },
+    {
+      "symbol": "600765.SH",
+      "name": "中航重机",
+      "sector": "航天军工"
+    },
+    {
+      "symbol": "600875.SH",
+      "name": "东方电气",
+      "sector": "电气设备"
+    },
+    {
+      "symbol": "600989.SH",
+      "name": "宝丰能源",
+      "sector": "化工原料"
+    },
+    {
+      "symbol": "601918.SH",
+      "name": "新集能源",
+      "sector": "煤炭"
+    },
+    {
+      "symbol": "000690.SZ",
+      "name": "宝新能源",
+      "sector": "新能源电力"
+    },
+    {
+      "symbol": "600926.SH",
+      "name": "杭州银行",
+      "sector": "金融"
+    },
+    {
+      "symbol": "000400.SZ",
+      "name": "许继电气",
+      "sector": "电气设备"
+    },
+    {
+      "symbol": "600141.SH",
+      "name": "兴发集团",
+      "sector": "煤化工"
+    },
+    {
+      "symbol": "000543.SZ",
+      "name": "皖能电力",
+      "sector": "新能源电力"
+    },
+    {
+      "symbol": "002033.SZ",
+      "name": "丽江股份",
+      "sector": "旅游景点"
+    },
+    {
+      "symbol": "601838.SH",
+      "name": "成都银行",
+      "sector": "金融"
+    },
+    {
+      "symbol": "600312.SH",
+      "name": "平高电气",
+      "sector": "电气设备"
+    },
+    {
+      "symbol": "000937.SZ",
+      "name": "冀中能源",
+      "sector": "煤炭"
+    },
+    {
+      "symbol": "600642.SH",
+      "name": "申能股份",
+      "sector": "火力发电"
+    },
+    {
+      "symbol": "001965.SZ",
+      "name": "招商公路",
+      "sector": "路桥"
+    },
+    {
+      "symbol": "600015.SH",
+      "name": "华夏银行",
+      "sector": "金融"
+    },
+    {
+      "symbol": "600970.SH",
+      "name": "中材国际",
+      "sector": "建筑工程"
+    },
+    {
+      "symbol": "601633.SH",
+      "name": "长城汽车",
+      "sector": "汽车"
+    },
+    {
+      "symbol": "000521.SZ",
+      "name": "长虹美菱",
+      "sector": "消费"
+    },
+    {
+      "symbol": "000786.SZ",
+      "name": "北新建材",
+      "sector": "其他建材"
+    },
+    {
+      "symbol": "600971.SH",
+      "name": "恒源煤电",
+      "sector": "煤炭"
+    },
+    {
+      "symbol": "601966.SH",
+      "name": "玲珑轮胎",
+      "sector": "汽车"
+    },
+    {
+      "symbol": "603338.SH",
+      "name": "浙江鼎力",
+      "sector": "工程机械"
+    },
+    {
+      "symbol": "603605.SH",
+      "name": "珀莱雅",
+      "sector": "日用化工"
+    },
+    {
+      "symbol": "002353.SZ",
+      "name": "杰瑞股份",
+      "sector": "化工机械"
+    },
+    {
+      "symbol": "002128.SZ",
+      "name": "电投能源",
+      "sector": "煤炭"
+    },
+    {
+      "symbol": "600038.SH",
+      "name": "中直股份",
+      "sector": "航天军工"
+    },
+    {
+      "symbol": "601500.SH",
+      "name": "通用股份",
+      "sector": "汽车"
+    },
+    {
+      "symbol": "600820.SH",
+      "name": "隧道股份",
+      "sector": "建筑工程"
+    },
+    {
+      "symbol": "600060.SH",
+      "name": "海信视像",
+      "sector": "消费"
+    },
+    {
+      "symbol": "002601.SZ",
+      "name": "龙佰集团",
+      "sector": "化工原料"
+    },
+    {
+      "symbol": "601717.SH",
+      "name": "中创智领",
+      "sector": "专用机械"
+    },
+    {
+      "symbol": "600674.SH",
+      "name": "川投能源",
+      "sector": "水力发电"
+    },
+    {
+      "symbol": "600398.SH",
+      "name": "海澜之家",
+      "sector": "服饰"
+    },
+    {
+      "symbol": "000951.SZ",
+      "name": "中国重汽",
+      "sector": "汽车"
+    },
+    {
+      "symbol": "600025.SH",
+      "name": "华能水电",
+      "sector": "水力发电"
+    },
+    {
+      "symbol": "002223.SZ",
+      "name": "鱼跃医疗",
+      "sector": "医药"
+    },
+    {
+      "symbol": "000550.SZ",
+      "name": "江铃汽车",
+      "sector": "汽车"
+    },
+    {
+      "symbol": "002078.SZ",
+      "name": "太阳纸业",
+      "sector": "造纸"
+    },
+    {
+      "symbol": "600582.SH",
+      "name": "天地科技",
+      "sector": "专用机械"
+    },
+    {
+      "symbol": "000683.SZ",
+      "name": "博源化工",
+      "sector": "化工原料"
+    },
+    {
+      "symbol": "601636.SH",
+      "name": "旗滨集团",
+      "sector": "玻璃"
+    },
+    {
+      "symbol": "600282.SH",
+      "name": "南钢股份",
+      "sector": "普钢"
+    },
+    {
+      "symbol": "600761.SH",
+      "name": "安徽合力",
+      "sector": "工程机械"
+    },
+    {
+      "symbol": "600566.SH",
+      "name": "济川药业",
+      "sector": "中成药"
+    },
+    {
+      "symbol": "600529.SH",
+      "name": "山东药玻",
+      "sector": "医药"
+    },
+    {
+      "symbol": "000581.SZ",
+      "name": "威孚高科",
+      "sector": "汽车"
+    },
+    {
+      "symbol": "600511.SH",
+      "name": "国药股份",
+      "sector": "医药"
+    },
+    {
+      "symbol": "601598.SH",
+      "name": "中国外运",
+      "sector": "仓储物流"
+    },
+    {
+      "symbol": "600138.SH",
+      "name": "中青旅",
+      "sector": "旅游景点"
+    },
+    {
+      "symbol": "600021.SH",
+      "name": "上海电力",
+      "sector": "新能源电力"
+    },
+    {
+      "symbol": "603129.SH",
+      "name": "春风动力",
+      "sector": "摩托车"
+    },
+    {
+      "symbol": "002270.SZ",
+      "name": "华明装备",
+      "sector": "电气设备"
+    },
+    {
+      "symbol": "603298.SH",
+      "name": "杭叉集团",
+      "sector": "工程机械"
+    },
+    {
+      "symbol": "000887.SZ",
+      "name": "中鼎股份",
+      "sector": "汽车"
+    },
+    {
+      "symbol": "601021.SH",
+      "name": "春秋航空",
+      "sector": "航天军工"
+    },
+    {
+      "symbol": "600750.SH",
+      "name": "华润江中",
+      "sector": "中成药"
+    },
+    {
+      "symbol": "600428.SH",
+      "name": "中远海特",
+      "sector": "水运"
+    },
+    {
+      "symbol": "600332.SH",
+      "name": "白云山",
+      "sector": "中成药"
+    },
+    {
+      "symbol": "601101.SH",
+      "name": "昊华能源",
+      "sector": "煤炭"
+    },
+    {
+      "symbol": "000729.SZ",
+      "name": "燕京啤酒",
+      "sector": "啤酒"
+    },
+    {
+      "symbol": "600246.SH",
+      "name": "万通发展",
+      "sector": "区域地产"
+    },
+    {
+      "symbol": "600329.SH",
+      "name": "达仁堂",
+      "sector": "中成药"
+    },
+    {
+      "symbol": "601233.SH",
+      "name": "桐昆股份",
+      "sector": "化纤"
+    },
+    {
+      "symbol": "002311.SZ",
+      "name": "海大集团",
+      "sector": "饲料"
+    },
+    {
+      "symbol": "600285.SH",
+      "name": "羚锐制药",
+      "sector": "医药"
+    },
+    {
+      "symbol": "000539.SZ",
+      "name": "粤电力Ａ",
+      "sector": "新能源电力"
+    },
+    {
+      "symbol": "000519.SZ",
+      "name": "中兵红箭",
+      "sector": "专用机械"
+    },
+    {
+      "symbol": "601808.SH",
+      "name": "中海油服",
+      "sector": "能源石油"
+    },
+    {
+      "symbol": "600233.SH",
+      "name": "圆通速递",
+      "sector": "仓储物流"
+    },
+    {
+      "symbol": "002840.SZ",
+      "name": "华统股份",
+      "sector": "消费"
+    },
+    {
+      "symbol": "000598.SZ",
+      "name": "兴蓉环境",
+      "sector": "水务"
+    },
+    {
+      "symbol": "000883.SZ",
+      "name": "湖北能源",
+      "sector": "水力发电"
+    },
+    {
+      "symbol": "000600.SZ",
+      "name": "建投能源",
+      "sector": "火力发电"
+    },
+    {
+      "symbol": "002430.SZ",
+      "name": "杭氧股份",
+      "sector": "化工机械"
+    },
+    {
+      "symbol": "600502.SH",
+      "name": "安徽建工",
+      "sector": "建筑工程"
+    },
+    {
+      "symbol": "601611.SH",
+      "name": "中国核建",
+      "sector": "建筑工程"
+    },
+    {
+      "symbol": "600528.SH",
+      "name": "中铁工业",
+      "sector": "运输设备"
+    },
+    {
+      "symbol": "600598.SH",
+      "name": "北大荒",
+      "sector": "种植业"
+    },
+    {
+      "symbol": "002608.SZ",
+      "name": "江苏国信",
+      "sector": "火力发电"
+    },
+    {
+      "symbol": "000830.SZ",
+      "name": "鲁西化工",
+      "sector": "化工原料"
+    },
+    {
+      "symbol": "000708.SZ",
+      "name": "中信特钢",
+      "sector": "特种钢"
+    },
+    {
+      "symbol": "002032.SZ",
+      "name": "苏 泊 尔",
+      "sector": "消费"
+    },
+    {
+      "symbol": "002372.SZ",
+      "name": "伟星新材",
+      "sector": "其他建材"
+    },
+    {
+      "symbol": "002705.SZ",
+      "name": "新宝股份",
+      "sector": "消费"
+    },
+    {
+      "symbol": "000422.SZ",
+      "name": "湖北宜化",
+      "sector": "煤化工"
+    },
+    {
+      "symbol": "600521.SH",
+      "name": "华海药业",
+      "sector": "医药"
+    },
+    {
+      "symbol": "000403.SZ",
+      "name": "派林生物",
+      "sector": "医药"
+    },
+    {
+      "symbol": "000065.SZ",
+      "name": "北方国际",
+      "sector": "建筑工程"
+    },
+    {
+      "symbol": "002737.SZ",
+      "name": "葵花药业",
+      "sector": "中成药"
+    },
+    {
+      "symbol": "002683.SZ",
+      "name": "广东宏大",
+      "sector": "化工原料"
+    },
+    {
+      "symbol": "603529.SH",
+      "name": "爱玛科技",
+      "sector": "摩托车"
+    },
+    {
+      "symbol": "600018.SH",
+      "name": "上港集团",
+      "sector": "港口"
+    },
+    {
+      "symbol": "603766.SH",
+      "name": "隆鑫通用",
+      "sector": "摩托车"
+    },
+    {
+      "symbol": "603871.SH",
+      "name": "嘉友国际",
+      "sector": "仓储物流"
+    },
+    {
+      "symbol": "600098.SH",
+      "name": "广州发展",
+      "sector": "火力发电"
+    },
+    {
+      "symbol": "603199.SH",
+      "name": "九华旅游",
+      "sector": "旅游景点"
+    },
+    {
+      "symbol": "603393.SH",
+      "name": "新天然气",
+      "sector": "能源石油"
+    },
+    {
+      "symbol": "601298.SH",
+      "name": "青岛港",
+      "sector": "港口"
+    },
+    {
+      "symbol": "002064.SZ",
+      "name": "华峰化学",
+      "sector": "化纤"
+    },
+    {
+      "symbol": "603977.SH",
+      "name": "国泰集团",
+      "sector": "化工原料"
+    },
+    {
+      "symbol": "603279.SH",
+      "name": "景津装备",
+      "sector": "环境保护"
+    },
+    {
+      "symbol": "000429.SZ",
+      "name": "粤高速Ａ",
+      "sector": "路桥"
+    },
+    {
+      "symbol": "600350.SH",
+      "name": "山东高速",
+      "sector": "路桥"
+    },
+    {
+      "symbol": "600388.SH",
+      "name": "龙净环保",
+      "sector": "环境保护"
+    },
+    {
+      "symbol": "600801.SH",
+      "name": "华新建材",
+      "sector": "水泥"
+    },
+    {
+      "symbol": "600710.SH",
+      "name": "苏美达",
+      "sector": "商贸代理"
+    },
+    {
+      "symbol": "601038.SH",
+      "name": "一拖股份",
+      "sector": "农用机械"
+    },
+    {
+      "symbol": "600755.SH",
+      "name": "厦门国贸",
+      "sector": "仓储物流"
+    },
+    {
+      "symbol": "002318.SZ",
+      "name": "久立特材",
+      "sector": "特种钢"
+    },
+    {
+      "symbol": "600486.SH",
+      "name": "扬农化工",
+      "sector": "煤化工"
+    },
+    {
+      "symbol": "600177.SH",
+      "name": "雅戈尔",
+      "sector": "服饰"
+    },
+    {
+      "symbol": "600352.SH",
+      "name": "浙江龙盛",
+      "sector": "染料涂料"
+    },
+    {
+      "symbol": "600461.SH",
+      "name": "洪城环境",
+      "sector": "水务"
+    },
+    {
+      "symbol": "600295.SH",
+      "name": "鄂尔多斯",
+      "sector": "特种钢"
+    },
+    {
+      "symbol": "600993.SH",
+      "name": "马应龙",
+      "sector": "中成药"
+    },
+    {
+      "symbol": "600054.SH",
+      "name": "黄山旅游",
+      "sector": "旅游景点"
+    },
+    {
+      "symbol": "001872.SZ",
+      "name": "招商港口",
+      "sector": "港口"
+    },
+    {
+      "symbol": "600562.SH",
+      "name": "国睿科技",
+      "sector": "通信设备"
+    },
+    {
+      "symbol": "000524.SZ",
+      "name": "岭南控股",
+      "sector": "旅游服务"
+    },
+    {
+      "symbol": "605296.SH",
+      "name": "神农集团",
+      "sector": "农业综合"
+    },
+    {
+      "symbol": "601001.SH",
+      "name": "晋控煤业",
+      "sector": "煤炭"
+    },
+    {
+      "symbol": "600050.SH",
+      "name": "中国联通",
+      "sector": "电信运营"
+    },
+    {
+      "symbol": "600938.SH",
+      "name": "中国海油",
+      "sector": "能源石油"
+    },
+    {
+      "symbol": "000725.SZ",
+      "name": "京东方Ａ",
+      "sector": "元器件"
+    },
+    {
+      "symbol": "601186.SH",
+      "name": "中国铁建",
+      "sector": "建筑工程"
+    },
+    {
+      "symbol": "600893.SH",
+      "name": "航发动力",
+      "sector": "航天军工"
+    },
+    {
+      "symbol": "000100.SZ",
+      "name": "TCL科技",
+      "sector": "元器件"
+    },
+    {
+      "symbol": "601975.SH",
+      "name": "招商南油",
+      "sector": "水运"
+    },
+    {
+      "symbol": "600887.SH",
+      "name": "伊利股份",
+      "sector": "乳制品"
+    },
+    {
+      "symbol": "601006.SH",
+      "name": "大秦铁路",
+      "sector": "铁路"
+    },
+    {
+      "symbol": "002371.SZ",
+      "name": "北方华创",
+      "sector": "半导体"
+    },
+    {
+      "symbol": "600795.SH",
+      "name": "国电电力",
+      "sector": "新能源电力"
+    },
+    {
+      "symbol": "600160.SH",
+      "name": "巨化股份",
+      "sector": "化工原料"
+    },
+    {
+      "symbol": "600256.SH",
+      "name": "广汇能源",
+      "sector": "能源石油"
+    },
+    {
+      "symbol": "000099.SZ",
+      "name": "中信海直",
+      "sector": "空运"
+    },
+    {
+      "symbol": "000932.SZ",
+      "name": "华菱钢铁",
+      "sector": "普钢"
+    },
+    {
+      "symbol": "600176.SH",
+      "name": "中国巨石",
+      "sector": "玻璃"
+    },
+    {
+      "symbol": "600023.SH",
+      "name": "浙能电力",
+      "sector": "新能源电力"
+    },
+    {
+      "symbol": "600011.SH",
+      "name": "华能国际",
+      "sector": "火力发电"
+    },
+    {
+      "symbol": "600126.SH",
+      "name": "杭钢股份",
+      "sector": "普钢"
+    },
+    {
+      "symbol": "600487.SH",
+      "name": "亨通光电",
+      "sector": "通信设备"
+    },
+    {
+      "symbol": "603986.SH",
+      "name": "兆易创新",
+      "sector": "半导体"
+    },
+    {
+      "symbol": "600026.SH",
+      "name": "中远海能",
+      "sector": "水运"
+    },
+    {
+      "symbol": "002463.SZ",
+      "name": "沪电股份",
+      "sector": "元器件"
+    },
+    {
+      "symbol": "600027.SH",
+      "name": "华电国际",
+      "sector": "火力发电"
+    },
+    {
+      "symbol": "600010.SH",
+      "name": "包钢股份",
+      "sector": "普钢"
+    },
+    {
+      "symbol": "000999.SZ",
+      "name": "华润三九",
+      "sector": "中成药"
+    },
+    {
+      "symbol": "002281.SZ",
+      "name": "光迅科技",
+      "sector": "光模块"
+    },
+    {
+      "symbol": "002444.SZ",
+      "name": "巨星科技",
+      "sector": "轻工机械"
+    },
+    {
+      "symbol": "000977.SZ",
+      "name": "浪潮信息",
+      "sector": "IT设备"
+    },
+    {
+      "symbol": "002409.SZ",
+      "name": "雅克科技",
+      "sector": "半导体"
+    },
+    {
+      "symbol": "000063.SZ",
+      "name": "中兴通讯",
+      "sector": "通信设备"
+    },
+    {
+      "symbol": "002415.SZ",
+      "name": "海康威视",
+      "sector": "IT设备"
+    },
+    {
+      "symbol": "601991.SH",
+      "name": "大唐发电",
+      "sector": "火力发电"
+    },
+    {
+      "symbol": "002625.SZ",
+      "name": "光启技术",
+      "sector": "航天军工"
+    },
+    {
+      "symbol": "600009.SH",
+      "name": "上海机场",
+      "sector": "机场"
+    },
+    {
+      "symbol": "600760.SH",
+      "name": "中航沈飞",
+      "sector": "航天军工"
+    },
+    {
+      "symbol": "000039.SZ",
+      "name": "中集集团",
+      "sector": "运输设备"
+    },
+    {
+      "symbol": "603019.SH",
+      "name": "中科曙光",
+      "sector": "IT设备"
+    },
+    {
+      "symbol": "600313.SH",
+      "name": "农发种业",
+      "sector": "种植业"
+    },
+    {
+      "symbol": "600415.SH",
+      "name": "小商品城",
+      "sector": "商品城"
+    },
+    {
+      "symbol": "600863.SH",
+      "name": "内蒙华电",
+      "sector": "火力发电"
+    },
+    {
+      "symbol": "603501.SH",
+      "name": "豪威集团",
+      "sector": "半导体"
+    },
+    {
+      "symbol": "000768.SZ",
+      "name": "中航西飞",
+      "sector": "航天军工"
+    },
+    {
+      "symbol": "000680.SZ",
+      "name": "山推股份",
+      "sector": "工程机械"
+    },
+    {
+      "symbol": "000733.SZ",
+      "name": "振华科技",
+      "sector": "元器件"
+    },
+    {
+      "symbol": "601111.SH",
+      "name": "中国国航",
+      "sector": "空运"
+    },
+    {
+      "symbol": "600600.SH",
+      "name": "青岛啤酒",
+      "sector": "啤酒"
+    },
+    {
+      "symbol": "601698.SH",
+      "name": "中国卫通",
+      "sector": "电信运营"
+    },
+    {
+      "symbol": "002456.SZ",
+      "name": "欧菲光",
+      "sector": "元器件"
+    },
+    {
+      "symbol": "601333.SH",
+      "name": "广深铁路",
+      "sector": "铁路"
+    },
+    {
+      "symbol": "600818.SH",
+      "name": "中路股份",
+      "sector": "文教休闲"
+    },
+    {
+      "symbol": "000938.SZ",
+      "name": "紫光股份",
+      "sector": "IT设备"
+    },
+    {
+      "symbol": "002916.SZ",
+      "name": "深南电路",
+      "sector": "元器件"
+    },
+    {
+      "symbol": "000066.SZ",
+      "name": "中国长城",
+      "sector": "IT设备"
+    },
+    {
+      "symbol": "603379.SH",
+      "name": "三美股份",
+      "sector": "化工原料"
+    },
+    {
+      "symbol": "002475.SZ",
+      "name": "立讯精密",
+      "sector": "元器件"
+    },
+    {
+      "symbol": "603619.SH",
+      "name": "中曼石油",
+      "sector": "能源石油"
+    },
+    {
+      "symbol": "600879.SH",
+      "name": "航天电子",
+      "sector": "航天军工"
+    },
+    {
+      "symbol": "601138.SH",
+      "name": "工业富联",
+      "sector": "通信设备"
+    },
+    {
+      "symbol": "601100.SH",
+      "name": "恒立液压",
+      "sector": "工程机械"
+    },
+    {
+      "symbol": "002493.SZ",
+      "name": "荣盛石化",
+      "sector": "化纤"
+    },
+    {
+      "symbol": "000988.SZ",
+      "name": "华工科技",
+      "sector": "专用机械"
+    },
+    {
+      "symbol": "002837.SZ",
+      "name": "英维克",
+      "sector": "专用机械"
+    },
+    {
+      "symbol": "002097.SZ",
+      "name": "山河智能",
+      "sector": "工程机械"
+    },
+    {
+      "symbol": "002739.SZ",
+      "name": "万达电影",
+      "sector": "影视音像"
+    },
+    {
+      "symbol": "600132.SH",
+      "name": "重庆啤酒",
+      "sector": "啤酒"
+    },
+    {
+      "symbol": "600133.SH",
+      "name": "东湖高新",
+      "sector": "环境保护"
+    },
+    {
+      "symbol": "002236.SZ",
+      "name": "大华股份",
+      "sector": "IT设备"
+    },
+    {
+      "symbol": "002152.SZ",
+      "name": "广电运通",
+      "sector": "IT设备"
+    },
+    {
+      "symbol": "603688.SH",
+      "name": "石英股份",
+      "sector": "矿物制品"
+    },
+    {
+      "symbol": "600703.SH",
+      "name": "三安光电",
+      "sector": "半导体"
+    },
+    {
+      "symbol": "601000.SH",
+      "name": "唐山港",
+      "sector": "港口"
+    },
+    {
+      "symbol": "600583.SH",
+      "name": "海油工程",
+      "sector": "能源石油"
+    },
+    {
+      "symbol": "002465.SZ",
+      "name": "海格通信",
+      "sector": "通信设备"
+    },
+    {
+      "symbol": "000973.SZ",
+      "name": "佛塑科技",
+      "sector": "塑料"
+    },
+    {
+      "symbol": "601865.SH",
+      "name": "福莱特",
+      "sector": "玻璃"
+    },
+    {
+      "symbol": "002352.SZ",
+      "name": "顺丰控股",
+      "sector": "仓储物流"
+    },
+    {
+      "symbol": "002230.SZ",
+      "name": "科大讯飞",
+      "sector": "科技软件"
+    },
+    {
+      "symbol": "002049.SZ",
+      "name": "紫光国微",
+      "sector": "半导体"
+    },
+    {
+      "symbol": "600157.SH",
+      "name": "永泰能源",
+      "sector": "火力发电"
+    },
+    {
+      "symbol": "600585.SH",
+      "name": "海螺水泥",
+      "sector": "水泥"
+    },
+    {
+      "symbol": "600522.SH",
+      "name": "中天科技",
+      "sector": "通信设备"
+    },
+    {
+      "symbol": "600584.SH",
+      "name": "长电科技",
+      "sector": "半导体"
+    },
+    {
+      "symbol": "600782.SH",
+      "name": "新钢股份",
+      "sector": "普钢"
+    },
+    {
+      "symbol": "002261.SZ",
+      "name": "拓维信息",
+      "sector": "科技软件"
+    },
+    {
+      "symbol": "600895.SH",
+      "name": "张江高科",
+      "sector": "园区开发"
+    },
+    {
+      "symbol": "002611.SZ",
+      "name": "东方精工",
+      "sector": "轻工机械"
+    },
+    {
+      "symbol": "600153.SH",
+      "name": "建发股份",
+      "sector": "仓储物流"
+    },
+    {
+      "symbol": "000592.SZ",
+      "name": "平潭发展",
+      "sector": "林业"
+    },
+    {
+      "symbol": "002555.SZ",
+      "name": "三七互娱",
+      "sector": "科技软件"
+    },
+    {
+      "symbol": "600331.SH",
+      "name": "宏达股份",
+      "sector": "煤化工"
+    },
+    {
+      "symbol": "002008.SZ",
+      "name": "大族激光",
+      "sector": "专用机械"
+    },
+    {
+      "symbol": "000034.SZ",
+      "name": "神州数码",
+      "sector": "科技软件"
+    },
+    {
+      "symbol": "601608.SH",
+      "name": "中信重工",
+      "sector": "专用机械"
+    },
+    {
+      "symbol": "601888.SH",
+      "name": "中国中免",
+      "sector": "旅游服务"
+    },
+    {
+      "symbol": "603927.SH",
+      "name": "中科软",
+      "sector": "科技软件"
+    },
+    {
+      "symbol": "600754.SH",
+      "name": "锦江酒店",
+      "sector": "酒店餐饮"
+    },
+    {
+      "symbol": "000859.SZ",
+      "name": "国风新材",
+      "sector": "塑料"
+    },
+    {
+      "symbol": "603533.SH",
+      "name": "掌阅科技",
+      "sector": "科技软件"
+    },
+    {
+      "symbol": "601595.SH",
+      "name": "上海电影",
+      "sector": "影视音像"
+    },
+    {
+      "symbol": "601928.SH",
+      "name": "凤凰传媒",
+      "sector": "出版业"
+    },
+    {
+      "symbol": "600048.SH",
+      "name": "保利发展",
+      "sector": "全国地产"
+    },
+    {
+      "symbol": "002208.SZ",
+      "name": "合肥城建",
+      "sector": "区域地产"
+    },
+    {
+      "symbol": "600004.SH",
+      "name": "白云机场",
+      "sector": "机场"
+    },
+    {
+      "symbol": "600373.SH",
+      "name": "中文传媒",
+      "sector": "出版业"
+    },
+    {
+      "symbol": "600088.SH",
+      "name": "中视传媒",
+      "sector": "影视音像"
+    },
+    {
+      "symbol": "600115.SH",
+      "name": "中国东航",
+      "sector": "空运"
+    },
+    {
+      "symbol": "000526.SZ",
+      "name": "学大教育",
+      "sector": "文教休闲"
+    },
+    {
+      "symbol": "000002.SZ",
+      "name": "万  科Ａ",
+      "sector": "全国地产"
+    },
+    {
+      "symbol": "002271.SZ",
+      "name": "东方雨虹",
+      "sector": "其他建材"
+    },
+    {
+      "symbol": "000709.SZ",
+      "name": "河钢股份",
+      "sector": "普钢"
+    },
+    {
+      "symbol": "000723.SZ",
+      "name": "美锦能源",
+      "sector": "煤化工"
+    },
+    {
+      "symbol": "002395.SZ",
+      "name": "双象股份",
+      "sector": "塑料"
+    },
+    {
+      "symbol": "600008.SH",
+      "name": "首创环保",
+      "sector": "水务"
+    },
+    {
+      "symbol": "002400.SZ",
+      "name": "省广集团",
+      "sector": "广告包装"
+    },
+    {
+      "symbol": "002568.SZ",
+      "name": "百润股份",
+      "sector": "红黄酒"
+    },
+    {
+      "symbol": "002747.SZ",
+      "name": "埃斯顿",
+      "sector": "机械基件"
+    },
+    {
+      "symbol": "002478.SZ",
+      "name": "常宝股份",
+      "sector": "钢加工"
+    },
+    {
+      "symbol": "603477.SH",
+      "name": "巨星农牧",
+      "sector": "农业综合"
+    }
+  ],
+  "symbols": [
+    "600150.SH",
+    "601857.SH",
+    "000333.SZ",
+    "603588.SH",
+    "601899.SH",
+    "600309.SH",
+    "601088.SH",
+    "000338.SZ",
+    "600028.SH",
+    "601919.SH",
+    "600685.SH",
+    "600690.SH",
+    "601728.SH",
+    "601168.SH",
+    "601985.SH",
+    "000651.SZ",
+    "601600.SH",
+    "600019.SH",
+    "600031.SH",
+    "600660.SH",
+    "601800.SH",
+    "601328.SH",
+    "600482.SH",
+    "601766.SH",
+    "000157.SZ",
+    "601390.SH",
+    "601398.SH",
+    "601225.SH",
+    "600985.SH",
+    "600036.SH",
+    "002714.SZ",
+    "600919.SH",
+    "601939.SH",
+    "600900.SH",
+    "600941.SH",
+    "600096.SH",
+    "601668.SH",
+    "000807.SZ",
+    "000425.SZ",
+    "600406.SH",
+    "002648.SZ",
+    "600737.SH",
+    "000975.SZ",
+    "601816.SH",
+    "000933.SZ",
+    "600426.SH",
+    "601872.SH",
+    "002027.SZ",
+    "002080.SZ",
+    "603799.SH",
+    "000538.SZ",
+    "603979.SH",
+    "000792.SZ",
+    "000423.SZ",
+    "002028.SZ",
+    "600886.SH",
+    "600346.SH",
+    "002155.SZ",
+    "601169.SH",
+    "600765.SH",
+    "600875.SH",
+    "600989.SH",
+    "601918.SH",
+    "000690.SZ",
+    "600926.SH",
+    "000400.SZ",
+    "600141.SH",
+    "000543.SZ",
+    "002033.SZ",
+    "601838.SH",
+    "600312.SH",
+    "000937.SZ",
+    "600642.SH",
+    "001965.SZ",
+    "600015.SH",
+    "600970.SH",
+    "601633.SH",
+    "000521.SZ",
+    "000786.SZ",
+    "600971.SH",
+    "601966.SH",
+    "603338.SH",
+    "603605.SH",
+    "002353.SZ",
+    "002128.SZ",
+    "600038.SH",
+    "601500.SH",
+    "600820.SH",
+    "600060.SH",
+    "002601.SZ",
+    "601717.SH",
+    "600674.SH",
+    "600398.SH",
+    "000951.SZ",
+    "600025.SH",
+    "002223.SZ",
+    "000550.SZ",
+    "002078.SZ",
+    "600582.SH",
+    "000683.SZ",
+    "601636.SH",
+    "600282.SH",
+    "600761.SH",
+    "600566.SH",
+    "600529.SH",
+    "000581.SZ",
+    "600511.SH",
+    "601598.SH",
+    "600138.SH",
+    "600021.SH",
+    "603129.SH",
+    "002270.SZ",
+    "603298.SH",
+    "000887.SZ",
+    "601021.SH",
+    "600750.SH",
+    "600428.SH",
+    "600332.SH",
+    "601101.SH",
+    "000729.SZ",
+    "600246.SH",
+    "600329.SH",
+    "601233.SH",
+    "002311.SZ",
+    "600285.SH",
+    "000539.SZ",
+    "000519.SZ",
+    "601808.SH",
+    "600233.SH",
+    "002840.SZ",
+    "000598.SZ",
+    "000883.SZ",
+    "000600.SZ",
+    "002430.SZ",
+    "600502.SH",
+    "601611.SH",
+    "600528.SH",
+    "600598.SH",
+    "002608.SZ",
+    "000830.SZ",
+    "000708.SZ",
+    "002032.SZ",
+    "002372.SZ",
+    "002705.SZ",
+    "000422.SZ",
+    "600521.SH",
+    "000403.SZ",
+    "000065.SZ",
+    "002737.SZ",
+    "002683.SZ",
+    "603529.SH",
+    "600018.SH",
+    "603766.SH",
+    "603871.SH",
+    "600098.SH",
+    "603199.SH",
+    "603393.SH",
+    "601298.SH",
+    "002064.SZ",
+    "603977.SH",
+    "603279.SH",
+    "000429.SZ",
+    "600350.SH",
+    "600388.SH",
+    "600801.SH",
+    "600710.SH",
+    "601038.SH",
+    "600755.SH",
+    "002318.SZ",
+    "600486.SH",
+    "600177.SH",
+    "600352.SH",
+    "600461.SH",
+    "600295.SH",
+    "600993.SH",
+    "600054.SH",
+    "001872.SZ",
+    "600562.SH",
+    "000524.SZ",
+    "605296.SH",
+    "601001.SH",
+    "600050.SH",
+    "600938.SH",
+    "000725.SZ",
+    "601186.SH",
+    "600893.SH",
+    "000100.SZ",
+    "601975.SH",
+    "600887.SH",
+    "601006.SH",
+    "002371.SZ",
+    "600795.SH",
+    "600160.SH",
+    "600256.SH",
+    "000099.SZ",
+    "000932.SZ",
+    "600176.SH",
+    "600023.SH",
+    "600011.SH",
+    "600126.SH",
+    "600487.SH",
+    "603986.SH",
+    "600026.SH",
+    "002463.SZ",
+    "600027.SH",
+    "600010.SH",
+    "000999.SZ",
+    "002281.SZ",
+    "002444.SZ",
+    "000977.SZ",
+    "002409.SZ",
+    "000063.SZ",
+    "002415.SZ",
+    "601991.SH",
+    "002625.SZ",
+    "600009.SH",
+    "600760.SH",
+    "000039.SZ",
+    "603019.SH",
+    "600313.SH",
+    "600415.SH",
+    "600863.SH",
+    "603501.SH",
+    "000768.SZ",
+    "000680.SZ",
+    "000733.SZ",
+    "601111.SH",
+    "600600.SH",
+    "601698.SH",
+    "002456.SZ",
+    "601333.SH",
+    "600818.SH",
+    "000938.SZ",
+    "002916.SZ",
+    "000066.SZ",
+    "603379.SH",
+    "002475.SZ",
+    "603619.SH",
+    "600879.SH",
+    "601138.SH",
+    "601100.SH",
+    "002493.SZ",
+    "000988.SZ",
+    "002837.SZ",
+    "002097.SZ",
+    "002739.SZ",
+    "600132.SH",
+    "600133.SH",
+    "002236.SZ",
+    "002152.SZ",
+    "603688.SH",
+    "600703.SH",
+    "601000.SH",
+    "600583.SH",
+    "002465.SZ",
+    "000973.SZ",
+    "601865.SH",
+    "002352.SZ",
+    "002230.SZ",
+    "002049.SZ",
+    "600157.SH",
+    "600585.SH",
+    "600522.SH",
+    "600584.SH",
+    "600782.SH",
+    "002261.SZ",
+    "600895.SH",
+    "002611.SZ",
+    "600153.SH",
+    "000592.SZ",
+    "002555.SZ",
+    "600331.SH",
+    "002008.SZ",
+    "000034.SZ",
+    "601608.SH",
+    "601888.SH",
+    "603927.SH",
+    "600754.SH",
+    "000859.SZ",
+    "603533.SH",
+    "601595.SH",
+    "601928.SH",
+    "600048.SH",
+    "002208.SZ",
+    "600004.SH",
+    "600373.SH",
+    "600088.SH",
+    "600115.SH",
+    "000526.SZ",
+    "000002.SZ",
+    "002271.SZ",
+    "000709.SZ",
+    "000723.SZ",
+    "002395.SZ",
+    "600008.SH",
+    "002400.SZ",
+    "002568.SZ",
+    "002747.SZ",
+    "002478.SZ",
+    "603477.SH"
+  ],
+  "symbol_count": 300,
+  "theme_allocations": [
+    {
+      "theme": "船舶",
+      "selected_count": 3,
+      "refined_count": 3,
+      "coarse_count": 4,
+      "eligible_count": 4,
+      "theme_strength": 0.3143689106869708,
+      "cap": 48,
+      "floor": 2
+    },
+    {
+      "theme": "能源石油",
+      "selected_count": 9,
+      "refined_count": 11,
+      "coarse_count": 14,
+      "eligible_count": 14,
+      "theme_strength": 0.24857466420329666,
+      "cap": 48,
+      "floor": 2
+    },
+    {
+      "theme": "消费",
+      "selected_count": 9,
+      "refined_count": 36,
+      "coarse_count": 48,
+      "eligible_count": 48,
+      "theme_strength": 0.2154888837783049,
+      "cap": 48,
+      "floor": 2
+    },
+    {
+      "theme": "环境保护",
+      "selected_count": 4,
+      "refined_count": 4,
+      "coarse_count": 5,
+      "eligible_count": 5,
+      "theme_strength": 0.23386230430056504,
+      "cap": 48,
+      "floor": 2
+    },
+    {
+      "theme": "资源",
+      "selected_count": 9,
+      "refined_count": 51,
+      "coarse_count": 67,
+      "eligible_count": 67,
+      "theme_strength": 0.23546735642330865,
+      "cap": 48,
+      "floor": 2
+    },
+    {
+      "theme": "化工原料",
+      "selected_count": 9,
+      "refined_count": 12,
+      "coarse_count": 23,
+      "eligible_count": 23,
+      "theme_strength": 0.1805156786894513,
+      "cap": 48,
+      "floor": 2
+    },
+    {
+      "theme": "煤炭",
+      "selected_count": 9,
+      "refined_count": 19,
+      "coarse_count": 19,
+      "eligible_count": 19,
+      "theme_strength": 0.2803664463704653,
+      "cap": 48,
+      "floor": 2
+    },
+    {
+      "theme": "汽车",
+      "selected_count": 9,
+      "refined_count": 42,
+      "coarse_count": 62,
+      "eligible_count": 62,
+      "theme_strength": 0.19600129969007093,
+      "cap": 48,
+      "floor": 2
+    },
+    {
+      "theme": "水运",
+      "selected_count": 5,
+      "refined_count": 5,
+      "coarse_count": 7,
+      "eligible_count": 7,
+      "theme_strength": 0.2314911493015266,
+      "cap": 48,
+      "floor": 2
+    },
+    {
+      "theme": "电信运营",
+      "selected_count": 4,
+      "refined_count": 4,
+      "coarse_count": 4,
+      "eligible_count": 4,
+      "theme_strength": 0.3015162905453906,
+      "cap": 48,
+      "floor": 2
+    },
+    {
+      "theme": "新能源电力",
+      "selected_count": 9,
+      "refined_count": 13,
+      "coarse_count": 21,
+      "eligible_count": 21,
+      "theme_strength": 0.19558333733392524,
+      "cap": 48,
+      "floor": 2
+    },
+    {
+      "theme": "普钢",
+      "selected_count": 7,
+      "refined_count": 7,
+      "coarse_count": 7,
+      "eligible_count": 7,
+      "theme_strength": 0.2761505323649619,
+      "cap": 48,
+      "floor": 2
+    },
+    {
+      "theme": "工程机械",
+      "selected_count": 9,
+      "refined_count": 11,
+      "coarse_count": 13,
+      "eligible_count": 13,
+      "theme_strength": 0.2614503052176937,
+      "cap": 48,
+      "floor": 2
+    },
+    {
+      "theme": "建筑工程",
+      "selected_count": 9,
+      "refined_count": 20,
+      "coarse_count": 24,
+      "eligible_count": 24,
+      "theme_strength": 0.23332061823294664,
+      "cap": 48,
+      "floor": 2
+    },
+    {
+      "theme": "金融",
+      "selected_count": 9,
+      "refined_count": 66,
+      "coarse_count": 96,
+      "eligible_count": 96,
+      "theme_strength": 0.17348388010102495,
+      "cap": 48,
+      "floor": 2
+    },
+    {
+      "theme": "运输设备",
+      "selected_count": 3,
+      "refined_count": 3,
+      "coarse_count": 4,
+      "eligible_count": 4,
+      "theme_strength": 0.28877520237131504,
+      "cap": 48,
+      "floor": 2
+    },
+    {
+      "theme": "农业综合",
+      "selected_count": 3,
+      "refined_count": 3,
+      "coarse_count": 6,
+      "eligible_count": 6,
+      "theme_strength": 0.13373262690998708,
+      "cap": 48,
+      "floor": 2
+    },
+    {
+      "theme": "煤化工",
+      "selected_count": 8,
+      "refined_count": 8,
+      "coarse_count": 10,
+      "eligible_count": 10,
+      "theme_strength": 0.18464167460575776,
+      "cap": 48,
+      "floor": 2
+    },
+    {
+      "theme": "电气设备",
+      "selected_count": 6,
+      "refined_count": 32,
+      "coarse_count": 57,
+      "eligible_count": 57,
+      "theme_strength": 0.1714654604872887,
+      "cap": 48,
+      "floor": 2
+    },
+    {
+      "theme": "航天军工",
+      "selected_count": 9,
+      "refined_count": 15,
+      "coarse_count": 20,
+      "eligible_count": 20,
+      "theme_strength": 0.20009258972376953,
+      "cap": 48,
+      "floor": 2
+    },
+    {
+      "theme": "铁路",
+      "selected_count": 3,
+      "refined_count": 3,
+      "coarse_count": 3,
+      "eligible_count": 3,
+      "theme_strength": 0.25391853312917595,
+      "cap": 48,
+      "floor": 2
+    },
+    {
+      "theme": "广告包装",
+      "selected_count": 2,
+      "refined_count": 2,
+      "coarse_count": 5,
+      "eligible_count": 5,
+      "theme_strength": 0.1073421645510245,
+      "cap": 48,
+      "floor": 2
+    },
+    {
+      "theme": "玻璃",
+      "selected_count": 4,
+      "refined_count": 4,
+      "coarse_count": 4,
+      "eligible_count": 4,
+      "theme_strength": 0.24230770851092817,
+      "cap": 48,
+      "floor": 2
+    },
+    {
+      "theme": "中成药",
+      "selected_count": 9,
+      "refined_count": 12,
+      "coarse_count": 25,
+      "eligible_count": 25,
+      "theme_strength": 0.14036842752439618,
+      "cap": 48,
+      "floor": 2
+    },
+    {
+      "theme": "旅游景点",
+      "selected_count": 4,
+      "refined_count": 4,
+      "coarse_count": 8,
+      "eligible_count": 8,
+      "theme_strength": 0.12853045286007347,
+      "cap": 48,
+      "floor": 2
+    },
+    {
+      "theme": "火力发电",
+      "selected_count": 9,
+      "refined_count": 11,
+      "coarse_count": 13,
+      "eligible_count": 13,
+      "theme_strength": 0.19603430627873042,
+      "cap": 48,
+      "floor": 2
+    },
+    {
+      "theme": "路桥",
+      "selected_count": 3,
+      "refined_count": 3,
+      "coarse_count": 5,
+      "eligible_count": 5,
+      "theme_strength": 0.13497191755059293,
+      "cap": 48,
+      "floor": 2
+    },
+    {
+      "theme": "其他建材",
+      "selected_count": 3,
+      "refined_count": 3,
+      "coarse_count": 4,
+      "eligible_count": 4,
+      "theme_strength": 0.16892864086413528,
+      "cap": 48,
+      "floor": 2
+    },
+    {
+      "theme": "日用化工",
+      "selected_count": 1,
+      "refined_count": 1,
+      "coarse_count": 1,
+      "eligible_count": 1,
+      "theme_strength": 0.20832358730916642,
+      "cap": 48,
+      "floor": 1
+    },
+    {
+      "theme": "化工机械",
+      "selected_count": 2,
+      "refined_count": 2,
+      "coarse_count": 3,
+      "eligible_count": 3,
+      "theme_strength": 0.14713660957459623,
+      "cap": 48,
+      "floor": 2
+    },
+    {
+      "theme": "专用机械",
+      "selected_count": 7,
+      "refined_count": 8,
+      "coarse_count": 20,
+      "eligible_count": 20,
+      "theme_strength": 0.12469681023746215,
+      "cap": 48,
+      "floor": 2
+    },
+    {
+      "theme": "水力发电",
+      "selected_count": 3,
+      "refined_count": 3,
+      "coarse_count": 3,
+      "eligible_count": 3,
+      "theme_strength": 0.18685896273044317,
+      "cap": 48,
+      "floor": 2
+    },
+    {
+      "theme": "服饰",
+      "selected_count": 2,
+      "refined_count": 2,
+      "coarse_count": 6,
+      "eligible_count": 6,
+      "theme_strength": 0.12668708382830984,
+      "cap": 48,
+      "floor": 2
+    },
+    {
+      "theme": "医药",
+      "selected_count": 6,
+      "refined_count": 33,
+      "coarse_count": 58,
+      "eligible_count": 58,
+      "theme_strength": 0.15522363351409088,
+      "cap": 48,
+      "floor": 2
+    },
+    {
+      "theme": "造纸",
+      "selected_count": 1,
+      "refined_count": 1,
+      "coarse_count": 2,
+      "eligible_count": 2,
+      "theme_strength": 0.08951691318864505,
+      "cap": 48,
+      "floor": 1
+    },
+    {
+      "theme": "仓储物流",
+      "selected_count": 6,
+      "refined_count": 7,
+      "coarse_count": 11,
+      "eligible_count": 11,
+      "theme_strength": 0.11822973928195146,
+      "cap": 48,
+      "floor": 2
+    },
+    {
+      "theme": "摩托车",
+      "selected_count": 3,
+      "refined_count": 3,
+      "coarse_count": 4,
+      "eligible_count": 4,
+      "theme_strength": 0.26939701276242023,
+      "cap": 48,
+      "floor": 2
+    },
+    {
+      "theme": "啤酒",
+      "selected_count": 3,
+      "refined_count": 3,
+      "coarse_count": 3,
+      "eligible_count": 3,
+      "theme_strength": 0.17551620720525749,
+      "cap": 48,
+      "floor": 2
+    },
+    {
+      "theme": "区域地产",
+      "selected_count": 2,
+      "refined_count": 2,
+      "coarse_count": 6,
+      "eligible_count": 6,
+      "theme_strength": 0.10744516556571694,
+      "cap": 48,
+      "floor": 2
+    },
+    {
+      "theme": "化纤",
+      "selected_count": 3,
+      "refined_count": 3,
+      "coarse_count": 7,
+      "eligible_count": 7,
+      "theme_strength": 0.12012272643114996,
+      "cap": 48,
+      "floor": 2
+    },
+    {
+      "theme": "饲料",
+      "selected_count": 1,
+      "refined_count": 1,
+      "coarse_count": 4,
+      "eligible_count": 4,
+      "theme_strength": 0.06750989615815363,
+      "cap": 48,
+      "floor": 1
+    },
+    {
+      "theme": "水务",
+      "selected_count": 3,
+      "refined_count": 3,
+      "coarse_count": 3,
+      "eligible_count": 3,
+      "theme_strength": 0.13721532043469828,
+      "cap": 48,
+      "floor": 2
+    },
+    {
+      "theme": "种植业",
+      "selected_count": 2,
+      "refined_count": 2,
+      "coarse_count": 3,
+      "eligible_count": 3,
+      "theme_strength": 0.17982803843053768,
+      "cap": 48,
+      "floor": 2
+    },
+    {
+      "theme": "特种钢",
+      "selected_count": 3,
+      "refined_count": 3,
+      "coarse_count": 5,
+      "eligible_count": 5,
+      "theme_strength": 0.11562780172793165,
+      "cap": 48,
+      "floor": 2
+    },
+    {
+      "theme": "港口",
+      "selected_count": 4,
+      "refined_count": 4,
+      "coarse_count": 4,
+      "eligible_count": 4,
+      "theme_strength": 0.14384628478233574,
+      "cap": 48,
+      "floor": 2
+    },
+    {
+      "theme": "水泥",
+      "selected_count": 2,
+      "refined_count": 2,
+      "coarse_count": 4,
+      "eligible_count": 4,
+      "theme_strength": 0.06646799848567377,
+      "cap": 48,
+      "floor": 2
+    },
+    {
+      "theme": "商贸代理",
+      "selected_count": 1,
+      "refined_count": 1,
+      "coarse_count": 3,
+      "eligible_count": 3,
+      "theme_strength": 0.05301550558955611,
+      "cap": 48,
+      "floor": 1
+    },
+    {
+      "theme": "农用机械",
+      "selected_count": 1,
+      "refined_count": 1,
+      "coarse_count": 1,
+      "eligible_count": 1,
+      "theme_strength": 0.14368646195989318,
+      "cap": 48,
+      "floor": 1
+    },
+    {
+      "theme": "染料涂料",
+      "selected_count": 1,
+      "refined_count": 1,
+      "coarse_count": 2,
+      "eligible_count": 2,
+      "theme_strength": 0.029374741800607417,
+      "cap": 48,
+      "floor": 1
+    },
+    {
+      "theme": "通信设备",
+      "selected_count": 6,
+      "refined_count": 12,
+      "coarse_count": 26,
+      "eligible_count": 26,
+      "theme_strength": 0.14628025212732748,
+      "cap": 48,
+      "floor": 2
+    },
+    {
+      "theme": "旅游服务",
+      "selected_count": 2,
+      "refined_count": 2,
+      "coarse_count": 4,
+      "eligible_count": 4,
+      "theme_strength": 0.11177560762761753,
+      "cap": 48,
+      "floor": 2
+    },
+    {
+      "theme": "元器件",
+      "selected_count": 7,
+      "refined_count": 21,
+      "coarse_count": 47,
+      "eligible_count": 47,
+      "theme_strength": 0.15022700013005613,
+      "cap": 48,
+      "floor": 2
+    },
+    {
+      "theme": "乳制品",
+      "selected_count": 1,
+      "refined_count": 1,
+      "coarse_count": 1,
+      "eligible_count": 1,
+      "theme_strength": 0.27759541784628294,
+      "cap": 48,
+      "floor": 1
+    },
+    {
+      "theme": "半导体",
+      "selected_count": 7,
+      "refined_count": 11,
+      "coarse_count": 22,
+      "eligible_count": 22,
+      "theme_strength": 0.15895378219498435,
+      "cap": 48,
+      "floor": 2
+    },
+    {
+      "theme": "空运",
+      "selected_count": 3,
+      "refined_count": 3,
+      "coarse_count": 3,
+      "eligible_count": 3,
+      "theme_strength": 0.3861777406437358,
+      "cap": 48,
+      "floor": 2
+    },
+    {
+      "theme": "光模块",
+      "selected_count": 1,
+      "refined_count": 1,
+      "coarse_count": 1,
+      "eligible_count": 1,
+      "theme_strength": 0.34171157352199333,
+      "cap": 48,
+      "floor": 1
+    },
+    {
+      "theme": "轻工机械",
+      "selected_count": 2,
+      "refined_count": 2,
+      "coarse_count": 2,
+      "eligible_count": 2,
+      "theme_strength": 0.18325404475053914,
+      "cap": 48,
+      "floor": 2
+    },
+    {
+      "theme": "IT设备",
+      "selected_count": 7,
+      "refined_count": 12,
+      "coarse_count": 17,
+      "eligible_count": 17,
+      "theme_strength": 0.19126016462730155,
+      "cap": 48,
+      "floor": 2
+    },
+    {
+      "theme": "机场",
+      "selected_count": 2,
+      "refined_count": 2,
+      "coarse_count": 2,
+      "eligible_count": 2,
+      "theme_strength": 0.18227046995804705,
+      "cap": 48,
+      "floor": 2
+    },
+    {
+      "theme": "商品城",
+      "selected_count": 1,
+      "refined_count": 1,
+      "coarse_count": 1,
+      "eligible_count": 1,
+      "theme_strength": 0.2117784963127176,
+      "cap": 48,
+      "floor": 1
+    },
+    {
+      "theme": "文教休闲",
+      "selected_count": 2,
+      "refined_count": 2,
+      "coarse_count": 7,
+      "eligible_count": 7,
+      "theme_strength": 0.13368022562244242,
+      "cap": 48,
+      "floor": 2
+    },
+    {
+      "theme": "影视音像",
+      "selected_count": 3,
+      "refined_count": 3,
+      "coarse_count": 10,
+      "eligible_count": 10,
+      "theme_strength": 0.11892652529928749,
+      "cap": 48,
+      "floor": 2
+    },
+    {
+      "theme": "矿物制品",
+      "selected_count": 1,
+      "refined_count": 1,
+      "coarse_count": 3,
+      "eligible_count": 3,
+      "theme_strength": 0.12439025770418785,
+      "cap": 48,
+      "floor": 1
+    },
+    {
+      "theme": "塑料",
+      "selected_count": 3,
+      "refined_count": 3,
+      "coarse_count": 7,
+      "eligible_count": 7,
+      "theme_strength": 0.12269240087014242,
+      "cap": 48,
+      "floor": 2
+    },
+    {
+      "theme": "科技软件",
+      "selected_count": 6,
+      "refined_count": 20,
+      "coarse_count": 58,
+      "eligible_count": 58,
+      "theme_strength": 0.11978645178640944,
+      "cap": 48,
+      "floor": 2
+    },
+    {
+      "theme": "园区开发",
+      "selected_count": 1,
+      "refined_count": 1,
+      "coarse_count": 2,
+      "eligible_count": 2,
+      "theme_strength": 0.1691058093174459,
+      "cap": 48,
+      "floor": 1
+    },
+    {
+      "theme": "林业",
+      "selected_count": 1,
+      "refined_count": 1,
+      "coarse_count": 1,
+      "eligible_count": 1,
+      "theme_strength": 0.15478067951318455,
+      "cap": 48,
+      "floor": 1
+    },
+    {
+      "theme": "酒店餐饮",
+      "selected_count": 1,
+      "refined_count": 1,
+      "coarse_count": 3,
+      "eligible_count": 3,
+      "theme_strength": 0.06626160582451923,
+      "cap": 48,
+      "floor": 1
+    },
+    {
+      "theme": "出版业",
+      "selected_count": 2,
+      "refined_count": 2,
+      "coarse_count": 13,
+      "eligible_count": 13,
+      "theme_strength": 0.09737712896238199,
+      "cap": 48,
+      "floor": 2
+    },
+    {
+      "theme": "全国地产",
+      "selected_count": 2,
+      "refined_count": 2,
+      "coarse_count": 5,
+      "eligible_count": 5,
+      "theme_strength": 0.09986007921064512,
+      "cap": 48,
+      "floor": 2
+    },
+    {
+      "theme": "红黄酒",
+      "selected_count": 1,
+      "refined_count": 1,
+      "coarse_count": 1,
+      "eligible_count": 1,
+      "theme_strength": 0.10950699268620842,
+      "cap": 48,
+      "floor": 1
+    },
+    {
+      "theme": "机械基件",
+      "selected_count": 1,
+      "refined_count": 1,
+      "coarse_count": 7,
+      "eligible_count": 7,
+      "theme_strength": 0.10739395500382395,
+      "cap": 48,
+      "floor": 1
+    },
+    {
+      "theme": "钢加工",
+      "selected_count": 1,
+      "refined_count": 1,
+      "coarse_count": 2,
+      "eligible_count": 2,
+      "theme_strength": 0.10766631438657245,
+      "cap": 48,
+      "floor": 1
+    }
+  ]
+}

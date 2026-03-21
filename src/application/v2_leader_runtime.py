@@ -734,20 +734,44 @@ def top_leader_candidates(
     limit: int = 12,
 ) -> list[LeaderScoreSnapshot]:
     snapshots = build_leader_score_snapshots(state=state)
-    filtered = [
-        item
-        for item in snapshots
-        if not item.hard_negative
-    ]
-    filtered.sort(
-        key=lambda item: (
-            item.conviction_score,
-            item.candidate_score,
-            -item.negative_score,
-        ),
-        reverse=True,
-    )
-    return filtered[: max(1, int(limit))]
+    if not snapshots:
+        return []
+
+    def _sort_key(item: LeaderScoreSnapshot) -> tuple[float, float, float, float]:
+        theme_percentile = _rank_percentile(int(item.theme_rank), int(item.theme_size))
+        role_term = _role_bonus(str(item.role))
+        phase_term = _phase_bonus(str(item.theme_phase))
+        filter_score = _clip01(
+            0.44
+            + 0.34 * float(item.candidate_score)
+            + 0.18 * float(item.conviction_score)
+            + 0.10 * float(theme_percentile)
+            + 0.18 * float(role_term)
+            + 0.10 * float(phase_term)
+            - 0.42 * float(item.negative_score)
+            - (0.22 if bool(item.role_downgrade) else 0.0)
+            - (0.35 if bool(item.hard_negative) else 0.0)
+        )
+        rank_score = (
+            0.58 * float(item.candidate_score)
+            + 0.24 * float(item.conviction_score)
+            + 0.12 * float(theme_percentile)
+            + 0.10 * float(role_term)
+            + 0.08 * float(phase_term)
+            - 0.28 * float(item.negative_score)
+            - (0.12 if bool(item.role_downgrade) else 0.0)
+            - (0.25 if bool(item.hard_negative) else 0.0)
+        )
+        passes = 1.0 if (not bool(item.hard_negative) and filter_score >= 0.60) else 0.0
+        return (
+            passes,
+            float(rank_score),
+            float(filter_score),
+            -float(item.negative_score),
+        )
+
+    ranked = sorted(snapshots, key=_sort_key, reverse=True)
+    return ranked[: max(1, int(limit))]
 
 
 def apply_leader_candidate_overlay(
@@ -768,42 +792,91 @@ def apply_leader_candidate_overlay(
     if shortlist_size <= 0:
         shortlist_size = len(symbols)
     shortlist_size = min(shortlist_size, len(symbols))
-    core_symbols = list(symbols[:shortlist_size])
-    tail_symbols = list(symbols[shortlist_size:])
+    original_core = list(symbols[:shortlist_size])
+    symbol_sector_map = {
+        str(getattr(stock, "symbol", "")): str(getattr(stock, "sector", ""))
+        for stock in getattr(state, "stocks", []) or []
+        if str(getattr(stock, "symbol", "")).strip()
+    }
 
     def _sort_key(symbol: str) -> tuple[float, float, float, float, int]:
         payload = score_map.get(symbol)
         if payload is None:
             return (2.0, 0.0, 0.0, 2.0, rank_map.get(symbol, len(rank_map)))
+        theme_percentile = _rank_percentile(int(payload.theme_rank), int(payload.theme_size))
+        shortlist_support = _shortlist_support(
+            symbol=symbol,
+            shortlist_rank_map=rank_map,
+            shortlist_size=shortlist_size,
+            total_scored=max(len(symbols), int(getattr(selection, "total_scored", len(symbols)) or len(symbols))),
+        )
+        role_term = _role_bonus(str(payload.role))
+        phase_term = _phase_bonus(str(payload.theme_phase))
+        filter_score = _clip01(
+            0.44
+            + 0.34 * float(payload.candidate_score)
+            + 0.18 * float(payload.conviction_score)
+            + 0.10 * float(theme_percentile)
+            + 0.18 * float(role_term)
+            + 0.10 * float(phase_term)
+            - 0.42 * float(payload.negative_score)
+            - (0.22 if bool(payload.role_downgrade) else 0.0)
+            - (0.35 if bool(payload.hard_negative) else 0.0)
+        )
+        overlay_rank_score = (
+            0.58 * float(payload.candidate_score)
+            + 0.24 * float(payload.conviction_score)
+            + 0.12 * float(theme_percentile)
+            + 0.10 * float(role_term)
+            + 0.08 * float(phase_term)
+            + 0.08 * float(shortlist_support)
+            - 0.28 * float(payload.negative_score)
+            - (0.12 if bool(payload.role_downgrade) else 0.0)
+            - (0.25 if bool(payload.hard_negative) else 0.0)
+        )
+        passes_filter = 1.0 if (not payload.hard_negative and filter_score >= 0.60) else 0.0
         return (
-            1.0 if payload.hard_negative else 0.0,
-            -float(payload.conviction_score),
-            -float(payload.candidate_score),
-            float(payload.negative_score),
+            passes_filter,
+            float(overlay_rank_score),
+            float(filter_score),
+            -float(payload.negative_score),
             rank_map.get(symbol, len(rank_map)),
         )
 
-    sorted_core = sorted(core_symbols, key=_sort_key)
-    sorted_tail = sorted(tail_symbols, key=_sort_key)
-    reordered = sorted_core + sorted_tail
+    reordered = sorted(symbols, key=_sort_key, reverse=True)
     if reordered == symbols:
         return state
 
-    top_promoted = [
-        symbol
-        for symbol in sorted_core[: min(3, len(sorted_core))]
-        if rank_map.get(symbol, len(rank_map)) > sorted_core.index(symbol)
-    ]
+    refreshed_core = list(reordered[:shortlist_size])
+    top_promoted = [symbol for symbol in refreshed_core if symbol not in original_core]
+    demoted_from_core = [symbol for symbol in original_core if symbol not in refreshed_core]
+    shortlisted_sectors = list(
+        dict.fromkeys(
+            symbol_sector_map.get(symbol, "")
+            for symbol in refreshed_core
+            if symbol_sector_map.get(symbol, "")
+        )
+    )
+    sector_slots: dict[str, int] = {}
+    for symbol in refreshed_core:
+        sector = symbol_sector_map.get(symbol, "")
+        if not sector:
+            continue
+        sector_slots[sector] = int(sector_slots.get(sector, 0) + 1)
     notes = list(getattr(selection, "selection_notes", []) or [])
-    note = "Leader overlay reprioritized existing shortlist order without changing membership."
+    note = "Leader overlay reprioritized shortlist order and refreshed core membership."
     if top_promoted:
-        note += " Promoted: " + ", ".join(top_promoted[:3])
+        note += " Promoted into core: " + ", ".join(top_promoted[:3])
+    if demoted_from_core:
+        note += " Demoted from core: " + ", ".join(demoted_from_core[:3])
     notes.append(note)
     return replace(
         state,
         candidate_selection=replace(
             selection,
             shortlisted_symbols=reordered,
+            shortlisted_sectors=shortlisted_sectors,
+            sector_slots=sector_slots,
             selection_notes=notes,
         ),
     )

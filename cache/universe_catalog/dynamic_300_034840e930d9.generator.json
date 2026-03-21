@@ -1,0 +1,746 @@
+{
+  "generator_version": "dynamic_universe_v3_fresh_pool",
+  "source_universe_path": "D:\\gupiao\\config\\universe_all_a_3y_local_ready_nost_no_kc_cy_stable3y.json",
+  "source_universe_size": 2915,
+  "eligible_size": 304,
+  "coarse_pool_size": 304,
+  "refined_pool_size": 304,
+  "selected_pool_size": 300,
+  "generator_hash": "034840e930d9e3a99bc2efac51afe6c4b8664574a8f2f74201ae986bb7bc6809",
+  "manifest_path": "D:\\gupiao\\cache\\universe_catalog\\dynamic_300_034840e930d9.generator.json",
+  "theme_allocations": [
+    {
+      "theme": "消费",
+      "selected_count": 17,
+      "refined_count": 17,
+      "coarse_count": 17,
+      "eligible_count": 17,
+      "theme_strength": 0.2643093970044247,
+      "cap": 48,
+      "floor": 2
+    },
+    {
+      "theme": "电气设备",
+      "selected_count": 10,
+      "refined_count": 10,
+      "coarse_count": 10,
+      "eligible_count": 10,
+      "theme_strength": 0.34726589892359055,
+      "cap": 48,
+      "floor": 2
+    },
+    {
+      "theme": "元器件",
+      "selected_count": 19,
+      "refined_count": 19,
+      "coarse_count": 19,
+      "eligible_count": 19,
+      "theme_strength": 0.27900101835942914,
+      "cap": 48,
+      "floor": 2
+    },
+    {
+      "theme": "资源",
+      "selected_count": 5,
+      "refined_count": 5,
+      "coarse_count": 5,
+      "eligible_count": 5,
+      "theme_strength": 0.3424746778276018,
+      "cap": 48,
+      "floor": 2
+    },
+    {
+      "theme": "旅游服务",
+      "selected_count": 5,
+      "refined_count": 5,
+      "coarse_count": 5,
+      "eligible_count": 5,
+      "theme_strength": 0.24604603652594353,
+      "cap": 48,
+      "floor": 2
+    },
+    {
+      "theme": "汽车",
+      "selected_count": 20,
+      "refined_count": 24,
+      "coarse_count": 24,
+      "eligible_count": 24,
+      "theme_strength": 0.37632745523061983,
+      "cap": 48,
+      "floor": 2
+    },
+    {
+      "theme": "啤酒",
+      "selected_count": 2,
+      "refined_count": 2,
+      "coarse_count": 2,
+      "eligible_count": 2,
+      "theme_strength": 0.3742576921792951,
+      "cap": 48,
+      "floor": 2
+    },
+    {
+      "theme": "化工原料",
+      "selected_count": 11,
+      "refined_count": 11,
+      "coarse_count": 11,
+      "eligible_count": 11,
+      "theme_strength": 0.22139094776026333,
+      "cap": 48,
+      "floor": 2
+    },
+    {
+      "theme": "专用机械",
+      "selected_count": 7,
+      "refined_count": 7,
+      "coarse_count": 7,
+      "eligible_count": 7,
+      "theme_strength": 0.13679264951713285,
+      "cap": 48,
+      "floor": 2
+    },
+    {
+      "theme": "中成药",
+      "selected_count": 7,
+      "refined_count": 7,
+      "coarse_count": 7,
+      "eligible_count": 7,
+      "theme_strength": 0.13176550042327584,
+      "cap": 48,
+      "floor": 2
+    },
+    {
+      "theme": "金融",
+      "selected_count": 17,
+      "refined_count": 17,
+      "coarse_count": 17,
+      "eligible_count": 17,
+      "theme_strength": 0.21768420410290354,
+      "cap": 48,
+      "floor": 2
+    },
+    {
+      "theme": "科技软件",
+      "selected_count": 16,
+      "refined_count": 16,
+      "coarse_count": 16,
+      "eligible_count": 16,
+      "theme_strength": 0.17957441954484846,
+      "cap": 48,
+      "floor": 2
+    },
+    {
+      "theme": "航天军工",
+      "selected_count": 14,
+      "refined_count": 14,
+      "coarse_count": 14,
+      "eligible_count": 14,
+      "theme_strength": 0.21052080995272357,
+      "cap": 48,
+      "floor": 2
+    },
+    {
+      "theme": "环境保护",
+      "selected_count": 3,
+      "refined_count": 3,
+      "coarse_count": 3,
+      "eligible_count": 3,
+      "theme_strength": 0.24738570349660283,
+      "cap": 48,
+      "floor": 2
+    },
+    {
+      "theme": "影视音像",
+      "selected_count": 1,
+      "refined_count": 1,
+      "coarse_count": 1,
+      "eligible_count": 1,
+      "theme_strength": 0.18010514056939775,
+      "cap": 48,
+      "floor": 1
+    },
+    {
+      "theme": "房产服务",
+      "selected_count": 1,
+      "refined_count": 1,
+      "coarse_count": 1,
+      "eligible_count": 1,
+      "theme_strength": 0.1948569542351019,
+      "cap": 48,
+      "floor": 1
+    },
+    {
+      "theme": "综合类",
+      "selected_count": 4,
+      "refined_count": 4,
+      "coarse_count": 4,
+      "eligible_count": 4,
+      "theme_strength": 0.15973176788850904,
+      "cap": 48,
+      "floor": 2
+    },
+    {
+      "theme": "半导体",
+      "selected_count": 10,
+      "refined_count": 10,
+      "coarse_count": 10,
+      "eligible_count": 10,
+      "theme_strength": 0.24956254731736183,
+      "cap": 48,
+      "floor": 2
+    },
+    {
+      "theme": "旅游景点",
+      "selected_count": 8,
+      "refined_count": 8,
+      "coarse_count": 8,
+      "eligible_count": 8,
+      "theme_strength": 0.14345835532418566,
+      "cap": 48,
+      "floor": 2
+    },
+    {
+      "theme": "医药",
+      "selected_count": 12,
+      "refined_count": 12,
+      "coarse_count": 12,
+      "eligible_count": 12,
+      "theme_strength": 0.10944433875941632,
+      "cap": 48,
+      "floor": 2
+    },
+    {
+      "theme": "通信设备",
+      "selected_count": 5,
+      "refined_count": 5,
+      "coarse_count": 5,
+      "eligible_count": 5,
+      "theme_strength": 0.09216429255431735,
+      "cap": 48,
+      "floor": 2
+    },
+    {
+      "theme": "机械基件",
+      "selected_count": 2,
+      "refined_count": 2,
+      "coarse_count": 2,
+      "eligible_count": 2,
+      "theme_strength": 0.2827600910366187,
+      "cap": 48,
+      "floor": 2
+    },
+    {
+      "theme": "塑料",
+      "selected_count": 5,
+      "refined_count": 5,
+      "coarse_count": 5,
+      "eligible_count": 5,
+      "theme_strength": 0.26607655060070234,
+      "cap": 48,
+      "floor": 2
+    },
+    {
+      "theme": "煤炭",
+      "selected_count": 3,
+      "refined_count": 3,
+      "coarse_count": 3,
+      "eligible_count": 3,
+      "theme_strength": 0.27830467581946455,
+      "cap": 48,
+      "floor": 2
+    },
+    {
+      "theme": "IT设备",
+      "selected_count": 3,
+      "refined_count": 3,
+      "coarse_count": 3,
+      "eligible_count": 3,
+      "theme_strength": 0.33741946528074135,
+      "cap": 48,
+      "floor": 2
+    },
+    {
+      "theme": "水运",
+      "selected_count": 2,
+      "refined_count": 2,
+      "coarse_count": 2,
+      "eligible_count": 2,
+      "theme_strength": 0.4608492628366929,
+      "cap": 48,
+      "floor": 2
+    },
+    {
+      "theme": "普钢",
+      "selected_count": 1,
+      "refined_count": 1,
+      "coarse_count": 1,
+      "eligible_count": 1,
+      "theme_strength": 0.30933145566574366,
+      "cap": 48,
+      "floor": 1
+    },
+    {
+      "theme": "建筑工程",
+      "selected_count": 12,
+      "refined_count": 12,
+      "coarse_count": 12,
+      "eligible_count": 12,
+      "theme_strength": 0.16904024995087982,
+      "cap": 48,
+      "floor": 2
+    },
+    {
+      "theme": "林业",
+      "selected_count": 1,
+      "refined_count": 1,
+      "coarse_count": 1,
+      "eligible_count": 1,
+      "theme_strength": 0.3045986309839017,
+      "cap": 48,
+      "floor": 1
+    },
+    {
+      "theme": "船舶",
+      "selected_count": 4,
+      "refined_count": 4,
+      "coarse_count": 4,
+      "eligible_count": 4,
+      "theme_strength": 0.2357872720865828,
+      "cap": 48,
+      "floor": 2
+    },
+    {
+      "theme": "农业综合",
+      "selected_count": 4,
+      "refined_count": 4,
+      "coarse_count": 4,
+      "eligible_count": 4,
+      "theme_strength": 0.17639092849525662,
+      "cap": 48,
+      "floor": 2
+    },
+    {
+      "theme": "全国地产",
+      "selected_count": 7,
+      "refined_count": 7,
+      "coarse_count": 7,
+      "eligible_count": 7,
+      "theme_strength": 0.11371811433550827,
+      "cap": 48,
+      "floor": 2
+    },
+    {
+      "theme": "区域地产",
+      "selected_count": 7,
+      "refined_count": 7,
+      "coarse_count": 7,
+      "eligible_count": 7,
+      "theme_strength": 0.14082114501584247,
+      "cap": 48,
+      "floor": 2
+    },
+    {
+      "theme": "装修装饰",
+      "selected_count": 1,
+      "refined_count": 1,
+      "coarse_count": 1,
+      "eligible_count": 1,
+      "theme_strength": 0.36746256663973076,
+      "cap": 48,
+      "floor": 1
+    },
+    {
+      "theme": "机床制造",
+      "selected_count": 1,
+      "refined_count": 1,
+      "coarse_count": 1,
+      "eligible_count": 1,
+      "theme_strength": 0.3811361273416936,
+      "cap": 48,
+      "floor": 1
+    },
+    {
+      "theme": "种植业",
+      "selected_count": 7,
+      "refined_count": 7,
+      "coarse_count": 7,
+      "eligible_count": 7,
+      "theme_strength": 0.18407751625955182,
+      "cap": 48,
+      "floor": 2
+    },
+    {
+      "theme": "火力发电",
+      "selected_count": 1,
+      "refined_count": 1,
+      "coarse_count": 1,
+      "eligible_count": 1,
+      "theme_strength": 0.25515486306514207,
+      "cap": 48,
+      "floor": 1
+    },
+    {
+      "theme": "百货",
+      "selected_count": 2,
+      "refined_count": 2,
+      "coarse_count": 2,
+      "eligible_count": 2,
+      "theme_strength": 0.16813934290668647,
+      "cap": 48,
+      "floor": 2
+    },
+    {
+      "theme": "酒店餐饮",
+      "selected_count": 3,
+      "refined_count": 3,
+      "coarse_count": 3,
+      "eligible_count": 3,
+      "theme_strength": 0.22600590499484308,
+      "cap": 48,
+      "floor": 2
+    },
+    {
+      "theme": "广告包装",
+      "selected_count": 2,
+      "refined_count": 2,
+      "coarse_count": 2,
+      "eligible_count": 2,
+      "theme_strength": 0.12838294824007354,
+      "cap": 48,
+      "floor": 2
+    },
+    {
+      "theme": "能源石油",
+      "selected_count": 2,
+      "refined_count": 2,
+      "coarse_count": 2,
+      "eligible_count": 2,
+      "theme_strength": 0.14081475715176808,
+      "cap": 48,
+      "floor": 2
+    },
+    {
+      "theme": "钢加工",
+      "selected_count": 2,
+      "refined_count": 2,
+      "coarse_count": 2,
+      "eligible_count": 2,
+      "theme_strength": 0.13829441028821837,
+      "cap": 48,
+      "floor": 2
+    },
+    {
+      "theme": "铁路",
+      "selected_count": 1,
+      "refined_count": 1,
+      "coarse_count": 1,
+      "eligible_count": 1,
+      "theme_strength": 0.1531760912706377,
+      "cap": 48,
+      "floor": 1
+    },
+    {
+      "theme": "化纤",
+      "selected_count": 2,
+      "refined_count": 2,
+      "coarse_count": 2,
+      "eligible_count": 2,
+      "theme_strength": 0.11510748066951126,
+      "cap": 48,
+      "floor": 2
+    },
+    {
+      "theme": "商品城",
+      "selected_count": 1,
+      "refined_count": 1,
+      "coarse_count": 1,
+      "eligible_count": 1,
+      "theme_strength": 0.13267780327591455,
+      "cap": 48,
+      "floor": 1
+    },
+    {
+      "theme": "电器仪表",
+      "selected_count": 1,
+      "refined_count": 1,
+      "coarse_count": 1,
+      "eligible_count": 1,
+      "theme_strength": 0.10348749900380334,
+      "cap": 48,
+      "floor": 1
+    },
+    {
+      "theme": "公共交通",
+      "selected_count": 1,
+      "refined_count": 1,
+      "coarse_count": 1,
+      "eligible_count": 1,
+      "theme_strength": 0.15098594740703675,
+      "cap": 48,
+      "floor": 1
+    },
+    {
+      "theme": "商贸代理",
+      "selected_count": 2,
+      "refined_count": 2,
+      "coarse_count": 2,
+      "eligible_count": 2,
+      "theme_strength": 0.18521077379830023,
+      "cap": 48,
+      "floor": 2
+    },
+    {
+      "theme": "农用机械",
+      "selected_count": 1,
+      "refined_count": 1,
+      "coarse_count": 1,
+      "eligible_count": 1,
+      "theme_strength": 0.16065077556062352,
+      "cap": 48,
+      "floor": 1
+    },
+    {
+      "theme": "新能源电力",
+      "selected_count": 2,
+      "refined_count": 2,
+      "coarse_count": 2,
+      "eligible_count": 2,
+      "theme_strength": 0.09554075019150171,
+      "cap": 48,
+      "floor": 2
+    },
+    {
+      "theme": "水泥",
+      "selected_count": 2,
+      "refined_count": 2,
+      "coarse_count": 2,
+      "eligible_count": 2,
+      "theme_strength": 0.09844985779339205,
+      "cap": 48,
+      "floor": 2
+    },
+    {
+      "theme": "工程机械",
+      "selected_count": 1,
+      "refined_count": 1,
+      "coarse_count": 1,
+      "eligible_count": 1,
+      "theme_strength": 0.09924426828656985,
+      "cap": 48,
+      "floor": 1
+    },
+    {
+      "theme": "水务",
+      "selected_count": 1,
+      "refined_count": 1,
+      "coarse_count": 1,
+      "eligible_count": 1,
+      "theme_strength": 0.15789376296778118,
+      "cap": 48,
+      "floor": 1
+    },
+    {
+      "theme": "园区开发",
+      "selected_count": 2,
+      "refined_count": 2,
+      "coarse_count": 2,
+      "eligible_count": 2,
+      "theme_strength": 0.09298669007656907,
+      "cap": 48,
+      "floor": 2
+    },
+    {
+      "theme": "摩托车",
+      "selected_count": 1,
+      "refined_count": 1,
+      "coarse_count": 1,
+      "eligible_count": 1,
+      "theme_strength": 0.203872545312165,
+      "cap": 48,
+      "floor": 1
+    },
+    {
+      "theme": "仓储物流",
+      "selected_count": 3,
+      "refined_count": 3,
+      "coarse_count": 3,
+      "eligible_count": 3,
+      "theme_strength": 0.08838348323494666,
+      "cap": 48,
+      "floor": 2
+    },
+    {
+      "theme": "文教休闲",
+      "selected_count": 2,
+      "refined_count": 2,
+      "coarse_count": 2,
+      "eligible_count": 2,
+      "theme_strength": 0.060472958170378774,
+      "cap": 48,
+      "floor": 2
+    },
+    {
+      "theme": "饲料",
+      "selected_count": 1,
+      "refined_count": 1,
+      "coarse_count": 1,
+      "eligible_count": 1,
+      "theme_strength": 0.0479451747222404,
+      "cap": 48,
+      "floor": 1
+    },
+    {
+      "theme": "其他商业",
+      "selected_count": 2,
+      "refined_count": 2,
+      "coarse_count": 2,
+      "eligible_count": 2,
+      "theme_strength": -0.049759496382034675,
+      "cap": 48,
+      "floor": 2
+    },
+    {
+      "theme": "运输设备",
+      "selected_count": 1,
+      "refined_count": 1,
+      "coarse_count": 1,
+      "eligible_count": 1,
+      "theme_strength": 0.03708313262898551,
+      "cap": 48,
+      "floor": 1
+    },
+    {
+      "theme": "造纸",
+      "selected_count": 1,
+      "refined_count": 1,
+      "coarse_count": 1,
+      "eligible_count": 1,
+      "theme_strength": 0.0261472664804723,
+      "cap": 48,
+      "floor": 1
+    },
+    {
+      "theme": "渔业",
+      "selected_count": 2,
+      "refined_count": 2,
+      "coarse_count": 2,
+      "eligible_count": 2,
+      "theme_strength": -0.016802706880148174,
+      "cap": 48,
+      "floor": 2
+    },
+    {
+      "theme": "港口",
+      "selected_count": 1,
+      "refined_count": 1,
+      "coarse_count": 1,
+      "eligible_count": 1,
+      "theme_strength": 0.05907436235709412,
+      "cap": 48,
+      "floor": 1
+    },
+    {
+      "theme": "乳制品",
+      "selected_count": 1,
+      "refined_count": 1,
+      "coarse_count": 1,
+      "eligible_count": 1,
+      "theme_strength": 0.00942905568245366,
+      "cap": 48,
+      "floor": 1
+    },
+    {
+      "theme": "纺织",
+      "selected_count": 1,
+      "refined_count": 1,
+      "coarse_count": 1,
+      "eligible_count": 1,
+      "theme_strength": 0.0055997548626877175,
+      "cap": 48,
+      "floor": 1
+    },
+    {
+      "theme": "陶瓷",
+      "selected_count": 1,
+      "refined_count": 1,
+      "coarse_count": 1,
+      "eligible_count": 1,
+      "theme_strength": -0.05025822737486216,
+      "cap": 48,
+      "floor": 1
+    }
+  ],
+  "warnings": [],
+  "config": {
+    "generator_version": "dynamic_universe_v3_fresh_pool",
+    "universe_file": "config/universe_all_a_3y_local_ready_nost_no_kc_cy_stable3y.json",
+    "data_dir": "data",
+    "source_universe_size": 2915,
+    "target_size": 300,
+    "coarse_size": 1000,
+    "theme_aware": true,
+    "use_concepts": true,
+    "end_date": "2022-06-29",
+    "min_history_days": 480,
+    "min_recent_amount": 100000.0,
+    "theme_cap_ratio": 0.16,
+    "theme_floor_count": 2,
+    "turnover_quality_weight": 0.25,
+    "theme_weight": 0.18,
+    "main_board_only": true,
+    "fresh_pool_rules": {
+      "min_close": 5.0,
+      "min_ret20": 0.02,
+      "max_ret20": 0.24,
+      "min_ret60": 0.05,
+      "max_ret60": 0.6,
+      "max_volatility20": 0.045,
+      "min_recent_high_gap20": -0.1,
+      "min_amount_ratio20": 0.75,
+      "max_amount_ratio20": 2.2
+    },
+    "fresh_pool_funnel": [
+      {
+        "key": "eligible",
+        "label": "post_min_history_liquidity",
+        "count": 304
+      },
+      {
+        "key": "price_floor",
+        "label": "close>=5",
+        "count": 260
+      },
+      {
+        "key": "ma_alignment",
+        "label": "close>ma20>ma60",
+        "count": 133
+      },
+      {
+        "key": "ret20_band",
+        "label": "ret20 band",
+        "count": 101
+      },
+      {
+        "key": "ret60_band",
+        "label": "ret60 band",
+        "count": 63
+      },
+      {
+        "key": "volatility",
+        "label": "volatility20<=cap",
+        "count": 56
+      },
+      {
+        "key": "near_high",
+        "label": "within_20d_high_gap",
+        "count": 56
+      },
+      {
+        "key": "amount_ratio",
+        "label": "amount_ratio20 band",
+        "count": 53
+      }
+    ],
+    "fresh_pool_pass_count": 53
+  }
+}

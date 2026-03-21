@@ -15,6 +15,9 @@ class _BaseRuntimeOptions:
     strategy_id: str = "swing_v2"
     config_path: str = "config/api.json"
     source: str | None = None
+    start_date: str | None = None
+    end_date: str | None = None
+    lookback_years: int | None = None
     universe_tier: str | None = None
     universe_file: str | None = None
     universe_limit: int | None = None
@@ -96,6 +99,9 @@ class ResearchRunOptions(_BaseRuntimeOptions):
             strategy_id=str(args.strategy),
             config_path=str(args.config),
             source=args.source,
+            start_date=getattr(args, "start_date", None),
+            end_date=getattr(args, "end_date", None),
+            lookback_years=getattr(args, "lookback_years", None),
             universe_tier=args.universe_tier,
             universe_file=args.universe_file,
             universe_limit=args.universe_limit,
@@ -142,6 +148,9 @@ class ResearchRunOptions(_BaseRuntimeOptions):
                 "retrain_days": self.retrain_days,
                 "forecast_backend": self.forecast_backend,
                 "training_window_days": self.training_window_days,
+                "start_date": self.start_date,
+                "end_date": self.end_date,
+                "lookback_years": self.lookback_years,
                 "skip_calibration": self.skip_calibration,
                 "skip_learning": self.skip_learning,
                 "split_mode": self.split_mode,
@@ -159,9 +168,103 @@ class ResearchRunOptions(_BaseRuntimeOptions):
                 "retrain_days": self.retrain_days,
                 "forecast_backend": self.forecast_backend,
                 "training_window_days": self.training_window_days,
+                "start_date": self.start_date,
+                "end_date": self.end_date,
+                "lookback_years": self.lookback_years,
                 "publish_forecast_models": self.publish_forecast_models,
                 "split_mode": self.split_mode,
                 "embargo_days": self.embargo_days,
+            }
+        )
+        return payload
+
+
+@dataclass(frozen=True)
+class RankingResearchOptions(_BaseRuntimeOptions):
+    artifact_root: str = "artifacts/v2"
+    cache_root: str = "artifacts/v2/cache"
+    refresh_cache: bool = False
+    retrain_days: int = 20
+    forecast_backend: str = "linear"
+    training_window_days: int | None = 480
+    split_mode: str = "purged_wf"
+    embargo_days: int = 20
+    top_k: int = 3
+    candidate_limit: int = 16
+    leader_min_theme_size: int = 3
+    exit_min_theme_size: int = 2
+    exit_candidate_limit: int = 8
+    signal_l2: float = 1.0
+
+    @classmethod
+    def from_namespace(cls, args: argparse.Namespace) -> Self:
+        return cls(
+            strategy_id=str(args.strategy),
+            config_path=str(args.config),
+            source=args.source,
+            start_date=getattr(args, "start_date", None),
+            end_date=getattr(args, "end_date", None),
+            lookback_years=getattr(args, "lookback_years", None),
+            universe_tier=args.universe_tier,
+            universe_file=args.universe_file,
+            universe_limit=args.universe_limit,
+            dynamic_universe=args.dynamic_universe,
+            generator_target_size=args.generator_target_size,
+            generator_coarse_size=args.generator_coarse_size,
+            generator_theme_aware=args.generator_theme_aware,
+            generator_use_concepts=args.generator_use_concepts,
+            info_file=args.info_file,
+            info_lookback_days=args.info_lookback_days,
+            info_half_life_days=args.info_half_life_days,
+            use_info_fusion=args.use_info_fusion,
+            use_learned_info_fusion=getattr(args, "use_learned_info_fusion", None),
+            info_shadow_only=args.info_shadow_only,
+            info_types=args.info_types,
+            info_source_mode=args.info_source_mode,
+            info_subsets=args.info_subsets,
+            info_cutoff_time=getattr(args, "info_cutoff_time", None),
+            external_signals=args.external_signals,
+            event_file=args.event_file,
+            capital_flow_file=args.capital_flow_file,
+            macro_file=args.macro_file,
+            use_us_index_context=args.use_us_index_context,
+            us_index_source=args.us_index_source,
+            artifact_root=str(args.artifact_root),
+            cache_root=str(args.cache_root),
+            refresh_cache=bool(args.refresh_cache),
+            retrain_days=int(args.retrain_days),
+            forecast_backend=str(args.forecast_backend),
+            training_window_days=args.training_window_days,
+            split_mode=str(args.split_mode),
+            embargo_days=int(args.embargo_days),
+            top_k=int(args.top_k),
+            candidate_limit=int(args.candidate_limit),
+            leader_min_theme_size=int(args.leader_min_theme_size),
+            exit_min_theme_size=int(args.exit_min_theme_size),
+            exit_candidate_limit=int(args.exit_candidate_limit),
+            signal_l2=float(args.signal_l2),
+        )
+
+    def workflow_kwargs(self) -> dict[str, object]:
+        payload = self.common_kwargs()
+        payload.update(
+            {
+                "cache_root": self.cache_root,
+                "refresh_cache": self.refresh_cache,
+                "retrain_days": self.retrain_days,
+                "forecast_backend": self.forecast_backend,
+                "training_window_days": self.training_window_days,
+                "start_date": self.start_date,
+                "end_date": self.end_date,
+                "lookback_years": self.lookback_years,
+                "split_mode": self.split_mode,
+                "embargo_days": self.embargo_days,
+                "top_k": self.top_k,
+                "candidate_limit": self.candidate_limit,
+                "leader_min_theme_size": self.leader_min_theme_size,
+                "exit_min_theme_size": self.exit_min_theme_size,
+                "exit_candidate_limit": self.exit_candidate_limit,
+                "signal_l2": self.signal_l2,
             }
         )
         return payload
@@ -237,6 +340,9 @@ class ResearchMatrixOptions:
     strategy_id: str = "swing_v2"
     config_path: str = "config/api.json"
     source: str | None = None
+    start_date: str | None = None
+    end_date: str | None = None
+    lookback_years: int | None = None
     artifact_root: str = "artifacts/v2"
     cache_root: str = "artifacts/v2/cache"
     refresh_cache: bool = False
@@ -260,6 +366,9 @@ class ResearchMatrixOptions:
             strategy_id=str(args.strategy),
             config_path=str(args.config),
             source=args.source,
+            start_date=getattr(args, "start_date", None),
+            end_date=getattr(args, "end_date", None),
+            lookback_years=getattr(args, "lookback_years", None),
             artifact_root=str(args.artifact_root),
             cache_root=str(args.cache_root),
             refresh_cache=bool(args.refresh_cache),
@@ -276,6 +385,9 @@ class ResearchMatrixOptions:
             "strategy_id": self.strategy_id,
             "config_path": self.config_path,
             "source": self.source,
+            "start_date": self.start_date,
+            "end_date": self.end_date,
+            "lookback_years": self.lookback_years,
             "artifact_root": self.artifact_root,
             "cache_root": self.cache_root,
             "refresh_cache": self.refresh_cache,

@@ -332,6 +332,198 @@ def _empty_model(*, model_name: str, feature_names: list[str], target_name: str,
     return model
 
 
+def _leader_filter_target(row: dict[str, object]) -> float:
+    bucket = _normalize_text(row.get("leader_bucket"))
+    future_score = _safe_float(row.get("future_theme_score"), 0.0)
+    future_excess_5 = _safe_float(row.get("future_excess_5d_vs_sector"), 0.0)
+    if bool(row.get("is_true_leader", False)):
+        return 1.0
+    if bucket in {"true_leader", "contender"}:
+        return 1.0
+    if future_score >= 0.72 and future_excess_5 >= -0.01:
+        return 1.0
+    return 0.0
+
+
+def _leader_filter_sample_weight(row: dict[str, object]) -> float:
+    return float(
+        max(
+            0.1,
+            1.0
+            + 1.5 * (1.0 if bool(row.get("is_true_leader", False)) else 0.0)
+            + 0.9 * (1.0 if bool(row.get("hard_negative", False)) else 0.0)
+            + 0.45 * max(0.0, _safe_float(row.get("future_theme_score"), 0.0) - 0.50),
+        )
+    )
+
+
+def _leader_rank_sample_weight(row: dict[str, object]) -> float:
+    return float(
+        1.0
+        + 1.2 * (1.0 if bool(row.get("is_true_leader", False)) else 0.0)
+        + 0.6 * max(0.0, _safe_float(row.get("future_excess_5d_vs_sector"), 0.0))
+        + 0.4 * max(0.0, _safe_float(row.get("future_excess_20d_vs_sector"), 0.0))
+    )
+
+
+def _leader_rank_training_rows(rows: list[dict[str, object]]) -> list[dict[str, object]]:
+    selected = [
+        row
+        for row in rows
+        if bool(row.get("is_true_leader", False))
+        or not bool(row.get("hard_negative", False))
+        or _normalize_text(row.get("leader_bucket")) == "contender"
+    ]
+    return selected if len(selected) >= max(8, min(3, len(rows))) else list(rows)
+
+
+def _evaluate_leader_filter_predictions(
+    rows: list[dict[str, object]],
+    preds: np.ndarray,
+    *,
+    threshold: float,
+) -> dict[str, float]:
+    if not rows:
+        return {
+            "target_mean": 0.0,
+            "pass_rate": 0.0,
+            "precision": 0.0,
+            "recall": 0.0,
+            "true_leader_survival_recall": 0.0,
+            "hard_negative_filter_rate": 0.0,
+        }
+    clipped = np.asarray([_clip01(value) for value in preds.tolist()], dtype=float)
+    actual = np.asarray([_leader_filter_target(row) for row in rows], dtype=float)
+    predicted = (clipped >= float(threshold)).astype(float)
+    tp = float(np.sum((predicted == 1.0) & (actual == 1.0)))
+    fp = float(np.sum((predicted == 1.0) & (actual == 0.0)))
+    fn = float(np.sum((predicted == 0.0) & (actual == 1.0)))
+    true_leader_mask = np.asarray([1.0 if bool(row.get("is_true_leader", False)) else 0.0 for row in rows], dtype=float) == 1.0
+    hard_negative_mask = (
+        np.asarray([1.0 if bool(row.get("hard_negative", False)) else 0.0 for row in rows], dtype=float) == 1.0
+    )
+    return {
+        "target_mean": float(np.mean(actual)),
+        "pass_rate": float(np.mean(predicted)),
+        "precision": float(tp / max(1.0, tp + fp)),
+        "recall": float(tp / max(1.0, tp + fn)),
+        "true_leader_survival_recall": float(np.mean(predicted[true_leader_mask])) if np.any(true_leader_mask) else 0.0,
+        "hard_negative_filter_rate": float(np.mean(1.0 - predicted[hard_negative_mask]))
+        if np.any(hard_negative_mask)
+        else 0.0,
+    }
+
+
+def _two_stage_group_rankings(
+    rows: list[dict[str, object]],
+    filter_preds: np.ndarray,
+    rank_preds: np.ndarray,
+    *,
+    threshold: float,
+) -> dict[tuple[str, str], list[tuple[dict[str, object], float, float, bool]]]:
+    grouped: dict[tuple[str, str], list[tuple[dict[str, object], float, float, bool]]] = {}
+    for row, filter_pred, rank_pred in zip(rows, filter_preds.tolist(), rank_preds.tolist()):
+        key = (str(row.get("date", "")), str(row.get("theme", "")))
+        grouped.setdefault(key, []).append(
+            (
+                row,
+                float(filter_pred),
+                float(rank_pred),
+                float(filter_pred) >= float(threshold),
+            )
+        )
+    ranked_groups: dict[tuple[str, str], list[tuple[dict[str, object], float, float, bool]]] = {}
+    for key, group in grouped.items():
+        passed = [item for item in group if item[3]]
+        rejected = [item for item in group if not item[3]]
+        if not passed and group:
+            fallback = max(group, key=lambda item: (item[1], item[2]))
+            passed = [fallback]
+            rejected = [item for item in group if item is not fallback]
+        passed.sort(key=lambda item: (item[2], item[1]), reverse=True)
+        rejected.sort(key=lambda item: (item[1], item[2]), reverse=True)
+        ranked_groups[key] = passed + rejected
+    return ranked_groups
+
+
+def _evaluate_two_stage_leader_predictions(
+    rows: list[dict[str, object]],
+    filter_preds: np.ndarray,
+    rank_preds: np.ndarray,
+    *,
+    threshold: float,
+) -> dict[str, float]:
+    ranked_groups = _two_stage_group_rankings(rows, filter_preds, rank_preds, threshold=threshold)
+    top1_hits = 0.0
+    top3_hits = 0.0
+    ndcg_values: list[float] = []
+    group_count = 0
+    fallback_groups = 0
+    avg_pass_count = 0.0
+    for group in ranked_groups.values():
+        if len(group) < 2:
+            continue
+        passed_count = sum(1 for _, filter_pred, _, _ in group if float(filter_pred) >= float(threshold))
+        avg_pass_count += float(passed_count)
+        if passed_count == 0:
+            fallback_groups += 1
+        true_leaders = {str(row.get("symbol", "")) for row, _, _, _ in group if bool(row.get("is_true_leader", False))}
+        if not true_leaders:
+            continue
+        top_symbols = [str(row.get("symbol", "")) for row, _, _, _ in group[:3]]
+        top1_hits += 1.0 if top_symbols and top_symbols[0] in true_leaders else 0.0
+        top3_hits += 1.0 if set(top_symbols) & true_leaders else 0.0
+        predicted_relevance = [_safe_float(row.get("future_theme_score"), 0.0) for row, _, _, _ in group[:3]]
+        ideal_relevance = sorted((_safe_float(row.get("future_theme_score"), 0.0) for row, _, _, _ in group), reverse=True)[:3]
+        idcg = _dcg(ideal_relevance)
+        ndcg_values.append(0.0 if idcg <= 1e-9 else _dcg(predicted_relevance) / idcg)
+        group_count += 1
+    return {
+        "group_count": float(group_count),
+        "top1_hit_rate": float(top1_hits / max(1, group_count)),
+        "top3_recall": float(top3_hits / max(1, group_count)),
+        "ndcg_at_3": float(sum(ndcg_values) / max(1, len(ndcg_values))),
+        "avg_pass_count": float(avg_pass_count / max(1, group_count)),
+        "fallback_group_rate": float(fallback_groups / max(1, group_count)),
+    }
+
+
+def _select_leader_filter_threshold(
+    *,
+    fit_rows: list[dict[str, object]],
+    filter_preds: np.ndarray,
+    rank_preds: np.ndarray,
+) -> float:
+    if filter_preds.size <= 0:
+        return 0.50
+    candidate_thresholds = {0.35, 0.40, 0.45, 0.50, 0.55, 0.60, 0.65}
+    quantiles = np.quantile(np.asarray([_clip01(value) for value in filter_preds.tolist()], dtype=float), [0.25, 0.35, 0.50, 0.65, 0.75])
+    for value in quantiles.tolist():
+        candidate_thresholds.add(round(_clip01(float(value)), 4))
+    best_threshold = 0.50
+    best_score = float("-inf")
+    for threshold in sorted(candidate_thresholds):
+        filter_metrics = _evaluate_leader_filter_predictions(fit_rows, filter_preds, threshold=threshold)
+        two_stage_metrics = _evaluate_two_stage_leader_predictions(
+            fit_rows,
+            filter_preds,
+            rank_preds,
+            threshold=threshold,
+        )
+        score = (
+            1.30 * float(two_stage_metrics.get("top1_hit_rate", 0.0))
+            + 0.35 * float(two_stage_metrics.get("top3_recall", 0.0))
+            + 0.15 * float(two_stage_metrics.get("ndcg_at_3", 0.0))
+            + 0.20 * float(filter_metrics.get("hard_negative_filter_rate", 0.0))
+            + 0.25 * float(filter_metrics.get("true_leader_survival_recall", 0.0))
+            - 0.08 * abs(float(filter_metrics.get("pass_rate", 0.0)) - 0.55)
+        )
+        if score > best_score:
+            best_score = float(score)
+            best_threshold = float(threshold)
+    return _clip01(best_threshold)
+
+
 def _evaluate_leader_predictions(rows: list[dict[str, object]], preds: np.ndarray) -> dict[str, float]:
     grouped: dict[tuple[str, str], list[tuple[dict[str, object], float]]] = {}
     for row, pred in zip(rows, preds.tolist()):
@@ -442,43 +634,105 @@ def train_leader_rank_model(
     feature_names = leader_model_feature_names()
     if not fit_rows:
         model = _empty_model(
-            model_name="leader_rank_v1",
+            model_name="leader_rank_v2_two_stage",
             feature_names=feature_names,
             target_name="future_theme_score",
         )
+        model["leader_filter_model"] = _empty_model(
+            model_name="leader_filter_v1",
+            feature_names=feature_names,
+            target_name="is_actionable_leader",
+            threshold=0.50,
+        )
+        model["leader_two_stage_manifest"] = {
+            "filter_threshold": 0.50,
+            "rank_train_rows": 0,
+            "fit_filter_metrics": {},
+            "evaluation_filter_metrics": {},
+        }
         return model
 
+    evaluation_rows = list(evaluation_rows or [])
     X = np.asarray([_leader_feature_vector(row) for row in fit_rows], dtype=float)
-    y = np.asarray([_safe_float(row.get("future_theme_score"), 0.0) for row in fit_rows], dtype=float)
-    sample_weight = np.asarray(
-        [
-            1.0
-            + 1.2 * (1.0 if bool(row.get("is_true_leader", False)) else 0.0)
-            + 0.6 * max(0.0, _safe_float(row.get("future_excess_5d_vs_sector"), 0.0))
-            + 0.4 * max(0.0, _safe_float(row.get("future_excess_20d_vs_sector"), 0.0))
-            for row in fit_rows
-        ],
+    filter_y = np.asarray([_leader_filter_target(row) for row in fit_rows], dtype=float)
+    filter_weight = np.asarray([_leader_filter_sample_weight(row) for row in fit_rows], dtype=float)
+    filter_intercept, filter_coef = fit_ridge_regression(X, filter_y, l2=l2, sample_weight=filter_weight)
+    fit_filter_pred_raw = np.asarray([predict_ridge(row, filter_intercept, filter_coef) for row in X], dtype=float)
+    fit_filter_pred = np.asarray([_clip01(value) for value in fit_filter_pred_raw.tolist()], dtype=float)
+
+    rank_fit_rows = _leader_rank_training_rows(fit_rows)
+    X_rank = np.asarray([_leader_feature_vector(row) for row in rank_fit_rows], dtype=float)
+    rank_y = np.asarray([_safe_float(row.get("future_theme_score"), 0.0) for row in rank_fit_rows], dtype=float)
+    rank_weight = np.asarray([_leader_rank_sample_weight(row) for row in rank_fit_rows], dtype=float)
+    rank_intercept, rank_coef = fit_ridge_regression(X_rank, rank_y, l2=l2, sample_weight=rank_weight)
+    fit_rank_pred = np.asarray([predict_ridge(row, rank_intercept, rank_coef) for row in X], dtype=float)
+    rank_train_pred = np.asarray([predict_ridge(row, rank_intercept, rank_coef) for row in X_rank], dtype=float)
+
+    threshold = _select_leader_filter_threshold(
+        fit_rows=fit_rows,
+        filter_preds=fit_filter_pred,
+        rank_preds=fit_rank_pred,
+    )
+
+    evaluation_X = np.asarray([_leader_feature_vector(row) for row in evaluation_rows], dtype=float)
+    eval_filter_pred = np.asarray(
+        [_clip01(predict_ridge(row, filter_intercept, filter_coef)) for row in evaluation_X],
         dtype=float,
     )
-    intercept, coef = fit_ridge_regression(X, y, l2=l2, sample_weight=sample_weight)
-    train_pred = np.asarray([predict_ridge(row, intercept, coef) for row in X], dtype=float)
-    evaluation_rows = list(evaluation_rows or [])
-    eval_pred = np.asarray(
-        [predict_ridge(_leader_feature_vector(row), intercept, coef) for row in evaluation_rows],
+    eval_rank_pred = np.asarray(
+        [predict_ridge(row, rank_intercept, rank_coef) for row in evaluation_X],
         dtype=float,
+    )
+
+    fit_filter_metrics = _evaluate_leader_filter_predictions(fit_rows, fit_filter_pred, threshold=threshold)
+    evaluation_filter_metrics = _evaluate_leader_filter_predictions(
+        evaluation_rows,
+        eval_filter_pred,
+        threshold=threshold,
     )
     return {
-        "model_name": "leader_rank_v1",
+        "model_name": "leader_rank_v2_two_stage",
         "model_type": "ridge_linear",
         "feature_names": feature_names,
         "target_name": "future_theme_score",
-        "intercept": float(intercept),
-        "coef": [float(value) for value in coef.tolist()],
+        "intercept": float(rank_intercept),
+        "coef": [float(value) for value in rank_coef.tolist()],
         "train_rows": int(len(fit_rows)),
-        "train_r2": float(r2_score(y, train_pred)),
-        "train_metrics": _evaluate_leader_predictions(fit_rows, train_pred),
+        "train_r2": float(r2_score(rank_y, rank_train_pred)),
+        "train_metrics": _evaluate_two_stage_leader_predictions(
+            fit_rows,
+            fit_filter_pred,
+            fit_rank_pred,
+            threshold=threshold,
+        ),
         "evaluation_rows": int(len(evaluation_rows)),
-        "evaluation_metrics": _evaluate_leader_predictions(evaluation_rows, eval_pred),
+        "evaluation_metrics": _evaluate_two_stage_leader_predictions(
+            evaluation_rows,
+            eval_filter_pred,
+            eval_rank_pred,
+            threshold=threshold,
+        ),
+        "leader_filter_model": {
+            "model_name": "leader_filter_v1",
+            "model_type": "ridge_linear",
+            "feature_names": feature_names,
+            "target_name": "is_actionable_leader",
+            "threshold": float(threshold),
+            "intercept": float(filter_intercept),
+            "coef": [float(value) for value in filter_coef.tolist()],
+            "train_rows": int(len(fit_rows)),
+            "train_r2": float(r2_score(filter_y, fit_filter_pred)),
+            "train_metrics": fit_filter_metrics,
+            "evaluation_rows": int(len(evaluation_rows)),
+            "evaluation_metrics": evaluation_filter_metrics,
+        },
+        "leader_two_stage_manifest": {
+            "filter_threshold": float(threshold),
+            "rank_train_rows": int(len(rank_fit_rows)),
+            "fit_filter_metrics": fit_filter_metrics,
+            "evaluation_filter_metrics": evaluation_filter_metrics,
+            "rank_stage_train_metrics": _evaluate_leader_predictions(rank_fit_rows, rank_train_pred),
+        },
     }
 
 
@@ -569,6 +823,26 @@ def build_signal_training_artifacts(
             "leader_eval_top1_hit_rate": float(leader_model.get("evaluation_metrics", {}).get("top1_hit_rate", 0.0)),
             "leader_eval_top3_recall": float(leader_model.get("evaluation_metrics", {}).get("top3_recall", 0.0)),
             "leader_eval_ndcg_at_3": float(leader_model.get("evaluation_metrics", {}).get("ndcg_at_3", 0.0)),
+            "leader_eval_filter_precision": float(
+                leader_model.get("leader_filter_model", {}).get("evaluation_metrics", {}).get("precision", 0.0)
+            ),
+            "leader_eval_filter_recall": float(
+                leader_model.get("leader_filter_model", {}).get("evaluation_metrics", {}).get("recall", 0.0)
+            ),
+            "leader_eval_filter_pass_rate": float(
+                leader_model.get("leader_filter_model", {}).get("evaluation_metrics", {}).get("pass_rate", 0.0)
+            ),
+            "leader_eval_true_leader_survival_recall": float(
+                leader_model.get("leader_filter_model", {})
+                .get("evaluation_metrics", {})
+                .get("true_leader_survival_recall", 0.0)
+            ),
+            "leader_eval_hard_negative_filter_rate": float(
+                leader_model.get("leader_filter_model", {})
+                .get("evaluation_metrics", {})
+                .get("hard_negative_filter_rate", 0.0)
+            ),
+            "leader_rank_train_rows": int(leader_model.get("leader_two_stage_manifest", {}).get("rank_train_rows", 0)),
             "exit_fit_rows": int(len(exit_fit_rows)),
             "exit_evaluation_rows": int(len(exit_evaluation_rows or [])),
             "exit_eval_rank_corr": float(exit_model.get("evaluation_metrics", {}).get("rank_corr", 0.0)),

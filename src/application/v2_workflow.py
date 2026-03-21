@@ -32,6 +32,19 @@ def build_research_run_blueprint() -> WorkflowBlueprint:
     )
 
 
+def build_ranking_research_blueprint() -> WorkflowBlueprint:
+    return WorkflowBlueprint(
+        name="ranking-research-run",
+        stages=[
+            WorkflowStage("load-trajectory", "load or reuse the cached research trajectory", "trajectory slice"),
+            WorkflowStage("split-samples", "freeze fit and holdout windows for ranking evaluation", "fit/evaluation windows"),
+            WorkflowStage("evaluate-leaders", "score leader candidates and compute ranking metrics", "leader diagnostics"),
+            WorkflowStage("train-signal-models", "fit lightweight leader/exit ranking models", "signal model payloads"),
+            WorkflowStage("render-report", "write markdown/html summaries for fast iteration", "ranking report"),
+        ],
+    )
+
+
 def build_daily_run_blueprint() -> WorkflowBlueprint:
     return WorkflowBlueprint(
         name="daily-run",

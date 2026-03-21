@@ -13,6 +13,7 @@ def test_build_signal_training_artifacts_trains_leader_and_exit_models() -> None
             "symbol": "AAA",
             "theme": "chips",
             "role": "leader",
+            "leader_bucket": "true_leader",
             "theme_phase": "strengthening",
             "theme_percentile": 1.0,
             "theme_size": 3,
@@ -31,6 +32,7 @@ def test_build_signal_training_artifacts_trains_leader_and_exit_models() -> None
             "symbol": "BBB",
             "theme": "chips",
             "role": "core",
+            "leader_bucket": "contender",
             "theme_phase": "strengthening",
             "theme_percentile": 0.5,
             "theme_size": 3,
@@ -49,6 +51,7 @@ def test_build_signal_training_artifacts_trains_leader_and_exit_models() -> None
             "symbol": "CCC",
             "theme": "chips",
             "role": "laggard",
+            "leader_bucket": "hard_negative",
             "theme_phase": "fading",
             "theme_percentile": 0.0,
             "theme_size": 3,
@@ -143,6 +146,9 @@ def test_build_signal_training_artifacts_trains_leader_and_exit_models() -> None
     assert leader_model["train_rows"] == 3
     assert leader_model["evaluation_rows"] == 3
     assert len(leader_model["coef"]) == len(leader_model["feature_names"])
+    assert leader_model["leader_filter_model"]["train_rows"] == 3
+    assert leader_model["leader_two_stage_manifest"]["rank_train_rows"] >= 2
+    assert leader_model["leader_filter_model"]["evaluation_metrics"]["true_leader_survival_recall"] >= 0.5
     assert leader_model["evaluation_metrics"]["top1_hit_rate"] >= 0.5
 
     assert exit_model["train_rows"] == 3
@@ -157,6 +163,7 @@ def test_build_signal_training_artifacts_trains_leader_and_exit_models() -> None
 
     summary = payload["signal_training_manifest"]
     assert summary["leader_fit_rows"] == 3
+    assert summary["leader_eval_true_leader_survival_recall"] >= 0.5
     assert summary["exit_fit_rows"] == 3
     assert summary["exit_eval_rank_corr"] >= 0.5
 

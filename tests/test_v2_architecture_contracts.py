@@ -119,7 +119,7 @@ from src.contracts.artifacts import (
     LearnedPolicyArtifact,
     ResearchManifest,
 )
-from src.contracts.runtime import DailyRunOptions, ResearchMatrixOptions, ResearchRunOptions
+from src.contracts.runtime import DailyRunOptions, RankingResearchOptions, ResearchMatrixOptions, ResearchRunOptions
 from src.interfaces.cli.run_v2_cli import build_parser
 from src.reporting.view_models import build_daily_report_view_model, build_research_report_view_model
 from src.review_analytics.summaries import summarize_daily_run
@@ -148,6 +148,8 @@ def test_runtime_options_are_built_from_cli_namespace() -> None:
             "research-run",
             "--strategy",
             "alpha_v2",
+            "--lookback-years",
+            "5",
             "--dynamic-universe",
             "--generator-target-size",
             "120",
@@ -161,6 +163,7 @@ def test_runtime_options_are_built_from_cli_namespace() -> None:
     assert research_options.dynamic_universe is True
     assert research_options.generator_target_size == 120
     assert research_options.training_window_days == 480
+    assert research_options.lookback_years == 5
     assert research_options.skip_calibration is True
     assert research_options.skip_learning is True
 
@@ -186,6 +189,8 @@ def test_runtime_options_are_built_from_cli_namespace() -> None:
             "research-matrix",
             "--strategy",
             "alpha_v2",
+            "--start-date",
+            "2021-01-01",
             "--tiers",
             "favorites_16",
             "generated_80",
@@ -194,7 +199,30 @@ def test_runtime_options_are_built_from_cli_namespace() -> None:
     matrix_options = ResearchMatrixOptions.from_namespace(matrix_args)
     assert matrix_options.strategy_id == "alpha_v2"
     assert matrix_options.training_window_days == 480
+    assert matrix_options.start_date == "2021-01-01"
     assert matrix_options.universe_tiers == ("favorites_16", "generated_80")
+
+    ranking_args = parser.parse_args(
+        [
+            "ranking-research-run",
+            "--strategy",
+            "alpha_v2",
+            "--end-date",
+            "2026-03-15",
+            "--top-k",
+            "5",
+            "--candidate-limit",
+            "12",
+            "--signal-l2",
+            "0.5",
+        ]
+    )
+    ranking_options = RankingResearchOptions.from_namespace(ranking_args)
+    assert ranking_options.strategy_id == "alpha_v2"
+    assert ranking_options.end_date == "2026-03-15"
+    assert ranking_options.top_k == 5
+    assert ranking_options.candidate_limit == 12
+    assert ranking_options.signal_l2 == 0.5
 
 
 def test_backtest_core_runtime_keeps_facade_contract(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -713,6 +741,52 @@ def test_policy_learning_runtime_keeps_facade_contract(monkeypatch: pytest.Monke
     )
 
 
+def test_policy_learning_runtime_falls_back_when_learned_underperforms(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    import src.application.v2_services as legacy
+
+    baseline = _make_backtest(0.18, 0.16)
+    learned = _make_backtest(0.05, 0.04)
+
+    def fake_backtest(**kwargs: object) -> V2BacktestSummary:
+        learned_policy = kwargs.get("learned_policy")
+        if isinstance(learned_policy, LearnedPolicyModel):
+            return learned
+        return baseline
+
+    learning_rows = [
+        {
+            name: 0.1
+            for name in legacy._policy_feature_names()
+        }
+    ]
+    learning_rows[0].update(
+        {
+            "target_exposure": 0.62,
+            "target_positions": 3.0,
+            "target_turnover": 0.24,
+            "sample_weight": 1.0,
+        }
+    )
+
+    monkeypatch.setattr("src.application.v2_services.run_v2_backtest_live", fake_backtest)
+    monkeypatch.setattr("src.application.v2_services._run_v2_backtest_core", lambda **_: (baseline, learning_rows))
+    monkeypatch.setattr("src.application.v2_services._policy_objective_score", lambda summary: float(summary.annual_return))
+
+    result = learn_v2_policy_model_runtime(
+        strategy_id="swing_v2",
+        baseline=baseline,
+        trajectory=object(),
+        fit_trajectory=object(),
+        evaluation_trajectory=object(),
+        cache_root=str(tmp_path),
+        deps=legacy._policy_learning_dependencies(),
+    )
+
+    assert result.learned == baseline
+    assert result.model.train_rows == 0
+    assert result.model.exposure_coef == [0.0] * len(result.model.feature_names)
+
+
 def test_artifact_contract_rejects_unsupported_version(tmp_path: Path) -> None:
     payload_path = tmp_path / "dataset_manifest.json"
     payload_path.write_text(
@@ -969,7 +1043,7 @@ def test_daily_workflow_runtime_keeps_facade_contract(monkeypatch: pytest.Monkey
     monkeypatch.setattr("src.application.v2_services._build_daily_symbol_names", lambda **_: {})
     monkeypatch.setattr(
         "src.application.v2_services._attach_daily_info_overlay",
-        lambda **_: (composite_state, "", "", False, 0, [], [], [], []),
+        lambda **_: (composite_state, "", "", False, 0, [], [], [], [], None),
     )
     monkeypatch.setattr(
         "src.application.v2_services._attach_daily_external_signal_overlay",
