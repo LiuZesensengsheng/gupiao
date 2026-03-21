@@ -531,6 +531,17 @@ def learn_v2_policy_model(
         use_us_index_context=use_us_index_context,
         us_index_source=us_index_source,
     )
+    baseline_score = float(deps.policy_objective_score(baseline))
+    learned_score = float(deps.policy_objective_score(learned_summary))
+    if learned_score + 1e-9 < baseline_score:
+        deps.emit_progress(
+            "learning",
+            (
+                "learned policy underperformed baseline on evaluation; "
+                f"fallback engaged (baseline_score={baseline_score:.4f}, learned_score={learned_score:.4f})"
+            ),
+        )
+        return placeholder_learning_result(baseline, deps=deps)
     return V2PolicyLearningResult(
         model=model,
         baseline=baseline,

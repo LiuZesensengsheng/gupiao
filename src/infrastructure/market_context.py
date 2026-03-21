@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import hashlib
+import json
+import pickle
 import re
 from dataclasses import dataclass
 from pathlib import Path
@@ -83,7 +86,7 @@ _BREADTH_DIAGNOSTIC_COLS = [
     "breadth_median_return",
     "breadth_sample_amount",
 ]
-_BREADTH_CACHE: dict[tuple[str, int, int], pd.DataFrame] = {}
+_BREADTH_CACHE: dict[str, pd.DataFrame] = {}
 
 
 @dataclass(frozen=True)
@@ -117,6 +120,55 @@ def _list_local_symbols(data_dir: str | Path, limit: int, exclude: Iterable[str]
         if len(out) >= max(1, int(limit)):
             break
     return out
+
+
+def _breadth_cache_root(data_dir: str | Path) -> Path:
+    root = Path(data_dir).resolve().parent / "cache" / "market_context" / "breadth"
+    root.mkdir(parents=True, exist_ok=True)
+    return root
+
+
+def _breadth_cache_key(
+    *,
+    data_dir: str,
+    max_symbols: int,
+    min_coverage: int,
+    exclude_symbols: Sequence[str],
+    symbols: Sequence[str],
+) -> str:
+    root = Path(data_dir).resolve()
+    normalized_exclude = sorted({symbol for symbol in (_safe_symbol(item) for item in exclude_symbols) if symbol is not None})
+    symbol_manifest: list[dict[str, object]] = []
+    for symbol in symbols:
+        path = root / f"{symbol}.csv"
+        try:
+            stat = path.stat()
+            mtime_ns = int(stat.st_mtime_ns)
+            size = int(stat.st_size)
+        except OSError:
+            mtime_ns = 0
+            size = 0
+        symbol_manifest.append(
+            {
+                "symbol": str(symbol),
+                "mtime_ns": mtime_ns,
+                "size": size,
+            }
+        )
+    payload = {
+        "version": "breadth-disk-cache-1",
+        "data_dir": str(root),
+        "max_symbols": int(max_symbols),
+        "min_coverage": int(min_coverage),
+        "exclude_symbols": normalized_exclude,
+        "symbols": symbol_manifest,
+    }
+    raw = json.dumps(payload, sort_keys=True, ensure_ascii=False, separators=(",", ":"))
+    return hashlib.sha256(raw.encode("utf-8")).hexdigest()[:24]
+
+
+def _breadth_cache_path(*, data_dir: str, cache_key: str) -> Path:
+    return _breadth_cache_root(data_dir) / f"{cache_key}.pkl"
 
 
 def _build_index_context(
@@ -322,11 +374,6 @@ def _build_breadth_context(
     exclude_symbols: Sequence[str],
 ) -> tuple[pd.DataFrame, list[str], list[str]]:
     notes: list[str] = []
-    cache_key = (str(Path(data_dir).resolve()), int(max_symbols), int(min_coverage))
-    cached = _BREADTH_CACHE.get(cache_key)
-    if cached is not None:
-        return cached.copy(), list(_BREADTH_FEATURE_COLS), notes
-
     symbols = _list_local_symbols(
         data_dir=data_dir,
         limit=max_symbols,
@@ -335,6 +382,26 @@ def _build_breadth_context(
     if not symbols:
         notes.append("breadth context skipped: no local symbols available")
         return pd.DataFrame(columns=["date"]), [], notes
+    cache_key = _breadth_cache_key(
+        data_dir=data_dir,
+        max_symbols=max_symbols,
+        min_coverage=min_coverage,
+        exclude_symbols=exclude_symbols,
+        symbols=symbols,
+    )
+    cached = _BREADTH_CACHE.get(cache_key)
+    if cached is not None:
+        return cached.copy(), list(_BREADTH_FEATURE_COLS), notes
+    cache_path = _breadth_cache_path(data_dir=data_dir, cache_key=cache_key)
+    if cache_path.exists():
+        try:
+            with cache_path.open("rb") as f:
+                cached = pickle.load(f)
+            if isinstance(cached, pd.DataFrame):
+                _BREADTH_CACHE[cache_key] = cached.copy()
+                return cached.copy(), list(_BREADTH_FEATURE_COLS), notes
+        except Exception:
+            pass
 
     parts: list[pd.DataFrame] = []
     for symbol in symbols:
@@ -429,6 +496,11 @@ def _build_breadth_context(
     ].copy()
     out.replace([np.inf, -np.inf], np.nan, inplace=True)
     _BREADTH_CACHE[cache_key] = out.copy()
+    try:
+        with cache_path.open("wb") as f:
+            pickle.dump(out, f, protocol=pickle.HIGHEST_PROTOCOL)
+    except Exception:
+        pass
     return out, list(_BREADTH_FEATURE_COLS), notes
 
 

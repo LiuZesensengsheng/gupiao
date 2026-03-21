@@ -1,8 +1,11 @@
 from __future__ import annotations
 
+from pathlib import Path
+
 import pandas as pd
 import pytest
 
+import src.infrastructure.market_context as market_context
 from src.infrastructure.market_context import (
     _align_external_context_to_next_market_date,
     build_market_context_features,
@@ -279,3 +282,65 @@ def test_build_market_context_features_keeps_breadth_diagnostics_for_reporting(
     assert "breadth_new_high_count" in got.frame.columns
     assert got.frame.iloc[-1]["breadth_advancers"] == 184.0
     assert got.frame.iloc[-1]["breadth_limit_up_count"] == 12.0
+
+
+def test_build_breadth_context_reuses_disk_cache(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    data_dir = tmp_path / "data"
+    data_dir.mkdir(parents=True, exist_ok=True)
+    for symbol in ("000001.SH", "000002.SZ"):
+        (data_dir / f"{symbol}.csv").write_text("placeholder\n", encoding="utf-8")
+
+    dates = pd.date_range("2024-01-01", periods=40, freq="B")
+    frame = pd.DataFrame(
+        {
+            "date": dates,
+            "close": 10.0 + pd.Series(range(len(dates)), dtype=float) * 0.1,
+            "volume": 1_000_000.0,
+            "amount": 1.0e8,
+        }
+    )
+    seen = {"load_calls": 0}
+
+    def fake_load_local_daily(symbol: str, data_dir: str) -> pd.DataFrame:
+        del symbol, data_dir
+        seen["load_calls"] += 1
+        return frame.copy()
+
+    monkeypatch.setattr("src.infrastructure.market_context.load_local_daily", fake_load_local_daily)
+    market_context._BREADTH_CACHE.clear()
+
+    first, first_cols, _ = market_context._build_breadth_context(
+        data_dir=str(data_dir),
+        max_symbols=2,
+        min_coverage=1,
+        exclude_symbols=[],
+    )
+
+    assert not first.empty
+    assert first_cols == [
+        "breadth_up_ratio",
+        "breadth_down_ratio",
+        "breadth_up_down_diff",
+        "breadth_limit_up_ratio",
+        "breadth_limit_down_ratio",
+        "breadth_limit_spread",
+        "breadth_amount_z20",
+        "breadth_coverage",
+    ]
+    assert seen["load_calls"] == 2
+
+    market_context._BREADTH_CACHE.clear()
+
+    def fail_load_local_daily(**_: object) -> pd.DataFrame:
+        raise AssertionError("disk cache should avoid reloading breadth constituents")
+
+    monkeypatch.setattr("src.infrastructure.market_context.load_local_daily", fail_load_local_daily)
+    second, second_cols, _ = market_context._build_breadth_context(
+        data_dir=str(data_dir),
+        max_symbols=2,
+        min_coverage=1,
+        exclude_symbols=[],
+    )
+
+    assert second_cols == first_cols
+    assert second.equals(first)

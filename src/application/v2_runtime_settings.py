@@ -7,6 +7,8 @@ from dataclasses import asdict
 from pathlib import Path
 from typing import Iterable
 
+import pandas as pd
+
 from src.domain.info_clock import DEFAULT_INFO_CUTOFF_TIME
 from src.application.v2_universe_generator import generate_dynamic_universe
 from src.infrastructure.discovery import build_predefined_universe, normalize_universe_tier
@@ -70,6 +72,57 @@ def parse_csv_tokens(value: object, default: Iterable[str]) -> list[str]:
 def stable_json_hash(payload: object) -> str:
     raw = json.dumps(payload, sort_keys=True, ensure_ascii=False, separators=(",", ":"))
     return hashlib.sha256(raw.encode("utf-8")).hexdigest()
+
+
+def _normalize_date_string(value: object, fallback: object) -> str:
+    text = str(value if value is not None else fallback).strip()
+    if not text:
+        text = str(fallback).strip()
+    if not text:
+        return ""
+    try:
+        return pd.Timestamp(text).normalize().strftime("%Y-%m-%d")
+    except Exception:
+        return text
+
+
+def _resolve_runtime_date_window(
+    *,
+    start_date: str | None,
+    end_date: str | None,
+    lookback_years: int | None,
+    default_start: object,
+    default_end: object,
+) -> tuple[str, str, int | None]:
+    resolved_lookback_years = None
+    if lookback_years is not None:
+        try:
+            candidate = int(lookback_years)
+        except Exception:
+            candidate = 0
+        if candidate > 0:
+            resolved_lookback_years = candidate
+    resolved_start = _normalize_date_string(
+        start_date if start_date is not None else default_start,
+        default_start,
+    )
+    resolved_end = _normalize_date_string(
+        end_date if end_date is not None else default_end,
+        default_end,
+    )
+    if resolved_lookback_years is None:
+        return resolved_start, resolved_end, None
+    if end_date is None and str(default_end).strip() == "2099-12-31":
+        anchor_end = pd.Timestamp.today().normalize()
+        resolved_end = anchor_end.strftime("%Y-%m-%d")
+    else:
+        try:
+            anchor_end = pd.Timestamp(resolved_end).normalize()
+        except Exception:
+            return resolved_start, resolved_end, resolved_lookback_years
+    if start_date is None:
+        resolved_start = (anchor_end - pd.DateOffset(years=resolved_lookback_years)).strftime("%Y-%m-%d")
+    return resolved_start, resolved_end, resolved_lookback_years
 
 
 def sha256_file(path_like: object) -> str:
@@ -138,6 +191,9 @@ def load_v2_runtime_settings(
     use_us_index_context: bool | None = None,
     us_index_source: str | None = None,
     training_window_days: int | None = None,
+    start_date: str | None = None,
+    end_date: str | None = None,
+    lookback_years: int | None = None,
 ) -> dict[str, object]:
     payload: dict[str, object] = {}
     path = Path(config_path)
@@ -154,6 +210,13 @@ def load_v2_runtime_settings(
     def pick(key: str, default: object) -> object:
         return coalesce(daily.get(key), common.get(key), default)
 
+    resolved_start, resolved_end, resolved_lookback_years = _resolve_runtime_date_window(
+        start_date=start_date,
+        end_date=end_date,
+        lookback_years=lookback_years,
+        default_start=pick("start", "2018-01-01"),
+        default_end=pick("end", "2099-12-31"),
+    )
     resolved_universe_limit = int(
         universe_limit
         if universe_limit is not None
@@ -202,8 +265,9 @@ def load_v2_runtime_settings(
         "watchlist": str(pick("watchlist", "config/watchlist.json")),
         "source": str(source).strip() if source is not None and str(source).strip() else str(pick("source", "auto")),
         "data_dir": str(pick("data_dir", "data")),
-        "start": str(pick("start", "2018-01-01")),
-        "end": str(pick("end", "2099-12-31")),
+        "start": resolved_start,
+        "end": resolved_end,
+        "lookback_years": resolved_lookback_years,
         "min_train_days": int(pick("min_train_days", 240)),
         "step_days": int(pick("step_days", 20)),
         "training_window_days": (

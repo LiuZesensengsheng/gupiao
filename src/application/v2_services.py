@@ -114,7 +114,9 @@ from src.application import v2_leader_runtime as _v2_leader_runtime
 from src.application import v2_policy_feature_runtime as _v2_policy_feature_runtime
 from src.application import v2_policy_runtime as _v2_policy_runtime
 from src.application import v2_policy_learning_runtime as _v2_policy_learning_runtime
+from src.application import v2_ranking_research_runtime as _v2_ranking_research_runtime
 from src.application import v2_runtime_primitives as _v2_runtime_primitives
+from src.application import v2_signal_training_runtime as _v2_signal_training_runtime
 from src.application import v2_stock_role_runtime as _v2_stock_role_runtime
 from src.application import v2_state_build_runtime as _v2_state_build_runtime
 from src.application import v2_theme_episode_runtime as _v2_theme_episode_runtime
@@ -1186,6 +1188,38 @@ def publish_v2_research_artifacts(
         settings=settings,
         **kwargs,
     )
+
+
+def run_v2_ranking_research(**kwargs: object) -> _v2_ranking_research_runtime.V2RankingResearchResult:
+    return _v2_ranking_research_runtime.run_v2_ranking_research(
+        dependencies=_v2_ranking_research_runtime.RankingResearchDependencies(
+            emit_progress_fn=_emit_progress,
+            load_or_build_v2_backtest_trajectory_fn=_load_or_build_v2_backtest_trajectory,
+            split_research_trajectory_fn=_split_research_trajectory,
+            trajectory_step_count_fn=_trajectory_step_count,
+            build_leader_artifact_payloads_fn=_v2_leader_runtime.build_leader_artifact_payloads,
+            build_research_label_artifact_payloads_fn=_v2_leader_runtime.build_research_label_artifact_payloads,
+            build_signal_training_artifacts_fn=_v2_signal_training_runtime.build_signal_training_artifacts,
+        ),
+        **kwargs,
+    )
+
+
+def persist_v2_ranking_research_artifacts(
+    result: _v2_ranking_research_runtime.V2RankingResearchResult,
+    *,
+    artifact_root: str = "artifacts/v2",
+) -> dict[str, str]:
+    return _v2_ranking_research_runtime.persist_v2_ranking_research_artifacts(
+        result,
+        artifact_root=artifact_root,
+    )
+
+
+def summarize_v2_ranking_research(
+    result: _v2_ranking_research_runtime.V2RankingResearchResult,
+) -> dict[str, object]:
+    return result.summary()
 
 
 def run_daily_v2_live(**kwargs: object) -> DailyRunResult:

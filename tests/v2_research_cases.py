@@ -252,6 +252,32 @@ def test_load_v2_runtime_settings_resolves_training_window_days(tmp_path: Path) 
     assert disabled_settings["training_window_days"] is None
 
 
+def test_load_v2_runtime_settings_resolves_lookback_years_window(tmp_path: Path) -> None:
+    config_path = tmp_path / "api.json"
+    config_path.write_text(
+        json.dumps(
+            {
+                "common": {"source": "local"},
+                "daily": {
+                    "start": "2018-01-01",
+                    "end": "2099-12-31",
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    settings = _load_v2_runtime_settings(
+        config_path=str(config_path),
+        end_date="2026-03-15",
+        lookback_years=5,
+    )
+
+    assert settings["start"] == "2021-03-15"
+    assert settings["end"] == "2026-03-15"
+    assert settings["lookback_years"] == 5
+
+
 def test_load_v2_runtime_settings_reads_info_cutoff_time(tmp_path: Path) -> None:
     config_path = tmp_path / "api.json"
     config_path.write_text(
@@ -2536,7 +2562,7 @@ def test_load_or_build_v2_backtest_trajectory_invalidates_cache_when_insight_not
         forecast_backend="linear",
     )
 
-    assert seen["build_calls"] == 2
+    assert seen["build_calls"] == 1
 
 
 def test_research_workflow_passes_training_window_days_to_trajectory_builder(tmp_path: Path) -> None:

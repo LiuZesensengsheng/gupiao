@@ -79,6 +79,9 @@ def publish_research_artifacts(
     artifact_root: str = "artifacts/v2",
     config_path: str = "config/api.json",
     source: str | None = None,
+    start_date: str | None = None,
+    end_date: str | None = None,
+    lookback_years: int | None = None,
     universe_file: str | None = None,
     universe_limit: int | None = None,
     universe_tier: str | None = None,
@@ -120,6 +123,9 @@ def publish_research_artifacts(
     settings = settings or dependencies.load_v2_runtime_settings_fn(
         config_path=config_path,
         source=source,
+        start_date=start_date,
+        end_date=end_date,
+        lookback_years=lookback_years,
         universe_file=universe_file,
         universe_limit=universe_limit,
         universe_tier=universe_tier,
@@ -593,6 +599,13 @@ def _build_forecast_publish_artifacts(
             trajectory = dependencies.load_or_build_v2_backtest_trajectory_fn(
                 config_path=str(settings.get("config_path", config_path)),
                 source=str(settings.get("source", source)) if settings.get("source", source) is not None else None,
+                start_date=str(settings.get("start", "")) or None,
+                end_date=str(settings.get("end", "")) or None,
+                lookback_years=(
+                    int(settings.get("lookback_years"))
+                    if settings.get("lookback_years") is not None
+                    else None
+                ),
                 universe_file=str(settings.get("universe_file", universe_file))
                 if settings.get("universe_file", universe_file) is not None
                 else None,
@@ -786,6 +799,13 @@ def _build_info_publish_artifacts(
             trajectory = dependencies.load_or_build_v2_backtest_trajectory_fn(
                 config_path=str(settings.get("config_path", config_path)),
                 source=str(settings.get("source", source)) if settings.get("source", source) is not None else None,
+                start_date=str(settings.get("start", "")) or None,
+                end_date=str(settings.get("end", "")) or None,
+                lookback_years=(
+                    int(settings.get("lookback_years"))
+                    if settings.get("lookback_years") is not None
+                    else None
+                ),
                 universe_file=(
                     str(settings.get("universe_file", universe_file))
                     if settings.get("universe_file", universe_file) is not None

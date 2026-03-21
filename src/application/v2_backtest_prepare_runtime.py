@@ -65,6 +65,20 @@ class BacktestPrepareDependencies:
 
 def trajectory_cache_key(
     *,
+    raw_cache_key: str,
+    overlay_cache_token: str = "",
+) -> str:
+    payload = {
+        "version": "v2-trajectory-cache-6",
+        "raw_cache_key": str(raw_cache_key),
+        "overlay_cache_token": str(overlay_cache_token),
+    }
+    raw = json.dumps(payload, sort_keys=True, ensure_ascii=False)
+    return hashlib.sha256(raw.encode("utf-8")).hexdigest()[:24]
+
+
+def raw_trajectory_cache_key(
+    *,
     config_path: str,
     source: str | None,
     universe_file: str | None,
@@ -78,10 +92,11 @@ def trajectory_cache_key(
     use_cn_etf_context: bool,
     cn_etf_source: str,
     training_window_days: int | None,
-    overlay_cache_token: str = "",
+    start: str = "",
+    end: str = "",
 ) -> str:
     payload = {
-        "version": "v2-trajectory-cache-5",
+        "version": "v2-trajectory-raw-cache-2",
         "config_path": str(Path(config_path).resolve()),
         "source": "" if source is None else str(source),
         "universe_file": "" if universe_file is None else str(Path(universe_file).resolve()),
@@ -95,7 +110,8 @@ def trajectory_cache_key(
         "use_cn_etf_context": bool(use_cn_etf_context),
         "cn_etf_source": str(cn_etf_source),
         "training_window_days": None if training_window_days is None else int(training_window_days),
-        "overlay_cache_token": str(overlay_cache_token),
+        "start": str(start or ""),
+        "end": str(end or ""),
     }
     raw = json.dumps(payload, sort_keys=True, ensure_ascii=False)
     return hashlib.sha256(raw.encode("utf-8")).hexdigest()[:24]
@@ -221,6 +237,28 @@ def _replace_trajectory_steps(
             return trajectory
 
 
+def _attach_trajectory_cache_identity(
+    trajectory: object | None,
+    *,
+    raw_cache_key: str,
+    decorated_cache_key: str,
+) -> object | None:
+    if trajectory is None:
+        return None
+    for attr, value in (
+        ("_raw_trajectory_cache_key", str(raw_cache_key)),
+        ("_decorated_trajectory_cache_key", str(decorated_cache_key)),
+    ):
+        try:
+            setattr(trajectory, attr, value)
+        except Exception:
+            try:
+                object.__setattr__(trajectory, attr, value)
+            except Exception:
+                pass
+    return trajectory
+
+
 def decorate_research_trajectory(
     trajectory: object,
     *,
@@ -324,8 +362,11 @@ def trajectory_cache_path(
     *,
     cache_root: str,
     cache_key: str,
+    layer: str = "decorated",
 ) -> Path:
     root = Path(str(cache_root))
+    if str(layer).strip().lower() == "raw":
+        root = root / "raw_trajectory"
     root.mkdir(parents=True, exist_ok=True)
     return root / f"{cache_key}.pkl"
 
@@ -412,6 +453,9 @@ def prepare_v2_backtest_data(
     *,
     config_path: str,
     source: str | None = None,
+    start_date: str | None = None,
+    end_date: str | None = None,
+    lookback_years: int | None = None,
     universe_file: str | None = None,
     universe_limit: int | None = None,
     universe_tier: str | None = None,
@@ -444,6 +488,9 @@ def prepare_v2_backtest_data(
     settings = deps.load_v2_runtime_settings(
         config_path=config_path,
         source=source,
+        start_date=start_date,
+        end_date=end_date,
+        lookback_years=lookback_years,
         universe_file=universe_file,
         universe_limit=universe_limit,
         universe_tier=universe_tier,
@@ -590,6 +637,9 @@ def load_or_build_v2_backtest_trajectory(
     *,
     config_path: str,
     source: str | None = None,
+    start_date: str | None = None,
+    end_date: str | None = None,
+    lookback_years: int | None = None,
     universe_file: str | None = None,
     universe_limit: int | None = None,
     universe_tier: str | None = None,
@@ -625,6 +675,9 @@ def load_or_build_v2_backtest_trajectory(
     settings = deps.load_v2_runtime_settings(
         config_path=config_path,
         source=source,
+        start_date=start_date,
+        end_date=end_date,
+        lookback_years=lookback_years,
         universe_file=universe_file,
         universe_limit=universe_limit,
         universe_tier=universe_tier,
@@ -653,7 +706,7 @@ def load_or_build_v2_backtest_trajectory(
     )
     settings["refresh_cache"] = bool(refresh_cache)
     settings = deps.resolve_v2_universe_settings(settings=settings, cache_root=cache_root)
-    cache_key = trajectory_cache_key(
+    raw_cache_key = raw_trajectory_cache_key(
         config_path=str(settings.get("config_path", config_path)),
         source=str(settings.get("source", source)) if settings.get("source", source) is not None else None,
         universe_file=str(settings.get("universe_file", universe_file))
@@ -673,88 +726,124 @@ def load_or_build_v2_backtest_trajectory(
             if settings.get("training_window_days") is not None
             else None
         ),
+        start=str(settings.get("start", "")),
+        end=str(settings.get("end", "")),
+    )
+    decorated_cache_key = trajectory_cache_key(
+        raw_cache_key=raw_cache_key,
         overlay_cache_token=_research_overlay_cache_token(
             settings=settings,
             deps=deps,
         ),
     )
-    cache_path = trajectory_cache_path(cache_root=cache_root, cache_key=cache_key)
-    if not refresh_cache and cache_path.exists():
-        deps.emit_progress("cache", f"命中轨迹缓存: backend={backend.name}")
+    raw_cache_path = trajectory_cache_path(
+        cache_root=cache_root,
+        cache_key=raw_cache_key,
+        layer="raw",
+    )
+    decorated_cache_path = trajectory_cache_path(
+        cache_root=cache_root,
+        cache_key=decorated_cache_key,
+        layer="decorated",
+    )
+    if not refresh_cache:
+        cached_trajectory = deps.load_pickle_cache(decorated_cache_path)
+        if cached_trajectory is not None:
+            deps.emit_progress("cache", f"命中轨迹缓存: backend={backend.name}")
+            return _attach_trajectory_cache_identity(
+                cached_trajectory,
+                raw_cache_key=raw_cache_key,
+                decorated_cache_key=decorated_cache_key,
+            )
+    raw_trajectory = None
+    if not refresh_cache:
+        raw_trajectory = deps.load_pickle_cache(raw_cache_path)
+        if raw_trajectory is not None:
+            deps.emit_progress("cache", f"命中 raw 轨迹缓存: backend={backend.name}")
+    if raw_trajectory is None:
+        deps.emit_progress("cache", f"轨迹缓存未命中: backend={backend.name}，准备重建")
+        deps.emit_progress("research", "开始准备研究数据")
+        prepared = deps.prepare_v2_backtest_data(
+            config_path=str(settings.get("config_path", config_path)),
+            source=str(settings.get("source", source)) if settings.get("source", source) is not None else None,
+            start_date=str(settings.get("start", "")) or None,
+            end_date=str(settings.get("end", "")) or None,
+            lookback_years=(
+                int(settings.get("lookback_years"))
+                if settings.get("lookback_years") is not None
+                else lookback_years
+            ),
+            universe_file=str(settings.get("universe_file", universe_file))
+            if settings.get("universe_file", universe_file) is not None
+            else None,
+            universe_limit=int(settings.get("universe_limit")) if settings.get("universe_limit") is not None else universe_limit,
+            universe_tier=str(settings.get("universe_tier", universe_tier)),
+            info_file=str(settings.get("info_file", info_file)) if settings.get("info_file", info_file) is not None else None,
+            info_lookback_days=(
+                int(settings.get("info_lookback_days"))
+                if settings.get("info_lookback_days") is not None
+                else info_lookback_days
+            ),
+            info_half_life_days=(
+                float(settings.get("info_half_life_days"))
+                if settings.get("info_half_life_days") is not None
+                else info_half_life_days
+            ),
+            use_info_fusion=deps.parse_boolish(settings.get("use_info_fusion", False), False),
+            info_shadow_only=deps.parse_boolish(settings.get("info_shadow_only", True), True),
+            info_types=settings.get("info_types", info_types),
+            info_source_mode=str(settings.get("info_source_mode", info_source_mode or "layered")),
+            info_subsets=settings.get("info_subsets", info_subsets),
+            external_signals=deps.parse_boolish(settings.get("external_signals", True), True),
+            event_file=str(settings.get("event_file", event_file)) if settings.get("event_file", event_file) is not None else None,
+            capital_flow_file=(
+                str(settings.get("capital_flow_file", capital_flow_file))
+                if settings.get("capital_flow_file", capital_flow_file) is not None
+                else None
+            ),
+            macro_file=str(settings.get("macro_file", macro_file)) if settings.get("macro_file", macro_file) is not None else None,
+            dynamic_universe=deps.parse_boolish(settings.get("dynamic_universe_enabled", False), False),
+            generator_target_size=int(settings.get("generator_target_size", settings.get("universe_limit", 0)) or 0),
+            generator_coarse_size=int(settings.get("generator_coarse_size", 0) or 0),
+            generator_theme_aware=deps.parse_boolish(settings.get("generator_theme_aware", True), True),
+            generator_use_concepts=deps.parse_boolish(settings.get("generator_use_concepts", True), True),
+            cache_root=cache_root,
+            refresh_cache=refresh_cache,
+            use_us_index_context=bool(settings.get("use_us_index_context", False)),
+            us_index_source=str(settings.get("us_index_source", "akshare")),
+            training_window_days=(
+                int(settings.get("training_window_days"))
+                if settings.get("training_window_days") is not None
+                else training_window_days
+            ),
+        )
+        if prepared is None:
+            return None
+        deps.emit_progress("research", "开始构建预测轨迹")
+        raw_trajectory = deps.build_v2_backtest_trajectory_from_prepared(
+            prepared,
+            retrain_days=retrain_days,
+            forecast_backend=backend.name,
+        )
         try:
-            with cache_path.open("rb") as f:
-                cached = pickle.load(f)
-            if cached is not None:
-                return cached
+            deps.store_pickle_cache(raw_cache_path, raw_trajectory)
+            deps.emit_progress("cache", f"raw 轨迹缓存已写入: backend={backend.name}")
         except Exception:
             pass
     else:
-        deps.emit_progress("cache", f"轨迹缓存未命中: backend={backend.name}，准备重建")
-
-    deps.emit_progress("research", "开始准备研究数据")
-    prepared = deps.prepare_v2_backtest_data(
-        config_path=str(settings.get("config_path", config_path)),
-        source=str(settings.get("source", source)) if settings.get("source", source) is not None else None,
-        universe_file=str(settings.get("universe_file", universe_file))
-        if settings.get("universe_file", universe_file) is not None
-        else None,
-        universe_limit=int(settings.get("universe_limit")) if settings.get("universe_limit") is not None else universe_limit,
-        universe_tier=str(settings.get("universe_tier", universe_tier)),
-        info_file=str(settings.get("info_file", info_file)) if settings.get("info_file", info_file) is not None else None,
-        info_lookback_days=(
-            int(settings.get("info_lookback_days"))
-            if settings.get("info_lookback_days") is not None
-            else info_lookback_days
-        ),
-        info_half_life_days=(
-            float(settings.get("info_half_life_days"))
-            if settings.get("info_half_life_days") is not None
-            else info_half_life_days
-        ),
-        use_info_fusion=deps.parse_boolish(settings.get("use_info_fusion", False), False),
-        info_shadow_only=deps.parse_boolish(settings.get("info_shadow_only", True), True),
-        info_types=settings.get("info_types", info_types),
-        info_source_mode=str(settings.get("info_source_mode", info_source_mode or "layered")),
-        info_subsets=settings.get("info_subsets", info_subsets),
-        external_signals=deps.parse_boolish(settings.get("external_signals", True), True),
-        event_file=str(settings.get("event_file", event_file)) if settings.get("event_file", event_file) is not None else None,
-        capital_flow_file=(
-            str(settings.get("capital_flow_file", capital_flow_file))
-            if settings.get("capital_flow_file", capital_flow_file) is not None
-            else None
-        ),
-        macro_file=str(settings.get("macro_file", macro_file)) if settings.get("macro_file", macro_file) is not None else None,
-        dynamic_universe=deps.parse_boolish(settings.get("dynamic_universe_enabled", False), False),
-        generator_target_size=int(settings.get("generator_target_size", settings.get("universe_limit", 0)) or 0),
-        generator_coarse_size=int(settings.get("generator_coarse_size", 0) or 0),
-        generator_theme_aware=deps.parse_boolish(settings.get("generator_theme_aware", True), True),
-        generator_use_concepts=deps.parse_boolish(settings.get("generator_use_concepts", True), True),
-        cache_root=cache_root,
-        refresh_cache=refresh_cache,
-        use_us_index_context=bool(settings.get("use_us_index_context", False)),
-        us_index_source=str(settings.get("us_index_source", "akshare")),
-        training_window_days=(
-            int(settings.get("training_window_days"))
-            if settings.get("training_window_days") is not None
-            else training_window_days
-        ),
-    )
-    if prepared is None:
-        return None
-    deps.emit_progress("research", "开始构建预测轨迹")
-    trajectory = deps.build_v2_backtest_trajectory_from_prepared(
-        prepared,
-        retrain_days=retrain_days,
-        forecast_backend=backend.name,
-    )
+        deps.emit_progress("trajectory", "开始叠加 research overlay")
     trajectory = decorate_research_trajectory(
-        trajectory,
+        raw_trajectory,
         settings=settings,
         deps=deps,
     )
+    trajectory = _attach_trajectory_cache_identity(
+        trajectory,
+        raw_cache_key=raw_cache_key,
+        decorated_cache_key=decorated_cache_key,
+    )
     try:
-        with cache_path.open("wb") as f:
-            pickle.dump(trajectory, f, protocol=pickle.HIGHEST_PROTOCOL)
+        deps.store_pickle_cache(decorated_cache_path, trajectory)
         deps.emit_progress("cache", f"轨迹缓存已写入: backend={backend.name}")
     except Exception:
         pass

@@ -337,10 +337,25 @@ def stock_actionability_profile(
     }
 
 
+def _leader_snapshot_map(
+    *,
+    state: CompositeState | None,
+) -> dict[str, object]:
+    if state is None:
+        return {}
+    snapshots = build_leader_score_snapshots(state=state)
+    return {
+        str(getattr(item, "symbol", "")).strip(): item
+        for item in snapshots
+        if str(getattr(item, "symbol", "")).strip()
+    }
+
+
 def evaluate_fresh_buy_candidate(
     stock: StockForecastState,
     *,
     composite_state: CompositeState,
+    leader_snapshot_map: dict[str, object] | None = None,
     deps: PolicyRuntimeDependencies,
 ) -> tuple[bool, list[str]]:
     risk_regime = str(getattr(composite_state, "risk_regime", "") or "").strip().lower()
@@ -357,8 +372,50 @@ def evaluate_fresh_buy_candidate(
     has_expected_5d = bool(actionability.get("has_expected_5d", False))
     has_expected_20d = bool(actionability.get("has_expected_20d", False))
     exit_risk = float(actionability["exit_risk"])
-    if score < threshold:
-        reasons.append(f"actionability<{threshold:.2f}")
+    symbol = str(getattr(stock, "symbol", "")).strip()
+    snapshot_lookup = leader_snapshot_map if leader_snapshot_map is not None else _leader_snapshot_map(state=composite_state)
+    snapshot = snapshot_lookup.get(symbol)
+    role = str(getattr(snapshot, "role", "") or "").strip().lower() if snapshot is not None else ""
+    phase = str(getattr(snapshot, "theme_phase", "") or "").strip().lower() if snapshot is not None else ""
+    strong_role = role in {"leader", "core"}
+    supportive_phase = phase in {"emerging", "strengthening"}
+    weakening_phase = phase in {"diverging", "fading"}
+    threshold_relax = 0.0
+    if (
+        snapshot is not None
+        and risk_regime != "risk_off"
+        and strong_role
+        and supportive_phase
+        and not bool(getattr(snapshot, "role_downgrade", False))
+        and not bool(getattr(snapshot, "hard_negative", False))
+        and float(getattr(snapshot, "negative_score", 0.0)) <= 0.24
+        and float(getattr(snapshot, "candidate_score", 0.0)) >= 0.62
+        and float(getattr(snapshot, "conviction_score", 0.0)) >= 0.56
+    ):
+        threshold_relax = 0.03 if role == "leader" else 0.02
+    effective_threshold = max(0.48, float(threshold) - float(threshold_relax))
+    if score < effective_threshold:
+        reasons.append(f"actionability<{effective_threshold:.2f}")
+    if snapshot is not None:
+        if bool(getattr(snapshot, "hard_negative", False)):
+            reasons.append("leader_hard_negative")
+        if bool(getattr(snapshot, "role_downgrade", False)):
+            reasons.append("leader_role_downgrade")
+        if role == "laggard":
+            reasons.append("leader_laggard")
+        elif role == "rebound" and risk_regime in {"cautious", "risk_off"}:
+            reasons.append("leader_rebound_unconfirmed")
+        if not strong_role and weakening_phase:
+            reasons.append(f"theme_{phase}")
+        if float(getattr(snapshot, "negative_score", 0.0)) >= 0.58:
+            reasons.append("leader_negative_high")
+        if (
+            strong_role
+            and weakening_phase
+            and float(getattr(snapshot, "negative_score", 0.0)) >= 0.36
+            and score < float(threshold) + 0.02
+        ):
+            reasons.append("leader_edge_not_confirmed")
     if risk_regime == "risk_off":
         if float(stock.up_1d_prob) < 0.51:
             reasons.append("1d_prob<0.510")
@@ -379,7 +436,18 @@ def evaluate_fresh_buy_candidate(
     elif risk_regime == "cautious":
         if has_expected_5d and expected_5d <= 0.0:
             reasons.append("5d_exp<=0")
-        if has_expected_5d and has_expected_20d and expected_5d < 0.002 and expected_20d < 0.004:
+        if (
+            has_expected_5d
+            and has_expected_20d
+            and expected_5d < 0.002
+            and expected_20d < 0.004
+            and not (
+                threshold_relax > 0.0
+                and score >= effective_threshold
+                and expected_5d >= 0.0
+                and expected_20d >= 0.003
+            )
+        ):
             reasons.append("forward_edge_too_thin")
         if has_expected_20d and float(stock.up_20d_prob) < 0.49 and expected_20d <= 0.0:
             reasons.append("20d_trend_soft")
@@ -391,7 +459,8 @@ def evaluate_fresh_buy_candidate(
     ):
         reasons.append("forward_edge<=0")
 
-    return len(reasons) == 0, reasons
+    deduped = list(dict.fromkeys(str(reason) for reason in reasons if str(reason).strip()))
+    return len(deduped) == 0, deduped
 
 
 def _stock_info_support_score(
@@ -629,18 +698,18 @@ def leader_symbol_preference_maps(
         phase = str(item.theme_phase or "").strip().lower()
         adjustment = 0.0
         adjustment += {
-            "leader": 0.06,
-            "core": 0.03,
+            "leader": 0.08,
+            "core": 0.04,
             "follower": 0.00,
             "rebound": -0.01,
-            "laggard": -0.08,
+            "laggard": -0.10,
         }.get(role, 0.0)
         phase_adjustment = {
-            "strengthening": 0.04,
-            "emerging": 0.02,
-            "crowded": -0.02,
-            "diverging": -0.05,
-            "fading": -0.10,
+            "strengthening": 0.05,
+            "emerging": 0.03,
+            "crowded": -0.03,
+            "diverging": -0.06,
+            "fading": -0.12,
         }.get(phase, 0.0)
         if phase_adjustment >= 0.0:
             phase_multiplier = {
@@ -659,24 +728,24 @@ def leader_symbol_preference_maps(
                 "laggard": 1.10,
             }.get(role, 1.0)
         adjustment += phase_adjustment * phase_multiplier
-        adjustment += 0.08 * max(0.0, float(item.conviction_score) - 0.62) / 0.38
-        adjustment += 0.05 * max(0.0, float(item.candidate_score) - 0.60) / 0.40
-        adjustment -= 0.12 * max(0.0, float(item.negative_score) - 0.46) / 0.54
+        adjustment += 0.10 * max(0.0, float(item.conviction_score) - 0.62) / 0.38
+        adjustment += 0.06 * max(0.0, float(item.candidate_score) - 0.60) / 0.40
+        adjustment -= 0.16 * max(0.0, float(item.negative_score) - 0.46) / 0.54
         if bool(item.role_downgrade):
-            adjustment -= 0.05
+            adjustment -= 0.07
         if bool(item.hard_negative):
             hard_negative_count += 1
             adjustment = min(
                 adjustment,
-                -0.18 - 0.10 * max(0.0, float(item.negative_score) - 0.58) / 0.42,
+                -0.24 - 0.12 * max(0.0, float(item.negative_score) - 0.58) / 0.42,
             )
-        adjustment = float(deps.clip(float(adjustment), -0.26, 0.14))
+        adjustment = float(deps.clip(float(adjustment), -0.30, 0.18))
         if abs(adjustment) < 0.015:
             continue
         adjustments[str(item.symbol)] = adjustment
-        if adjustment >= 0.06:
+        if adjustment >= 0.08:
             promoted.append(str(item.symbol))
-        elif adjustment <= -0.10:
+        elif adjustment <= -0.12:
             suppressed.append(str(item.symbol))
 
     if not adjustments:
@@ -1010,6 +1079,7 @@ def finalize_target_weights(
         deps=deps,
     )
     notes: list[str] = []
+    leader_snapshot_map = _leader_snapshot_map(state=composite_state) if composite_state is not None else {}
     locked_symbols: set[str] = set()
     adjusted, hold_buffer_notes = _apply_hold_buffer_retention(
         adjusted=adjusted,
@@ -1070,6 +1140,7 @@ def finalize_target_weights(
             add_on_allowed, add_on_reasons = evaluate_fresh_buy_candidate(
                 stock_state,
                 composite_state=composite_state,
+                leader_snapshot_map=leader_snapshot_map,
                 deps=deps,
             )
             if not add_on_allowed:
@@ -1346,6 +1417,11 @@ def apply_policy(
     blocked_fresh_candidates: dict[str, list[str]] = {}
     fresh_eligible_count = 0
     leader_snapshots = build_leader_score_snapshots(state=state)
+    leader_snapshot_map = {
+        str(getattr(item, "symbol", "")).strip(): item
+        for item in leader_snapshots
+        if str(getattr(item, "symbol", "")).strip()
+    }
     risk_off_pilot: dict[str, object] | None = None
     for stock in raw_candidate_stocks:
         symbol = str(getattr(stock, "symbol", "")).strip()
@@ -1362,6 +1438,7 @@ def apply_policy(
         buy_allowed, buy_reasons = evaluate_fresh_buy_candidate(
             stock,
             composite_state=state,
+            leader_snapshot_map=leader_snapshot_map,
             deps=deps,
         )
         if buy_allowed:

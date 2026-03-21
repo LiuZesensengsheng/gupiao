@@ -5,13 +5,17 @@ import json
 from pathlib import Path
 
 from src.application.v2_services import (
+    persist_v2_ranking_research_artifacts,
+    run_v2_ranking_research,
     summarize_daily_run,
     summarize_v2_backtest,
     summarize_v2_calibration,
+    summarize_v2_ranking_research,
     summarize_v2_policy_learning,
 )
 from src.application.v2_workflow import (
     build_daily_run_blueprint,
+    build_ranking_research_blueprint,
     build_research_run_blueprint,
     describe_v2_stack,
 )
@@ -19,10 +23,14 @@ from src.artifact_registry.v2_registry import (
     load_published_v2_policy_model,
     publish_v2_research_artifacts,
 )
-from src.contracts.runtime import DailyRunOptions, ResearchMatrixOptions, ResearchRunOptions
+from src.contracts.runtime import DailyRunOptions, RankingResearchOptions, ResearchMatrixOptions, ResearchRunOptions
 from src.infrastructure.market_data import set_tushare_token
 from src.interfaces.presenters.html_dashboard import write_v2_daily_dashboard, write_v2_research_dashboard
 from src.interfaces.presenters.markdown_reports import write_v2_daily_report, write_v2_research_report
+from src.interfaces.presenters.v2_ranking_research_presenters import (
+    write_v2_ranking_research_dashboard,
+    write_v2_ranking_research_report,
+)
 from src.workflows.daily_workflow import run_daily_v2_live
 from src.workflows.research_workflow import last_research_trajectory, run_v2_research_matrix, run_v2_research_workflow
 
@@ -91,6 +99,12 @@ def _add_external_context_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--us-index-source", dest="us_index_source", default=None, choices=["akshare"], help="US index feature source")
 
 
+def _add_history_window_args(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument("--start-date", dest="start_date", default=None, help="Optional inclusive backtest start date (YYYY-MM-DD)")
+    parser.add_argument("--end-date", dest="end_date", default=None, help="Optional inclusive backtest end date (YYYY-MM-DD)")
+    parser.add_argument("--lookback-years", dest="lookback_years", type=int, default=None, help="Optional rolling history length in years; resolves against end-date or today when end is open-ended")
+
+
 def _add_output_args(parser: argparse.ArgumentParser, *, report_default: str, dashboard_default: str, report_help: str) -> None:
     parser.add_argument("--report", default=report_default, help=report_help)
     parser.add_argument("--dashboard", default=dashboard_default, help="HTML dashboard output path")
@@ -130,6 +144,7 @@ def build_parser() -> argparse.ArgumentParser:
     _add_universe_args(research)
     _add_info_args(research)
     _add_external_context_args(research)
+    _add_history_window_args(research)
     _add_output_args(
         research,
         report_default="reports/v2_research_report.md",
@@ -150,8 +165,36 @@ def build_parser() -> argparse.ArgumentParser:
     research.add_argument("--publish-forecast-models", dest="publish_forecast_models", action="store_true", default=True, help="Publish forecast-layer metadata and frozen state snapshot")
     research.add_argument("--no-publish-forecast-models", dest="publish_forecast_models", action="store_false", help="Skip publishing forecast-layer metadata")
 
+    ranking = sub.add_parser("ranking-research-run", help="Run fast leader/ranking diagnostics without full policy backtest")
+    _add_runtime_identity_args(ranking, strategy_help="Target strategy id")
+    _add_universe_args(ranking)
+    _add_info_args(ranking)
+    _add_external_context_args(ranking)
+    _add_history_window_args(ranking)
+    _add_output_args(
+        ranking,
+        report_default="reports/v2_ranking_research_report.md",
+        dashboard_default="reports/v2_ranking_research_dashboard.html",
+        report_help="Markdown ranking report output path",
+    )
+    ranking.add_argument("--artifact-root", default="artifacts/v2", help="Artifact output root for ranking research runs")
+    ranking.add_argument("--cache-root", default="artifacts/v2/cache", help="On-disk cache root for prepared data and trajectories")
+    ranking.add_argument("--refresh-cache", action="store_true", help="Ignore existing cached trajectory and rebuild it")
+    ranking.add_argument("--retrain-days", type=int, default=20, help="Trajectory retraining cadence in trading days")
+    ranking.add_argument("--forecast-backend", default="linear", help="Forecast backend id for ranking diagnostics")
+    ranking.add_argument("--training-window-days", type=int, default=480, help="Rolling training window in trading days; use 0 to keep expanding history")
+    ranking.add_argument("--split-mode", default="purged_wf", choices=["purged_wf", "simple"], help="Research split mode")
+    ranking.add_argument("--embargo-days", type=int, default=20, help="Embargo days for purged walk-forward split")
+    ranking.add_argument("--top-k", type=int, default=3, help="Top-k used for leader ranking metrics")
+    ranking.add_argument("--candidate-limit", type=int, default=16, help="Number of leader candidates to render")
+    ranking.add_argument("--leader-min-theme-size", type=int, default=3, help="Minimum theme size for leader labels")
+    ranking.add_argument("--exit-min-theme-size", type=int, default=2, help="Minimum theme size for exit labels")
+    ranking.add_argument("--exit-candidate-limit", type=int, default=8, help="Candidate cap when building exit labels")
+    ranking.add_argument("--signal-l2", type=float, default=1.0, help="L2 strength for lightweight ridge signal models")
+
     matrix = sub.add_parser("research-matrix", help="Run the fixed 16/80/150/300 universe matrix")
     _add_runtime_identity_args(matrix, strategy_help="Target strategy id")
+    _add_history_window_args(matrix)
     _add_output_args(
         matrix,
         report_default="reports/v2_research_report.md",
@@ -273,6 +316,29 @@ def main() -> int:
         print(json.dumps(summarize_v2_calibration(calibration), ensure_ascii=False, indent=2))
         print("[V2] learned policy:")
         print(json.dumps(summarize_v2_policy_learning(learning), ensure_ascii=False, indent=2))
+        return 0
+
+    if args.task == "ranking-research-run":
+        options = RankingResearchOptions.from_namespace(args)
+        bp = build_ranking_research_blueprint()
+        _print_blueprint(
+            bp.name,
+            options.strategy_id,
+            [(stage.name, stage.purpose, stage.produces) for stage in bp.stages],
+        )
+        result = run_v2_ranking_research(**options.workflow_kwargs())
+        artifacts = persist_v2_ranking_research_artifacts(
+            result,
+            artifact_root=options.artifact_root,
+        )
+        report_path = write_v2_ranking_research_report(str(args.report), result)
+        dashboard_path = write_v2_ranking_research_dashboard(str(args.dashboard), result)
+        print(f"[V2] ranking research report: {Path(report_path).resolve()}")
+        print(f"[V2] ranking research dashboard: {Path(dashboard_path).resolve()}")
+        print(f"[V2] ranking research artifacts: {Path(str(artifacts['run_dir'])).resolve()}")
+        print(f"[V2] ranking research run_id: {artifacts.get('run_id', '')}")
+        print("[V2] ranking research summary:")
+        print(json.dumps(summarize_v2_ranking_research(result), ensure_ascii=False, indent=2))
         return 0
 
     if args.task == "research-matrix":

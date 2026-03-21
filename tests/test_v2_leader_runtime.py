@@ -231,13 +231,13 @@ def test_build_leader_artifact_payloads_returns_manifest_and_candidates() -> Non
     assert payloads["leader_candidates"][0]["symbol"] == candidates[0].symbol
 
 
-def test_apply_leader_candidate_overlay_reorders_without_changing_membership() -> None:
+def test_apply_leader_candidate_overlay_can_promote_tail_into_core() -> None:
     state = _leader_state()
     state = state.__class__(
         **{
                 **state.__dict__,
                 "candidate_selection": state.candidate_selection.__class__(
-                    shortlisted_symbols=["BBB", "AAA", "CCC"],
+                    shortlisted_symbols=["BBB", "CCC", "AAA"],
                     shortlisted_sectors=["chips"],
                     total_scored=3,
                     shortlist_size=2,
@@ -253,4 +253,8 @@ def test_apply_leader_candidate_overlay_reorders_without_changing_membership() -
     assert updated.candidate_selection.shortlisted_symbols[:2] == ["AAA", "BBB"]
     assert set(updated.candidate_selection.shortlisted_symbols[:2]) == {"AAA", "BBB"}
     assert updated.candidate_selection.shortlisted_symbols[2] == "CCC"
+    assert updated.candidate_selection.shortlisted_sectors == ["chips"]
+    assert updated.candidate_selection.sector_slots == {"chips": 2}
     assert any("Leader overlay reprioritized" in note for note in updated.candidate_selection.selection_notes)
+    assert any("Promoted into core: AAA" in note for note in updated.candidate_selection.selection_notes)
+    assert any("Demoted from core: CCC" in note for note in updated.candidate_selection.selection_notes)

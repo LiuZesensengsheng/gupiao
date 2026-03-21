@@ -1483,7 +1483,191 @@ def test_apply_policy_leader_weighting_suppresses_hard_negative_name(
     assert max(baseline.desired_symbol_target_weights, key=baseline.desired_symbol_target_weights.get) == "AAA"
     assert max(leader.desired_symbol_target_weights, key=leader.desired_symbol_target_weights.get) == "BBB"
     assert leader.desired_symbol_target_weights.get("AAA", 0.0) == pytest.approx(0.0)
-    assert any("Leader-suppressed symbols: AAA" in note for note in leader.risk_notes)
+    assert (
+        any("Leader-suppressed symbols: AAA" in note for note in leader.risk_notes)
+        or "AAA" in leader.blocked_fresh_candidates
+    )
+
+
+def test_apply_policy_buy_gate_relaxes_for_strengthening_theme_leader(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        policy_runtime,
+        "stock_actionability_profile",
+        lambda stock, *, composite_state, deps: {
+            "score": 0.50,
+            "threshold": 0.51,
+            "label": "monitor",
+            "entry_score": 0.60,
+            "hold_score": 0.58,
+            "exit_risk": 0.06,
+            "confidence_1d": 0.58,
+            "expected_5d": 0.001,
+            "expected_20d": 0.006,
+            "q10_5d": 0.0,
+            "has_expected_5d": True,
+            "has_expected_20d": True,
+        },
+    )
+    monkeypatch.setattr(
+        policy_runtime,
+        "build_leader_score_snapshots",
+        lambda *, state: []
+        if not getattr(state, "theme_episodes", [])
+        else [
+            LeaderScoreSnapshot(
+                symbol="AAA",
+                sector="chips",
+                theme="chips",
+                theme_phase="strengthening",
+                role="leader",
+                negative_score=0.12,
+                candidate_score=0.74,
+                conviction_score=0.78,
+            )
+        ],
+    )
+
+    stock = StockForecastState("AAA", "chips", 0.55, 0.58, 0.62, 0.57, 0.10, 0.92, alpha_score=0.72)
+    baseline_state = _make_leader_policy_state(stocks=[stock])
+    leader_state = _make_leader_policy_state(
+        stocks=[stock],
+        theme_episodes=[
+            ThemeEpisode(
+                theme="chips",
+                phase="strengthening",
+                conviction=0.74,
+                breadth=0.36,
+                leadership=0.35,
+                event_risk=0.18,
+                sectors=["chips"],
+                representative_symbols=["AAA"],
+            )
+        ],
+        stock_role_states={
+            "AAA": StockRoleSnapshot(symbol="AAA", theme="chips", role="leader"),
+        },
+    )
+    spec = PolicySpec(risk_on_positions=1, cautious_positions=1, risk_off_positions=1)
+
+    baseline = apply_policy(
+        PolicyInput(
+            composite_state=baseline_state,
+            current_weights={},
+            current_cash=1.0,
+            total_equity=1.0,
+        ),
+        policy_spec=spec,
+    )
+    leader = apply_policy(
+        PolicyInput(
+            composite_state=leader_state,
+            current_weights={},
+            current_cash=1.0,
+            total_equity=1.0,
+        ),
+        policy_spec=spec,
+    )
+
+    assert baseline.symbol_target_weights == {}
+    assert "AAA" in baseline.blocked_fresh_candidates
+    assert "AAA" in leader.symbol_target_weights
+    assert "AAA" not in leader.blocked_fresh_candidates
+
+
+def test_apply_policy_buy_gate_blocks_laggard_even_when_quant_signals_pass(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        policy_runtime,
+        "stock_actionability_profile",
+        lambda stock, *, composite_state, deps: {
+            "score": 0.57,
+            "threshold": 0.51,
+            "label": "actionable",
+            "entry_score": 0.64,
+            "hold_score": 0.60,
+            "exit_risk": 0.05,
+            "confidence_1d": 0.60,
+            "expected_5d": 0.010,
+            "expected_20d": 0.018,
+            "q10_5d": 0.0,
+            "has_expected_5d": True,
+            "has_expected_20d": True,
+        },
+    )
+    monkeypatch.setattr(
+        policy_runtime,
+        "build_leader_score_snapshots",
+        lambda *, state: []
+        if not getattr(state, "theme_episodes", [])
+        else [
+            LeaderScoreSnapshot(
+                symbol="AAA",
+                sector="chips",
+                theme="chips",
+                theme_phase="fading",
+                role="laggard",
+                role_downgrade=True,
+                negative_score=0.42,
+                candidate_score=0.46,
+                conviction_score=0.40,
+            )
+        ],
+    )
+
+    stock = StockForecastState("AAA", "chips", 0.57, 0.62, 0.66, 0.60, 0.12, 0.91, alpha_score=0.74)
+    baseline_state = _make_leader_policy_state(stocks=[stock])
+    laggard_state = _make_leader_policy_state(
+        stocks=[stock],
+        theme_episodes=[
+            ThemeEpisode(
+                theme="chips",
+                phase="fading",
+                conviction=0.45,
+                breadth=0.18,
+                leadership=0.16,
+                event_risk=0.60,
+                sectors=["chips"],
+                representative_symbols=["AAA"],
+            )
+        ],
+        stock_role_states={
+            "AAA": StockRoleSnapshot(
+                symbol="AAA",
+                theme="chips",
+                role="laggard",
+                previous_role="core",
+                role_downgrade=True,
+            ),
+        },
+    )
+    spec = PolicySpec(risk_on_positions=1, cautious_positions=1, risk_off_positions=1)
+
+    baseline = apply_policy(
+        PolicyInput(
+            composite_state=baseline_state,
+            current_weights={},
+            current_cash=1.0,
+            total_equity=1.0,
+        ),
+        policy_spec=spec,
+    )
+    laggard = apply_policy(
+        PolicyInput(
+            composite_state=laggard_state,
+            current_weights={},
+            current_cash=1.0,
+            total_equity=1.0,
+        ),
+        policy_spec=spec,
+    )
+
+    assert "AAA" in baseline.symbol_target_weights
+    assert "AAA" not in laggard.symbol_target_weights
+    assert "AAA" in laggard.blocked_fresh_candidates
+    assert "leader_laggard" in laggard.blocked_fresh_candidates["AAA"]
 
 
 def test_candidate_stocks_from_state_only_uses_shortlist_core() -> None:
