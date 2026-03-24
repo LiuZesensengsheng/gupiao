@@ -392,11 +392,11 @@ def load_v2_runtime_settings(
         "external_signals": (
             bool(external_signals)
             if external_signals is not None
-            else parse_boolish(pick("external_signals", True), True)
+            else parse_boolish(pick("external_signals", False), False)
         ),
-        "enable_insight_memory": parse_boolish(pick("enable_insight_memory", True), True),
+        "enable_insight_memory": parse_boolish(pick("enable_insight_memory", False), False),
         "insight_notes_dir": str(pick("insight_notes_dir", "input/insight_notes")),
-        "execution_overlay_enabled": parse_boolish(pick("execution_overlay_enabled", True), True),
+        "execution_overlay_enabled": parse_boolish(pick("execution_overlay_enabled", False), False),
         "enable_intraday_execution_overlay": parse_boolish(pick("enable_intraday_execution_overlay", True), True),
         "intraday_data_dir": str(pick("intraday_data_dir", "data/intraday")),
         "intraday_source": str(pick("intraday_source", "tushare,eastmoney,local")).strip() or "tushare,eastmoney,local",
@@ -422,7 +422,7 @@ def load_v2_runtime_settings(
         "use_learned_info_fusion": (
             bool(use_learned_info_fusion)
             if use_learned_info_fusion is not None
-            else parse_boolish(pick("use_learned_info_fusion", pick("use_learned_news_fusion", True)), True)
+            else parse_boolish(pick("use_learned_info_fusion", pick("use_learned_news_fusion", False)), False)
         ),
         "learned_info_min_samples": int(pick("learned_info_min_samples", pick("learned_news_min_samples", 80))),
         "learned_info_l2": float(pick("learned_info_l2", pick("learned_news_l2", 0.8))),
@@ -435,7 +435,7 @@ def load_v2_runtime_settings(
         "info_shadow_only": (
             bool(info_shadow_only)
             if info_shadow_only is not None
-            else parse_boolish(pick("info_shadow_only", True), True)
+            else parse_boolish(pick("info_shadow_only", False), False)
         ),
         "info_types": parse_csv_tokens(
             info_types if info_types is not None else pick("info_types", "news,announcement,research"),

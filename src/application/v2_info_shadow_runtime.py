@@ -81,8 +81,8 @@ def info_shadow_enabled(settings: dict[str, object]) -> bool:
 def info_payload_enabled(settings: dict[str, object]) -> bool:
     return bool(
         info_shadow_enabled(settings)
-        or settings.get("external_signals", True)
-        or settings.get("enable_insight_memory", True)
+        or settings.get("external_signals", False)
+        or settings.get("enable_insight_memory", False)
     )
 
 
@@ -485,7 +485,10 @@ def build_shadow_scored_rows_for_step(
                 "symbol": str(stock.symbol),
                 "score": deps.compose_shadow_stock_score(stock=stock, info_state=info_state),
                 "realized_ret_1d": deps.safe_float(payload.get("excess_ret_1_vs_mkt"), np.nan),
+                "realized_ret_2d": deps.safe_float(payload.get("excess_ret_2_vs_mkt"), np.nan),
+                "realized_ret_3d": deps.safe_float(payload.get("excess_ret_3_vs_mkt"), np.nan),
                 "realized_ret_5d": deps.safe_float(payload.get("excess_ret_5_vs_mkt"), np.nan),
+                "realized_ret_10d": deps.safe_float(payload.get("excess_ret_10_vs_mkt"), np.nan),
                 "realized_ret_20d": deps.safe_float(payload.get("excess_ret_20_vs_sector"), np.nan),
             }
         )

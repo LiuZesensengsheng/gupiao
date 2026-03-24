@@ -103,6 +103,8 @@ def build_backtest_prepare_dependencies(module: ModuleType) -> _v2_backtest_prep
         enrich_state_with_info=module._enrich_state_with_info,
         attach_external_signals_to_composite_state=module._attach_external_signals_to_composite_state,
         attach_insight_memory_to_state=module._attach_insight_memory_to_state,
+        apply_leader_candidate_overlay=module._apply_leader_candidate_overlay,
+        resolve_latest_leader_rank_model=module._load_latest_v2_leader_rank_model,
         sha256_file=module._sha256_file,
     )
 
@@ -306,6 +308,8 @@ def build_daily_state_runtime_dependencies(
         quant_info_divergence_rows=module.quant_info_divergence_rows,
         attach_external_signals_to_composite_state=module._attach_external_signals_to_composite_state,
         attach_insight_memory_to_state=module._attach_insight_memory_to_state,
+        apply_leader_candidate_overlay=module._apply_leader_candidate_overlay,
+        resolve_latest_leader_rank_model=module._load_latest_v2_leader_rank_model,
     )
 
 

@@ -79,13 +79,22 @@ def _stock_fragility(stock: StockForecastState) -> float:
     low_excess_penalty = max(0.0, 0.52 - excess_vs_sector)
     tradeability_penalty = max(0.0, 0.82 - tradeability)
     event_penalty = max(0.0, 0.10 - event_impact)
+    expected_5d = _horizon_expected_return(stock, horizon="5d")
+    expected_20d = _horizon_expected_return(stock, horizon="20d")
+    q10_5d = _horizon_quantile(stock, horizon="5d", field="q10")
+    thin_forward_penalty = max(0.0, 0.002 - expected_5d) / 0.012
+    weak_mid_forward_penalty = max(0.0, 0.006 - expected_20d) / 0.020
+    downside_tail_penalty = abs(min(0.0, q10_5d)) / 0.10
     return float(
         _clip(
-            0.34 * reversal_penalty / 0.12
-            + 0.24 * weak_mid_penalty / 0.10
-            + 0.16 * low_excess_penalty / 0.08
-            + 0.14 * tradeability_penalty / 0.12
-            + 0.12 * event_penalty / 0.10,
+            0.26 * reversal_penalty / 0.12
+            + 0.18 * weak_mid_penalty / 0.10
+            + 0.14 * low_excess_penalty / 0.08
+            + 0.10 * tradeability_penalty / 0.12
+            + 0.08 * event_penalty / 0.10
+            + 0.12 * thin_forward_penalty
+            + 0.12 * weak_mid_forward_penalty
+            + 0.10 * downside_tail_penalty,
             0.0,
             1.0,
         )
@@ -93,6 +102,8 @@ def _stock_fragility(stock: StockForecastState) -> float:
 
 
 def _durability_alignment(stock: StockForecastState) -> float:
+    up_2d = float(getattr(stock, "up_2d_prob", 0.65 * float(getattr(stock, "up_1d_prob", 0.5)) + 0.35 * float(getattr(stock, "up_5d_prob", 0.5))))
+    up_3d = float(getattr(stock, "up_3d_prob", 0.35 * float(getattr(stock, "up_1d_prob", 0.5)) + 0.65 * float(getattr(stock, "up_5d_prob", 0.5))))
     up_1d = float(getattr(stock, "up_1d_prob", 0.5))
     up_5d = float(getattr(stock, "up_5d_prob", 0.5))
     up_20d = float(getattr(stock, "up_20d_prob", 0.5))
@@ -100,13 +111,17 @@ def _durability_alignment(stock: StockForecastState) -> float:
     tradeability = float(getattr(stock, "tradeability_score", 0.5))
     event_impact = float(getattr(stock, "event_impact_score", 0.5))
     short_spike = max(0.0, up_1d - max(up_5d, up_20d))
+    forward_edge = _forward_edge_alignment(stock)
     return float(
         _clip(
-            0.34 * max(0.0, up_20d - 0.50) / 0.20
-            + 0.24 * max(0.0, up_5d - 0.50) / 0.16
-            + 0.18 * max(0.0, excess_vs_sector - 0.50) / 0.14
-            + 0.12 * max(0.0, tradeability - 0.80) / 0.16
-            + 0.08 * max(0.0, event_impact - 0.10) / 0.20
+            0.18 * max(0.0, up_20d - 0.50) / 0.20
+            + 0.18 * max(0.0, up_5d - 0.50) / 0.16
+            + 0.10 * max(0.0, up_3d - 0.50) / 0.12
+            + 0.08 * max(0.0, up_2d - 0.50) / 0.10
+            + 0.16 * max(0.0, excess_vs_sector - 0.50) / 0.14
+            + 0.10 * max(0.0, tradeability - 0.80) / 0.16
+            + 0.06 * max(0.0, event_impact - 0.10) / 0.20
+            + 0.22 * forward_edge
             - 0.14 * short_spike / 0.12,
             0.0,
             1.0,
@@ -114,22 +129,109 @@ def _durability_alignment(stock: StockForecastState) -> float:
     )
 
 
+def _horizon_payload(stock: StockForecastState, horizon: str) -> object | None:
+    forecasts = getattr(stock, "horizon_forecasts", {}) or {}
+    payload = forecasts.get(str(horizon))
+    if payload is not None:
+        return payload
+    if str(horizon).endswith("d"):
+        try:
+            target_days = int(str(horizon)[:-1])
+        except ValueError:
+            target_days = -1
+        if target_days > 0:
+            for candidate in forecasts.values():
+                try:
+                    candidate_days = int(getattr(candidate, "horizon_days", -1))
+                except Exception:
+                    candidate_days = -1
+                if candidate_days == target_days:
+                    return candidate
+    return None
+
+
+def _horizon_expected_return(stock: StockForecastState, *, horizon: str) -> float:
+    payload = _horizon_payload(stock, horizon)
+    if payload is not None:
+        try:
+            return float(getattr(payload, "expected_return", 0.0))
+        except Exception:
+            return 0.0
+    prob = float(getattr(stock, f"up_{str(horizon).rstrip('d')}d_prob", 0.5)) if str(horizon) in {"1d", "2d", "3d", "5d", "10d", "20d"} else 0.5
+    scale = {
+        "1d": 0.035,
+        "2d": 0.05,
+        "3d": 0.065,
+        "5d": 0.095,
+        "10d": 0.145,
+        "20d": 0.22,
+    }.get(str(horizon), 0.08)
+    return float(_clip((prob - 0.5) * 1.2 * scale, -scale, scale))
+
+
+def _horizon_quantile(stock: StockForecastState, *, horizon: str, field: str) -> float:
+    payload = _horizon_payload(stock, horizon)
+    if payload is not None:
+        try:
+            return float(getattr(payload, str(field), 0.0))
+        except Exception:
+            return 0.0
+    return 0.0
+
+
+def _forward_edge_alignment(stock: StockForecastState) -> float:
+    up_2d = float(getattr(stock, "up_2d_prob", 0.65 * float(getattr(stock, "up_1d_prob", 0.5)) + 0.35 * float(getattr(stock, "up_5d_prob", 0.5))))
+    up_3d = float(getattr(stock, "up_3d_prob", 0.35 * float(getattr(stock, "up_1d_prob", 0.5)) + 0.65 * float(getattr(stock, "up_5d_prob", 0.5))))
+    up_5d = float(getattr(stock, "up_5d_prob", 0.5))
+    up_10d = float(getattr(stock, "up_10d_prob", 0.55 * up_5d + 0.45 * float(getattr(stock, "up_20d_prob", 0.5))))
+    up_20d = float(getattr(stock, "up_20d_prob", 0.5))
+    excess_vs_sector = float(getattr(stock, "excess_vs_sector_prob", 0.5))
+    expected_5d = _horizon_expected_return(stock, horizon="5d")
+    expected_20d = _horizon_expected_return(stock, horizon="20d")
+    q10_5d = _horizon_quantile(stock, horizon="5d", field="q10")
+    downside_penalty = abs(min(0.0, q10_5d)) / 0.10
+    near_stack = (
+        0.18 * up_2d
+        + 0.20 * up_3d
+        + 0.24 * up_5d
+        + 0.16 * up_10d
+        + 0.10 * up_20d
+        + 0.12 * excess_vs_sector
+    )
+    return float(
+        _clip(
+            0.40 * max(0.0, near_stack - 0.54) / 0.18
+            + 0.30 * max(0.0, expected_5d) / 0.03
+            + 0.10 * max(0.0, expected_20d) / 0.06
+            + 0.10 * max(0.0, excess_vs_sector - 0.50) / 0.12
+            - 0.20 * downside_penalty,
+            0.0,
+            1.0,
+        )
+    )
+
+
 def _stock_selection_priority(stock: StockForecastState, *, stock_score: float, risk_penalty: float) -> float:
+    up_2d = float(getattr(stock, "up_2d_prob", 0.65 * float(getattr(stock, "up_1d_prob", 0.5)) + 0.35 * float(getattr(stock, "up_5d_prob", 0.5))))
+    up_3d = float(getattr(stock, "up_3d_prob", 0.35 * float(getattr(stock, "up_1d_prob", 0.5)) + 0.65 * float(getattr(stock, "up_5d_prob", 0.5))))
     up_5d = float(getattr(stock, "up_5d_prob", 0.5))
     up_20d = float(getattr(stock, "up_20d_prob", 0.5))
     excess_vs_sector = float(getattr(stock, "excess_vs_sector_prob", 0.5))
     tradeability = float(getattr(stock, "tradeability_score", 0.5))
     event_impact = float(getattr(stock, "event_impact_score", 0.5))
     short_spike = max(0.0, float(getattr(stock, "up_1d_prob", 0.5)) - max(up_5d, up_20d))
+    forward_edge = _forward_edge_alignment(stock)
     stability_bonus = (
-        0.34 * max(0.0, up_20d - 0.50)
-        + 0.24 * max(0.0, up_5d - 0.50)
+        0.18 * max(0.0, up_20d - 0.50)
+        + 0.22 * max(0.0, up_5d - 0.50)
+        + 0.16 * max(0.0, up_3d - 0.50)
+        + 0.10 * max(0.0, up_2d - 0.50)
         + 0.16 * max(0.0, excess_vs_sector - 0.50)
         + 0.10 * max(0.0, tradeability - 0.78)
         + 0.08 * max(0.0, event_impact - 0.10)
-        + 0.18 * _durability_alignment(stock)
+        + 0.16 * _durability_alignment(stock)
     )
-    return float(stock_score + stability_bonus - risk_penalty - 0.10 * short_spike / 0.12)
+    return float(stock_score + stability_bonus + 0.28 * forward_edge - risk_penalty - 0.10 * short_spike / 0.12)
 
 
 def _mainline_priority_maps(mainlines: Iterable[MainlineState]) -> tuple[dict[str, float], dict[str, float]]:
@@ -206,12 +308,21 @@ def _sector_stock_support(
                 ]
             )
         )
+        forward_edge = float(
+            np.mean(
+                [
+                    _forward_edge_alignment(stock)
+                    for stock, _, _ in items[: min(3, len(items))]
+                ]
+            )
+        )
         support[sector] = float(
             _clip(
-                0.46 * max(0.0, top_mean - max(0.54, float(median_score))) / 0.10
-                + 0.25 * strong_ratio
-                + 0.16 * durability
-                + 0.13 * resilience,
+                0.38 * max(0.0, top_mean - max(0.54, float(median_score))) / 0.10
+                + 0.21 * strong_ratio
+                + 0.15 * durability
+                + 0.11 * resilience
+                + 0.15 * forward_edge,
                 0.0,
                 1.0,
             )
@@ -230,7 +341,12 @@ def _minimum_shortlist_size(
     if total_scored <= 24:
         return total_scored
     if risk_regime == "risk_off":
-        floor = 4 if total_scored >= 120 else 3
+        if total_scored >= 200:
+            floor = 6
+        elif total_scored >= 120:
+            floor = 5
+        else:
+            floor = 3
         if quant_breadth >= 0.08 or breadth_strength >= 0.08:
             floor += 1
     elif risk_regime == "cautious":
@@ -243,8 +359,9 @@ def _minimum_shortlist_size(
 def candidate_risk_snapshot(stocks: Iterable[StockForecastState]) -> dict[str, float]:
     rows = list(stocks)
     if not rows:
-        return {"fragile_ratio": 0.0, "reversal_ratio": 0.0, "durability_score": 0.0}
+        return {"fragile_ratio": 0.0, "reversal_ratio": 0.0, "durability_score": 0.0, "forward_edge_score": 0.0}
     fragilities = [_stock_fragility(stock) for stock in rows]
+    forward_edges = [_forward_edge_alignment(stock) for stock in rows]
     reversal_ratio = float(
         sum(
             1
@@ -261,6 +378,7 @@ def candidate_risk_snapshot(stocks: Iterable[StockForecastState]) -> dict[str, f
                 + 0.26 * float(getattr(stock, "up_5d_prob", 0.5))
                 + 0.15 * float(getattr(stock, "excess_vs_sector_prob", 0.5))
                 + 0.15 * float(getattr(stock, "tradeability_score", 0.5))
+                + 0.12 * _forward_edge_alignment(stock)
                 - 0.10 * _stock_fragility(stock)
                 for stock in rows
             ]
@@ -270,6 +388,7 @@ def candidate_risk_snapshot(stocks: Iterable[StockForecastState]) -> dict[str, f
         "fragile_ratio": float(sum(1 for value in fragilities if value >= 0.45) / max(1, len(fragilities))),
         "reversal_ratio": reversal_ratio,
         "durability_score": durability,
+        "forward_edge_score": float(np.mean(forward_edges)) if forward_edges else 0.0,
     }
 
 

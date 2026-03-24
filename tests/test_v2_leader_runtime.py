@@ -258,3 +258,144 @@ def test_apply_leader_candidate_overlay_can_promote_tail_into_core() -> None:
     assert any("Leader overlay reprioritized" in note for note in updated.candidate_selection.selection_notes)
     assert any("Promoted into core: AAA" in note for note in updated.candidate_selection.selection_notes)
     assert any("Demoted from core: CCC" in note for note in updated.candidate_selection.selection_notes)
+
+
+def test_apply_leader_candidate_overlay_can_use_learned_model() -> None:
+    state = _leader_state()
+    state = state.__class__(
+        **{
+            **state.__dict__,
+            "stocks": [
+                replace(state.stocks[0], up_5d_prob=0.56, up_20d_prob=0.58, tradeability_score=0.82, alpha_score=0.55),
+                replace(state.stocks[1], up_5d_prob=0.67, up_20d_prob=0.70, tradeability_score=0.93, alpha_score=0.84),
+                state.stocks[2],
+            ],
+            "candidate_selection": state.candidate_selection.__class__(
+                shortlisted_symbols=["BBB", "AAA", "CCC"],
+                shortlisted_sectors=["chips"],
+                total_scored=3,
+                shortlist_size=1,
+                shortlist_ratio=1.0 / 3.0,
+                selection_mode="macro_sector_ranking",
+            ),
+        }
+    )
+
+    without_model = apply_leader_candidate_overlay(state=state)
+    assert without_model.candidate_selection.shortlisted_symbols[:2] == ["BBB", "AAA"]
+
+    learned_model = {
+        "feature_names": [f"f{i}" for i in range(17)],
+        "intercept": 0.05,
+        "coef": [-0.4, 0.1, 0.1, 0.1, 0.0, -0.3, -0.6, 0.9, -0.3, -0.1, -0.2, -0.5, 0.2, 0.35, -0.25, -0.35, -0.5],
+        "train_rows": 50,
+        "leader_filter_model": {
+            "feature_names": [f"f{i}" for i in range(17)],
+            "intercept": 0.05,
+            "coef": [-0.55, 0.08, 0.12, 0.1, 0.0, -0.35, -0.8, 1.0, -0.45, -0.15, -0.25, -0.6, 0.2, 0.45, -0.3, -0.4, -0.6],
+            "threshold": 0.52,
+            "train_rows": 50,
+        },
+    }
+    updated = apply_leader_candidate_overlay(state=state, leader_rank_model=learned_model)
+
+    assert updated.candidate_selection.shortlisted_symbols[:2] == ["AAA", "BBB"]
+    assert any("Learned leader overlay reprioritized" in note for note in updated.candidate_selection.selection_notes)
+
+
+def test_apply_leader_candidate_overlay_keeps_strong_fading_leader_inside_core() -> None:
+    state = CompositeState(
+        market=MarketForecastState(
+            as_of_date="2026-03-12",
+            up_1d_prob=0.57,
+            up_5d_prob=0.61,
+            up_20d_prob=0.64,
+            trend_state="trend",
+            drawdown_risk=0.18,
+            volatility_regime="normal",
+            liquidity_stress=0.16,
+        ),
+        cross_section=CrossSectionForecastState(
+            as_of_date="2026-03-12",
+            large_vs_small_bias=0.02,
+            growth_vs_value_bias=0.04,
+            fund_flow_strength=0.12,
+            margin_risk_on_score=0.10,
+            breadth_strength=0.22,
+            leader_participation=0.64,
+            weak_stock_ratio=0.18,
+        ),
+        sectors=[
+            SectorForecastState("shipping", 0.58, 0.63, 0.14, 0.16, 0.18),
+            SectorForecastState("chips", 0.62, 0.68, 0.18, 0.18, 0.18),
+        ],
+        stocks=[
+            StockForecastState("FADER", "shipping", 0.61, 0.68, 0.70, 0.64, 0.11, 0.93, alpha_score=0.88),
+            StockForecastState("STRONG", "chips", 0.58, 0.64, 0.67, 0.60, 0.11, 0.91, alpha_score=0.76),
+        ],
+        strategy_mode="trend_follow",
+        risk_regime="risk_on",
+        mainlines=[
+            MainlineState(
+                name="shipping",
+                conviction=0.22,
+                breadth=0.20,
+                leadership=0.14,
+                catalyst_strength=0.18,
+                event_risk_level=0.58,
+                sectors=["shipping"],
+                representative_symbols=["FADER"],
+            ),
+            MainlineState(
+                name="chips",
+                conviction=0.70,
+                breadth=0.36,
+                leadership=0.31,
+                catalyst_strength=0.26,
+                event_risk_level=0.18,
+                sectors=["chips"],
+                representative_symbols=["STRONG"],
+            ),
+        ],
+        theme_episodes=[
+            ThemeEpisode(
+                theme="shipping",
+                phase="fading",
+                conviction=0.46,
+                breadth=0.28,
+                leadership=0.21,
+                event_risk=0.54,
+                crowding=0.18,
+                sectors=["shipping"],
+                representative_symbols=["FADER"],
+            ),
+            ThemeEpisode(
+                theme="chips",
+                phase="strengthening",
+                conviction=0.66,
+                breadth=0.34,
+                leadership=0.29,
+                event_risk=0.18,
+                crowding=0.20,
+                sectors=["chips"],
+                representative_symbols=["STRONG"],
+            ),
+        ],
+        stock_role_states={
+            "FADER": StockRoleSnapshot(symbol="FADER", theme="shipping", role="leader"),
+            "STRONG": StockRoleSnapshot(symbol="STRONG", theme="chips", role="leader"),
+        },
+        candidate_selection=CandidateSelectionState(
+            shortlisted_symbols=["FADER", "STRONG"],
+            shortlisted_sectors=["shipping", "chips"],
+            total_scored=2,
+            shortlist_size=2,
+            shortlist_ratio=1.0,
+            selection_mode="macro_sector_ranking",
+            selection_notes=["base shortlist"],
+        ),
+    )
+
+    updated = apply_leader_candidate_overlay(state=state)
+
+    assert set(updated.candidate_selection.shortlisted_symbols[:2]) == {"FADER", "STRONG"}

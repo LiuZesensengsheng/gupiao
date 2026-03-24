@@ -4,7 +4,7 @@ import pickle
 import sys
 from dataclasses import asdict
 from datetime import datetime
-from functools import wraps
+from functools import lru_cache, wraps
 from pathlib import Path
 from typing import Iterable
 
@@ -107,6 +107,7 @@ from src.application import v2_daily_state_runtime as _v2_daily_state_runtime
 from src.application import v2_forecast_model_runtime as _v2_forecast_model_runtime
 from src.application import v2_frozen_forecast_runtime as _v2_frozen_forecast_runtime
 from src.application import v2_info_shadow_runtime as _v2_info_shadow_runtime
+from src.application import v2_info_research_runtime as _v2_info_research_runtime
 from src.application import v2_insight_runtime as _v2_insight_runtime
 from src.application import v2_learning_target_runtime as _v2_learning_target_runtime
 from src.application import v2_execution_overlay_runtime as _v2_execution_overlay_runtime
@@ -1131,6 +1132,50 @@ _resolve_daily_exit_behavior_model = _with_injected_kwargs(
 )
 
 
+def _leader_rank_model_actionable(payload: dict[str, object] | None) -> bool:
+    if not isinstance(payload, dict) or not payload:
+        return False
+    evaluation_metrics = payload.get("evaluation_metrics", {})
+    if not isinstance(evaluation_metrics, dict) or not evaluation_metrics:
+        return False
+    top1_hit_rate = float(evaluation_metrics.get("top1_hit_rate", 0.0) or 0.0)
+    ndcg_at_3 = float(evaluation_metrics.get("ndcg_at_3", 0.0) or 0.0)
+    filter_payload = payload.get("leader_filter_model", {})
+    filter_eval = filter_payload.get("evaluation_metrics", {}) if isinstance(filter_payload, dict) else {}
+    filter_precision = float(filter_eval.get("precision", 0.0) or 0.0) if isinstance(filter_eval, dict) else 0.0
+    return top1_hit_rate >= 0.40 and ndcg_at_3 >= 0.92 and filter_precision >= 0.58
+
+
+@lru_cache(maxsize=8)
+def _load_latest_v2_leader_rank_model(
+    *,
+    strategy_id: str = "swing_v2",
+    artifact_root: str = "artifacts/v2",
+) -> dict[str, object] | None:
+    base_dir = Path(str(artifact_root)) / str(strategy_id)
+    if not base_dir.exists():
+        return None
+    manifest_candidates = sorted(
+        base_dir.glob("latest_research_manifest*.json"),
+        key=lambda path: path.stat().st_mtime,
+        reverse=True,
+    )
+    for manifest_path in manifest_candidates:
+        manifest = _load_json_dict(manifest_path)
+        if not manifest:
+            continue
+        payload = _resolve_manifest_json_artifact_external(
+            manifest=manifest,
+            manifest_path=manifest_path,
+            manifest_key="leader_rank_model",
+            path_from_manifest_entry=_path_from_manifest_entry,
+            load_json_dict=_load_json_dict,
+        )
+        if _leader_rank_model_actionable(payload if isinstance(payload, dict) else None):
+            return payload
+    return None
+
+
 def _daily_workflow_dependencies():
     return _v2_facade_dependency_builders.build_daily_workflow_dependencies(sys.modules[__name__])
 
@@ -1218,6 +1263,46 @@ def persist_v2_ranking_research_artifacts(
 
 def summarize_v2_ranking_research(
     result: _v2_ranking_research_runtime.V2RankingResearchResult,
+) -> dict[str, object]:
+    return result.summary()
+
+
+def run_v2_info_research(**kwargs: object) -> _v2_info_research_runtime.V2InfoResearchResult:
+    return _v2_info_research_runtime.run_v2_info_research(
+        dependencies=_v2_info_research_runtime.InfoResearchDependencies(
+            emit_progress_fn=_emit_progress,
+            load_or_build_v2_backtest_trajectory_fn=_load_or_build_v2_backtest_trajectory,
+            split_research_trajectory_fn=_split_research_trajectory,
+            trajectory_step_count_fn=_trajectory_step_count,
+            load_v2_runtime_settings_fn=_load_v2_runtime_settings,
+            resolve_v2_universe_settings_fn=_resolve_v2_universe_settings,
+            load_v2_info_items_for_date_fn=_load_v2_info_items_for_date,
+            fit_v2_info_shadow_models_fn=_fit_v2_info_shadow_models,
+            enrich_state_with_info_fn=_enrich_state_with_info,
+            build_shadow_scored_rows_for_step_fn=_build_shadow_scored_rows_for_step,
+            stock_policy_score_fn=_stock_policy_score,
+            panel_slice_metrics_fn=_panel_slice_metrics,
+            filter_info_items_by_source_subset_fn=_filter_info_items_by_source_subset,
+            event_tag_counts_fn=event_tag_counts,
+            info_source_breakdown_fn=_info_source_breakdown,
+        ),
+        **kwargs,
+    )
+
+
+def persist_v2_info_research_artifacts(
+    result: _v2_info_research_runtime.V2InfoResearchResult,
+    *,
+    artifact_root: str = "artifacts/v2",
+) -> dict[str, str]:
+    return _v2_info_research_runtime.persist_v2_info_research_artifacts(
+        result,
+        artifact_root=artifact_root,
+    )
+
+
+def summarize_v2_info_research(
+    result: _v2_info_research_runtime.V2InfoResearchResult,
 ) -> dict[str, object]:
     return result.summary()
 

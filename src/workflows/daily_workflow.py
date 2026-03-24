@@ -240,7 +240,7 @@ def run_daily_v2_live_impl(
         ),
         policy_spec=active_policy_spec,
     )
-    if dependencies.parse_boolish_fn(settings.get("execution_overlay_enabled", True), True):
+    if dependencies.parse_boolish_fn(settings.get("execution_overlay_enabled", False), False):
         execution_plans = dependencies.build_execution_plans_fn(
             state=composite_state,
             policy_decision=policy_decision,

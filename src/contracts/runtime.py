@@ -271,6 +271,89 @@ class RankingResearchOptions(_BaseRuntimeOptions):
 
 
 @dataclass(frozen=True)
+class InfoResearchOptions(_BaseRuntimeOptions):
+    artifact_root: str = "artifacts/v2"
+    cache_root: str = "artifacts/v2/cache"
+    refresh_cache: bool = False
+    retrain_days: int = 20
+    forecast_backend: str = "linear"
+    training_window_days: int | None = 480
+    split_mode: str = "purged_wf"
+    embargo_days: int = 20
+    horizons: tuple[str, ...] = ("1d", "2d", "3d", "5d", "10d", "20d")
+    min_tag_count: int = 5
+    max_tag_count: int = 12
+
+    @classmethod
+    def from_namespace(cls, args: argparse.Namespace) -> Self:
+        return cls(
+            strategy_id=str(args.strategy),
+            config_path=str(args.config),
+            source=args.source,
+            start_date=getattr(args, "start_date", None),
+            end_date=getattr(args, "end_date", None),
+            lookback_years=getattr(args, "lookback_years", None),
+            universe_tier=args.universe_tier,
+            universe_file=args.universe_file,
+            universe_limit=args.universe_limit,
+            dynamic_universe=args.dynamic_universe,
+            generator_target_size=args.generator_target_size,
+            generator_coarse_size=args.generator_coarse_size,
+            generator_theme_aware=args.generator_theme_aware,
+            generator_use_concepts=args.generator_use_concepts,
+            info_file=args.info_file,
+            info_lookback_days=args.info_lookback_days,
+            info_half_life_days=args.info_half_life_days,
+            use_info_fusion=args.use_info_fusion,
+            use_learned_info_fusion=getattr(args, "use_learned_info_fusion", None),
+            info_shadow_only=args.info_shadow_only,
+            info_types=args.info_types,
+            info_source_mode=args.info_source_mode,
+            info_subsets=args.info_subsets,
+            info_cutoff_time=getattr(args, "info_cutoff_time", None),
+            external_signals=args.external_signals,
+            event_file=args.event_file,
+            capital_flow_file=args.capital_flow_file,
+            macro_file=args.macro_file,
+            use_us_index_context=args.use_us_index_context,
+            us_index_source=args.us_index_source,
+            artifact_root=str(args.artifact_root),
+            cache_root=str(args.cache_root),
+            refresh_cache=bool(args.refresh_cache),
+            retrain_days=int(args.retrain_days),
+            forecast_backend=str(args.forecast_backend),
+            training_window_days=args.training_window_days,
+            split_mode=str(args.split_mode),
+            embargo_days=int(args.embargo_days),
+            horizons=tuple(str(item).strip() for item in str(args.horizons).split(",") if str(item).strip()),
+            min_tag_count=int(args.min_tag_count),
+            max_tag_count=int(args.max_tag_count),
+        )
+
+    def workflow_kwargs(self) -> dict[str, object]:
+        payload = self.common_kwargs()
+        payload.update(
+            {
+                "artifact_root": self.artifact_root,
+                "cache_root": self.cache_root,
+                "refresh_cache": self.refresh_cache,
+                "retrain_days": self.retrain_days,
+                "forecast_backend": self.forecast_backend,
+                "training_window_days": self.training_window_days,
+                "start_date": self.start_date,
+                "end_date": self.end_date,
+                "lookback_years": self.lookback_years,
+                "split_mode": self.split_mode,
+                "embargo_days": self.embargo_days,
+                "horizons": list(self.horizons),
+                "min_tag_count": self.min_tag_count,
+                "max_tag_count": self.max_tag_count,
+            }
+        )
+        return payload
+
+
+@dataclass(frozen=True)
 class DailyRunOptions(_BaseRuntimeOptions):
     artifact_root: str = "artifacts/v2"
     cache_root: str = "artifacts/v2/cache"

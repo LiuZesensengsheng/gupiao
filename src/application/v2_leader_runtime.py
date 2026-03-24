@@ -398,9 +398,9 @@ def _phase_bonus(phase: str) -> float:
     return {
         "strengthening": 0.08,
         "emerging": 0.04,
-        "crowded": -0.02,
-        "diverging": -0.06,
-        "fading": -0.12,
+        "crowded": -0.01,
+        "diverging": -0.03,
+        "fading": -0.04,
     }.get(_normalize_text(phase).lower(), 0.0)
 
 
@@ -421,7 +421,7 @@ def _negative_adjustment_for_role_and_phase(
         "strengthening": -0.03,
         "emerging": 0.00,
         "crowded": 0.04,
-        "diverging": 0.06,
+        "diverging": 0.07,
         "fading": 0.14,
     }.get(_normalize_text(phase).lower(), 0.0)
     downgrade_term = 0.10 if role_downgrade else 0.0
@@ -732,37 +732,19 @@ def top_leader_candidates(
     *,
     state: CompositeState,
     limit: int = 12,
+    leader_rank_model: dict[str, object] | None = None,
 ) -> list[LeaderScoreSnapshot]:
     snapshots = build_leader_score_snapshots(state=state)
     if not snapshots:
         return []
 
     def _sort_key(item: LeaderScoreSnapshot) -> tuple[float, float, float, float]:
-        theme_percentile = _rank_percentile(int(item.theme_rank), int(item.theme_size))
-        role_term = _role_bonus(str(item.role))
-        phase_term = _phase_bonus(str(item.theme_phase))
-        filter_score = _clip01(
-            0.44
-            + 0.34 * float(item.candidate_score)
-            + 0.18 * float(item.conviction_score)
-            + 0.10 * float(theme_percentile)
-            + 0.18 * float(role_term)
-            + 0.10 * float(phase_term)
-            - 0.42 * float(item.negative_score)
-            - (0.22 if bool(item.role_downgrade) else 0.0)
-            - (0.35 if bool(item.hard_negative) else 0.0)
+        filter_score, rank_score, threshold = _leader_runtime_scores(
+            snapshot=item,
+            shortlist_support=0.0,
+            leader_rank_model=leader_rank_model,
         )
-        rank_score = (
-            0.58 * float(item.candidate_score)
-            + 0.24 * float(item.conviction_score)
-            + 0.12 * float(theme_percentile)
-            + 0.10 * float(role_term)
-            + 0.08 * float(phase_term)
-            - 0.28 * float(item.negative_score)
-            - (0.12 if bool(item.role_downgrade) else 0.0)
-            - (0.25 if bool(item.hard_negative) else 0.0)
-        )
-        passes = 1.0 if (not bool(item.hard_negative) and filter_score >= 0.60) else 0.0
+        passes = 1.0 if (not bool(item.hard_negative) and filter_score >= float(threshold)) else 0.0
         return (
             passes,
             float(rank_score),
@@ -777,6 +759,7 @@ def top_leader_candidates(
 def apply_leader_candidate_overlay(
     *,
     state: CompositeState,
+    leader_rank_model: dict[str, object] | None = None,
 ) -> CompositeState:
     selection = getattr(state, "candidate_selection", CandidateSelectionState())
     symbols = [str(item) for item in getattr(selection, "shortlisted_symbols", []) if str(item).strip()]
@@ -793,48 +776,71 @@ def apply_leader_candidate_overlay(
         shortlist_size = len(symbols)
     shortlist_size = min(shortlist_size, len(symbols))
     original_core = list(symbols[:shortlist_size])
+    stock_map = {
+        str(getattr(stock, "symbol", "")): stock
+        for stock in getattr(state, "stocks", []) or []
+        if str(getattr(stock, "symbol", "")).strip()
+    }
     symbol_sector_map = {
         str(getattr(stock, "symbol", "")): str(getattr(stock, "sector", ""))
         for stock in getattr(state, "stocks", []) or []
         if str(getattr(stock, "symbol", "")).strip()
     }
+    stressed_tape = bool(
+        str(getattr(getattr(state, "market", None), "volatility_regime", "") or "").strip().lower() == "high"
+        or float(getattr(getattr(state, "market", None), "drawdown_risk", 0.0) or 0.0) >= 0.35
+        or float(getattr(getattr(state, "cross_section", None), "weak_stock_ratio", 0.0) or 0.0) >= 0.48
+    )
+
+    def _stress_fragility(symbol: str) -> float:
+        stock = stock_map.get(symbol)
+        if stock is None:
+            return 0.0
+        up_1d = _safe_float(getattr(stock, "up_1d_prob", 0.5), 0.5)
+        up_5d = _safe_float(getattr(stock, "up_5d_prob", 0.5), 0.5)
+        up_20d = _safe_float(getattr(stock, "up_20d_prob", 0.5), 0.5)
+        tradeability = _safe_float(getattr(stock, "tradeability_score", 0.5), 0.5)
+        event_impact = _safe_float(getattr(stock, "event_impact_score", 0.5), 0.5)
+        short_spike = max(0.0, up_1d - max(up_5d, up_20d))
+        weak_mid = max(0.0, 0.55 - up_20d)
+        return _clip01(
+            0.42 * short_spike / 0.14
+            + 0.20 * weak_mid / 0.12
+            + 0.18 * max(0.0, 0.84 - tradeability) / 0.14
+            + 0.12 * max(0.0, 0.10 - event_impact) / 0.10
+        )
+
+    def _stress_promotion_allowed(symbol: str) -> bool:
+        payload = score_map.get(symbol)
+        if payload is None or bool(payload.hard_negative):
+            return False
+        role = str(getattr(payload, "role", "") or "").strip().lower()
+        if role not in {"leader", "core"}:
+            return False
+        if float(getattr(payload, "negative_score", 0.0)) > 0.22:
+            return False
+        if float(getattr(payload, "candidate_score", 0.0)) < 0.64:
+            return False
+        if _stress_fragility(symbol) > 0.24:
+            return False
+        return True
 
     def _sort_key(symbol: str) -> tuple[float, float, float, float, int]:
         payload = score_map.get(symbol)
         if payload is None:
             return (2.0, 0.0, 0.0, 2.0, rank_map.get(symbol, len(rank_map)))
-        theme_percentile = _rank_percentile(int(payload.theme_rank), int(payload.theme_size))
         shortlist_support = _shortlist_support(
             symbol=symbol,
             shortlist_rank_map=rank_map,
             shortlist_size=shortlist_size,
             total_scored=max(len(symbols), int(getattr(selection, "total_scored", len(symbols)) or len(symbols))),
         )
-        role_term = _role_bonus(str(payload.role))
-        phase_term = _phase_bonus(str(payload.theme_phase))
-        filter_score = _clip01(
-            0.44
-            + 0.34 * float(payload.candidate_score)
-            + 0.18 * float(payload.conviction_score)
-            + 0.10 * float(theme_percentile)
-            + 0.18 * float(role_term)
-            + 0.10 * float(phase_term)
-            - 0.42 * float(payload.negative_score)
-            - (0.22 if bool(payload.role_downgrade) else 0.0)
-            - (0.35 if bool(payload.hard_negative) else 0.0)
+        filter_score, overlay_rank_score, threshold = _leader_runtime_scores(
+            snapshot=payload,
+            shortlist_support=float(shortlist_support),
+            leader_rank_model=leader_rank_model,
         )
-        overlay_rank_score = (
-            0.58 * float(payload.candidate_score)
-            + 0.24 * float(payload.conviction_score)
-            + 0.12 * float(theme_percentile)
-            + 0.10 * float(role_term)
-            + 0.08 * float(phase_term)
-            + 0.08 * float(shortlist_support)
-            - 0.28 * float(payload.negative_score)
-            - (0.12 if bool(payload.role_downgrade) else 0.0)
-            - (0.25 if bool(payload.hard_negative) else 0.0)
-        )
-        passes_filter = 1.0 if (not payload.hard_negative and filter_score >= 0.60) else 0.0
+        passes_filter = 1.0 if (not payload.hard_negative and filter_score >= float(threshold)) else 0.0
         return (
             passes_filter,
             float(overlay_rank_score),
@@ -844,6 +850,22 @@ def apply_leader_candidate_overlay(
         )
 
     reordered = sorted(symbols, key=_sort_key, reverse=True)
+    if stressed_tape:
+        protected_core: list[str] = []
+        for symbol in reordered:
+            if len(protected_core) >= shortlist_size:
+                break
+            if symbol in original_core:
+                protected_core.append(symbol)
+                continue
+            if _stress_promotion_allowed(symbol):
+                protected_core.append(symbol)
+        for symbol in original_core:
+            if len(protected_core) >= shortlist_size:
+                break
+            if symbol not in protected_core:
+                protected_core.append(symbol)
+        reordered = protected_core + [symbol for symbol in reordered if symbol not in set(protected_core)]
     if reordered == symbols:
         return state
 
@@ -865,6 +887,8 @@ def apply_leader_candidate_overlay(
         sector_slots[sector] = int(sector_slots.get(sector, 0) + 1)
     notes = list(getattr(selection, "selection_notes", []) or [])
     note = "Leader overlay reprioritized shortlist order and refreshed core membership."
+    if _leader_model_active(leader_rank_model):
+        note = "Learned leader overlay reprioritized shortlist order and refreshed core membership."
     if top_promoted:
         note += " Promoted into core: " + ", ".join(top_promoted[:3])
     if demoted_from_core:
@@ -887,6 +911,147 @@ def _dcg(relevances: list[float]) -> float:
     for idx, value in enumerate(relevances, start=1):
         total += float(value) / math.log2(idx + 1.0)
     return float(total)
+
+
+_LEADER_MODEL_ROLES = ["leader", "core", "follower", "rebound", "laggard"]
+_LEADER_MODEL_PHASES = ["emerging", "strengthening", "crowded", "diverging", "fading"]
+
+
+def _leader_snapshot_row(snapshot: LeaderScoreSnapshot) -> dict[str, object]:
+    return {
+        "symbol": str(snapshot.symbol),
+        "theme": str(snapshot.theme),
+        "role": str(snapshot.role).strip().lower(),
+        "theme_phase": str(snapshot.theme_phase).strip().lower(),
+        "negative_score": float(snapshot.negative_score),
+        "candidate_score": float(snapshot.candidate_score),
+        "conviction_score": float(snapshot.conviction_score),
+        "theme_percentile": _rank_percentile(int(snapshot.theme_rank), int(snapshot.theme_size)),
+        "theme_size": int(snapshot.theme_size),
+        "role_downgrade": bool(snapshot.role_downgrade),
+        "hard_negative": bool(snapshot.hard_negative),
+    }
+
+
+def _leader_model_feature_vector(row: dict[str, object]) -> list[float]:
+    role = str(row.get("role", "")).strip().lower()
+    phase = str(row.get("theme_phase", "")).strip().lower()
+    return [
+        float(row.get("negative_score", 0.0) or 0.0),
+        float(row.get("candidate_score", 0.0) or 0.0),
+        float(row.get("conviction_score", 0.0) or 0.0),
+        float(row.get("theme_percentile", 0.0) or 0.0),
+        _clip01(float(row.get("theme_size", 0.0) or 0.0) / 20.0),
+        1.0 if bool(row.get("role_downgrade", False)) else 0.0,
+        1.0 if bool(row.get("hard_negative", False)) else 0.0,
+        *[1.0 if role == item else 0.0 for item in _LEADER_MODEL_ROLES],
+        *[1.0 if phase == item else 0.0 for item in _LEADER_MODEL_PHASES],
+    ]
+
+
+def _leader_model_active(model_payload: dict[str, object] | None) -> bool:
+    if not isinstance(model_payload, dict):
+        return False
+    evaluation_metrics = model_payload.get("evaluation_metrics", {})
+    if isinstance(evaluation_metrics, dict) and evaluation_metrics:
+        top1_hit_rate = float(evaluation_metrics.get("top1_hit_rate", 0.0) or 0.0)
+        ndcg_at_3 = float(evaluation_metrics.get("ndcg_at_3", 0.0) or 0.0)
+        filter_metrics = model_payload.get("leader_filter_model", {})
+        filter_eval = filter_metrics.get("evaluation_metrics", {}) if isinstance(filter_metrics, dict) else {}
+        filter_precision = float(filter_eval.get("precision", 0.0) or 0.0) if isinstance(filter_eval, dict) else 0.0
+        if top1_hit_rate < 0.40 or ndcg_at_3 < 0.92 or filter_precision < 0.58:
+            return False
+    coef = model_payload.get("coef", [])
+    if not isinstance(coef, list) or not coef:
+        return False
+    if any(abs(float(value or 0.0)) > 1e-9 for value in coef):
+        return True
+    return int(model_payload.get("train_rows", 0) or 0) > 0
+
+
+def _score_linear_model(
+    *,
+    model_payload: dict[str, object] | None,
+    row: dict[str, object],
+) -> float | None:
+    if not _leader_model_active(model_payload):
+        return None
+    feature_names = model_payload.get("feature_names", [])
+    vector = _leader_model_feature_vector(row)
+    if not isinstance(feature_names, list) or len(feature_names) != len(vector):
+        return None
+    coef = model_payload.get("coef", [])
+    if not isinstance(coef, list):
+        return None
+    intercept = float(model_payload.get("intercept", 0.0) or 0.0)
+    total = intercept
+    for weight, value in zip(coef, vector):
+        total += float(weight or 0.0) * float(value)
+    return _clip01(total)
+
+
+def _leader_model_threshold(model_payload: dict[str, object] | None) -> float:
+    if not isinstance(model_payload, dict):
+        return 0.60
+    filter_model = model_payload.get("leader_filter_model", {})
+    if isinstance(filter_model, dict) and "threshold" in filter_model:
+        return _clip01(float(filter_model.get("threshold", 0.60) or 0.60))
+    manifest = model_payload.get("leader_two_stage_manifest", {})
+    if isinstance(manifest, dict) and "filter_threshold" in manifest:
+        return _clip01(float(manifest.get("filter_threshold", 0.60) or 0.60))
+    return 0.60
+
+
+def _leader_runtime_scores(
+    *,
+    snapshot: LeaderScoreSnapshot,
+    shortlist_support: float = 0.0,
+    leader_rank_model: dict[str, object] | None = None,
+) -> tuple[float, float, float]:
+    theme_percentile = _rank_percentile(int(snapshot.theme_rank), int(snapshot.theme_size))
+    role_term = _role_bonus(str(snapshot.role))
+    phase_term = _phase_bonus(str(snapshot.theme_phase))
+    heuristic_filter = _clip01(
+        0.44
+        + 0.34 * float(snapshot.candidate_score)
+        + 0.18 * float(snapshot.conviction_score)
+        + 0.10 * float(theme_percentile)
+        + 0.18 * float(role_term)
+        + 0.10 * float(phase_term)
+        - 0.42 * float(snapshot.negative_score)
+        - (0.22 if bool(snapshot.role_downgrade) else 0.0)
+        - (0.35 if bool(snapshot.hard_negative) else 0.0)
+    )
+    heuristic_rank = (
+        0.58 * float(snapshot.candidate_score)
+        + 0.24 * float(snapshot.conviction_score)
+        + 0.12 * float(theme_percentile)
+        + 0.10 * float(role_term)
+        + 0.06 * float(phase_term)
+        + 0.08 * float(shortlist_support)
+        - 0.28 * float(snapshot.negative_score)
+        - (0.12 if bool(snapshot.role_downgrade) else 0.0)
+        - (0.25 if bool(snapshot.hard_negative) else 0.0)
+    )
+    row = _leader_snapshot_row(snapshot)
+    learned_filter = _score_linear_model(
+        model_payload=leader_rank_model.get("leader_filter_model", {}) if isinstance(leader_rank_model, dict) else None,
+        row=row,
+    )
+    learned_rank = _score_linear_model(
+        model_payload=leader_rank_model,
+        row=row,
+    )
+    if learned_filter is None or learned_rank is None:
+        return heuristic_filter, heuristic_rank, 0.60
+    combined_filter = _clip01(0.56 * heuristic_filter + 0.44 * learned_filter)
+    combined_rank = (
+        0.52 * float(heuristic_rank)
+        + 0.38 * float(learned_rank)
+        + 0.06 * float(learned_filter)
+        + 0.04 * float(shortlist_support)
+    )
+    return combined_filter, combined_rank, _leader_model_threshold(leader_rank_model)
 
 
 def _future_lookup_for_trajectory(trajectory: object) -> dict[str, pd.DataFrame]:

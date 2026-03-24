@@ -273,6 +273,19 @@ def _horizon_forecast_metric(
         return 0.0, False
 
 
+def _short_horizon_prob_stack(stock: StockForecastState) -> float:
+    up_1d = float(getattr(stock, "up_1d_prob", 0.5))
+    up_2d = float(getattr(stock, "up_2d_prob", 0.65 * up_1d + 0.35 * float(getattr(stock, "up_5d_prob", 0.5))))
+    up_3d = float(getattr(stock, "up_3d_prob", 0.35 * up_1d + 0.65 * float(getattr(stock, "up_5d_prob", 0.5))))
+    up_5d = float(getattr(stock, "up_5d_prob", 0.5))
+    return float(
+        0.14 * up_1d
+        + 0.24 * up_2d
+        + 0.28 * up_3d
+        + 0.34 * up_5d
+    )
+
+
 def stock_actionability_profile(
     stock: StockForecastState,
     *,
@@ -282,29 +295,42 @@ def stock_actionability_profile(
     risk_regime = str(getattr(composite_state, "risk_regime", "") or "").strip().lower()
     signal_profile = stock_signal_profile(stock, deps=deps)
     confidence_1d, has_confidence_1d = _horizon_forecast_metric(stock, horizon="1d", field="confidence")
+    confidence_3d, has_confidence_3d = _horizon_forecast_metric(stock, horizon="3d", field="confidence")
+    confidence_5d, has_confidence_5d = _horizon_forecast_metric(stock, horizon="5d", field="confidence")
+    expected_3d, has_expected_3d = _horizon_forecast_metric(stock, horizon="3d", field="expected_return")
     expected_5d, has_expected_5d = _horizon_forecast_metric(stock, horizon="5d", field="expected_return")
     expected_20d, has_expected_20d = _horizon_forecast_metric(stock, horizon="20d", field="expected_return")
     q10_5d, has_q10_5d = _horizon_forecast_metric(stock, horizon="5d", field="q10")
     confidence_1d = confidence_1d if has_confidence_1d else 0.45
+    confidence_3d = confidence_3d if has_confidence_3d else max(0.46, confidence_1d)
+    confidence_5d = confidence_5d if has_confidence_5d else max(0.47, confidence_3d)
+    expected_3d = expected_3d if has_expected_3d else 0.0
     expected_5d = expected_5d if has_expected_5d else 0.0
     expected_20d = expected_20d if has_expected_20d else 0.0
     q10_5d = q10_5d if has_q10_5d else 0.0
+    short_prob_stack = _short_horizon_prob_stack(stock)
+    short_confidence = float(0.20 * confidence_1d + 0.36 * confidence_3d + 0.44 * confidence_5d)
     downside_penalty = float(deps.clip(abs(min(0.0, q10_5d)) / 0.12, 0.0, 1.0))
+    expected_3d_component = float(deps.clip(0.5 + expected_3d / 0.04, 0.0, 1.0))
     expected_5d_component = float(deps.clip(0.5 + expected_5d / 0.06, 0.0, 1.0))
     expected_20d_component = float(deps.clip(0.5 + expected_20d / 0.10, 0.0, 1.0))
+    short_forward_edge = float(
+        0.42 * expected_3d_component
+        + 0.46 * expected_5d_component
+        + 0.12 * expected_20d_component
+    )
     score = float(
         deps.clip(
-            0.30 * float(signal_profile["entry_score"])
-            + 0.12 * float(signal_profile["hold_score"])
-            + 0.10 * float(stock.up_1d_prob)
-            + 0.14 * float(stock.up_5d_prob)
-            + 0.12 * float(stock.up_20d_prob)
-            + 0.08 * float(stock.excess_vs_sector_prob)
-            + 0.05 * float(confidence_1d)
-            + 0.06 * expected_5d_component
-            + 0.03 * expected_20d_component
+            0.27 * float(signal_profile["entry_score"])
+            + 0.05 * float(signal_profile["hold_score"])
+            + 0.24 * short_prob_stack
+            + 0.10 * float(stock.excess_vs_sector_prob)
+            + 0.05 * float(stock.up_20d_prob)
+            + 0.12 * short_forward_edge
+            + 0.06 * short_confidence
+            + 0.05 * expected_20d_component
             - 0.10 * float(signal_profile["exit_risk"])
-            - 0.05 * downside_penalty,
+            - 0.06 * downside_penalty,
             0.0,
             1.0,
         )
@@ -329,9 +355,15 @@ def stock_actionability_profile(
         "hold_score": float(signal_profile["hold_score"]),
         "exit_risk": float(signal_profile["exit_risk"]),
         "confidence_1d": float(confidence_1d),
+        "confidence_3d": float(confidence_3d),
+        "confidence_5d": float(confidence_5d),
+        "short_prob_stack": float(short_prob_stack),
+        "short_forward_edge": float(short_forward_edge),
+        "expected_3d": float(expected_3d),
         "expected_5d": float(expected_5d),
         "expected_20d": float(expected_20d),
         "q10_5d": float(q10_5d),
+        "has_expected_3d": bool(has_expected_3d),
         "has_expected_5d": bool(has_expected_5d),
         "has_expected_20d": bool(has_expected_20d),
     }
@@ -367,11 +399,16 @@ def evaluate_fresh_buy_candidate(
     score = float(actionability["score"])
     threshold = float(actionability["threshold"])
     reasons: list[str] = []
+    short_prob_stack = float(actionability.get("short_prob_stack", 0.5))
+    short_forward_edge = float(actionability.get("short_forward_edge", 0.0))
+    expected_3d = float(actionability.get("expected_3d", 0.0))
     expected_5d = float(actionability["expected_5d"])
     expected_20d = float(actionability["expected_20d"])
+    has_expected_3d = bool(actionability.get("has_expected_3d", False))
     has_expected_5d = bool(actionability.get("has_expected_5d", False))
     has_expected_20d = bool(actionability.get("has_expected_20d", False))
     exit_risk = float(actionability["exit_risk"])
+    q10_5d = float(actionability.get("q10_5d", 0.0))
     symbol = str(getattr(stock, "symbol", "")).strip()
     snapshot_lookup = leader_snapshot_map if leader_snapshot_map is not None else _leader_snapshot_map(state=composite_state)
     snapshot = snapshot_lookup.get(symbol)
@@ -393,6 +430,21 @@ def evaluate_fresh_buy_candidate(
         and float(getattr(snapshot, "conviction_score", 0.0)) >= 0.56
     ):
         threshold_relax = 0.03 if role == "leader" else 0.02
+    risk_off_probe_relax = bool(
+        risk_regime == "risk_off"
+        and snapshot is not None
+        and strong_role
+        and not weakening_phase
+        and not bool(getattr(snapshot, "role_downgrade", False))
+        and not bool(getattr(snapshot, "hard_negative", False))
+        and float(getattr(snapshot, "negative_score", 0.0)) <= 0.20
+        and exit_risk <= 0.10
+        and short_forward_edge >= 0.56
+        and expected_3d >= 0.003
+        and expected_5d >= 0.003
+    )
+    if risk_off_probe_relax:
+        threshold_relax = max(threshold_relax, 0.05)
     effective_threshold = max(0.48, float(threshold) - float(threshold_relax))
     if score < effective_threshold:
         reasons.append(f"actionability<{effective_threshold:.2f}")
@@ -417,44 +469,73 @@ def evaluate_fresh_buy_candidate(
         ):
             reasons.append("leader_edge_not_confirmed")
     if risk_regime == "risk_off":
-        if float(stock.up_1d_prob) < 0.51:
-            reasons.append("1d_prob<0.510")
-        if float(stock.up_5d_prob) < 0.535:
+        if strong_role and weakening_phase:
+            reasons.append(f"theme_{phase}_risk_off")
+        if risk_off_probe_relax:
+            if short_prob_stack < 0.50:
+                reasons.append("short_prob_stack<0.500")
+        else:
+            if float(getattr(stock, "up_2d_prob", 0.5)) < 0.52:
+                reasons.append("2d_prob<0.520")
+            if float(getattr(stock, "up_3d_prob", 0.5)) < 0.525:
+                reasons.append("3d_prob<0.525")
+        if float(stock.up_5d_prob) < (0.51 if risk_off_probe_relax else 0.535):
             reasons.append("5d_prob<0.535")
-        if float(stock.up_20d_prob) < 0.50:
-            reasons.append("20d_prob<0.50")
-        if has_expected_5d and expected_5d < 0.004:
+        if has_expected_3d and expected_3d < (0.003 if risk_off_probe_relax else 0.002):
+            reasons.append("3d_exp_buffer<0.002")
+        if has_expected_5d and expected_5d < (0.003 if risk_off_probe_relax else 0.004):
             reasons.append("5d_exp_buffer<0.004")
-        if has_expected_20d and expected_20d < 0.008:
-            reasons.append("20d_exp_buffer<0.008")
+        if has_expected_3d and expected_3d <= 0.0:
+            reasons.append("3d_exp<=0")
         if has_expected_5d and expected_5d <= 0.0:
             reasons.append("5d_exp<=0")
-        if has_expected_20d and expected_20d <= 0.0:
-            reasons.append("20d_exp<=0")
+        if q10_5d < (-0.07 if risk_off_probe_relax else -0.035):
+            reasons.append("5d_tail_risk_high")
         if exit_risk >= 0.12:
             reasons.append("exit_risk_high")
     elif risk_regime == "cautious":
-        if has_expected_5d and expected_5d <= 0.0:
-            reasons.append("5d_exp<=0")
+        short_edge_too_thin = False
+        if has_expected_3d and has_expected_5d:
+            short_edge_too_thin = expected_3d < 0.001 and expected_5d < 0.002
+        elif has_expected_5d:
+            short_edge_too_thin = expected_5d < 0.001
+        elif has_expected_3d:
+            short_edge_too_thin = expected_3d < 0.001
         if (
-            has_expected_5d
-            and has_expected_20d
-            and expected_5d < 0.002
-            and expected_20d < 0.004
+            short_edge_too_thin
             and not (
                 threshold_relax > 0.0
                 and score >= effective_threshold
                 and expected_5d >= 0.0
-                and expected_20d >= 0.003
+                and expected_3d >= 0.0
             )
         ):
             reasons.append("forward_edge_too_thin")
-        if has_expected_20d and float(stock.up_20d_prob) < 0.49 and expected_20d <= 0.0:
-            reasons.append("20d_trend_soft")
+        if (
+            has_expected_5d
+            and expected_5d <= 0.0
+            and (not has_expected_3d or expected_3d <= 0.0)
+        ):
+            reasons.append("5d_exp<=0")
+        if (
+            has_expected_5d
+            and float(stock.up_5d_prob) < 0.50
+            and expected_5d <= 0.0
+        ):
+            reasons.append("5d_trend_soft")
     elif (
-        (has_expected_5d or has_expected_20d)
-        and (not has_expected_5d or expected_5d <= 0.0)
-        and (not has_expected_20d or expected_20d <= 0.0)
+        (
+            (
+                (has_expected_3d or has_expected_5d)
+                and (not has_expected_3d or expected_3d <= 0.0)
+                and (not has_expected_5d or expected_5d <= 0.0)
+            )
+            or (
+                not (has_expected_3d or has_expected_5d)
+                and has_expected_20d
+                and expected_20d <= 0.0
+            )
+        )
         and score < threshold + 0.02
     ):
         reasons.append("forward_edge<=0")
@@ -473,11 +554,9 @@ def _stock_info_support_score(
     info_state = stock_info_states.get(str(symbol), InfoAggregateState())
     return float(
         deps.clip(
-            0.42 * float(getattr(info_state, "catalyst_strength", 0.0))
-            + 0.18 * float(getattr(info_state, "coverage_confidence", 0.0))
-            + 0.16 * max(0.0, float(getattr(info_state, "info_prob_5d", 0.5)) - 0.50) / 0.15
-            + 0.12 * max(0.0, float(getattr(info_state, "info_prob_20d", 0.5)) - 0.50) / 0.12
-            + 0.12 * max(0.0, float(getattr(info_state, "shadow_prob_20d", 0.5)) - 0.50) / 0.12,
+            0.56 * float(getattr(info_state, "catalyst_strength", 0.0))
+            + 0.24 * float(getattr(info_state, "coverage_confidence", 0.0))
+            + 0.20 * float(getattr(info_state, "source_diversity", 0.0)),
             0.0,
             1.0,
         )
@@ -504,8 +583,16 @@ def select_risk_off_pilot_candidate(
         if str(getattr(item, "symbol", "")).strip()
     }
     market_info = getattr(composite_state, "market_info_state", InfoAggregateState())
-    structural_blockers = {"1d_prob<0.510", "5d_prob<0.535", "5d_exp<=0", "20d_exp<=0", "exit_risk_high"}
-    thin_edge_blockers = {"20d_prob<0.50", "20d_exp_buffer<0.008", "5d_exp_buffer<0.004"}
+    structural_blockers = {
+        "2d_prob<0.520",
+        "3d_prob<0.525",
+        "5d_prob<0.535",
+        "3d_exp<=0",
+        "5d_exp<=0",
+        "5d_tail_risk_high",
+        "exit_risk_high",
+    }
+    thin_edge_blockers = {"3d_exp_buffer<0.002", "5d_exp_buffer<0.004"}
 
     best_stock: StockForecastState | None = None
     best_payload: dict[str, object] | None = None
@@ -555,21 +642,13 @@ def select_risk_off_pilot_candidate(
             composite_state=composite_state,
             deps=deps,
         )
-        if info_support <= 1e-6:
-            info_support = float(
-                deps.clip(
-                    0.55 * float(getattr(stock, "event_impact_score", 0.0))
-                    + 0.25 * float(getattr(stock, "tradeability_score", 0.0))
-                    + 0.20 * float(getattr(stock, "alpha_score", 0.0)),
-                    0.0,
-                    1.0,
-                )
-            )
+        stock_info_states = getattr(composite_state, "stock_info_states", {}) or {}
+        stock_info = stock_info_states.get(symbol, InfoAggregateState())
         market_catalyst = float(getattr(market_info, "catalyst_strength", 0.0))
         market_negative = float(getattr(market_info, "negative_event_risk", 0.0))
-        phase = str(snapshot.theme_phase or "").strip().lower()
-        required_info_support = 0.54 if phase in {"", "emerging", "strengthening"} else 0.62
-        if info_support < required_info_support:
+        if float(getattr(stock_info, "event_risk_level", 0.0)) >= 0.45:
+            continue
+        if float(getattr(stock_info, "negative_event_risk", 0.0)) >= 0.30:
             continue
         if market_negative >= 0.35 and market_catalyst < 0.60:
             continue
@@ -577,7 +656,6 @@ def select_risk_off_pilot_candidate(
         pilot_score = float(
             deps.clip(
                 0.36 * score
-                + 0.22 * info_support
                 + 0.12 * float(stock.excess_vs_sector_prob)
                 + 0.10 * float(stock.up_5d_prob)
                 + 0.08 * max(0.0, 0.20 - float(snapshot.negative_score)) / 0.20
@@ -598,6 +676,7 @@ def select_risk_off_pilot_candidate(
                 "symbol": symbol,
                 "score": pilot_score,
                 "info_support": info_support,
+                "info_event_risk": float(getattr(stock_info, "event_risk_level", 0.0)),
                 "leader_role": str(snapshot.role),
                 "theme_phase": str(snapshot.theme_phase),
                 "blocked_reasons": reasons,
@@ -1295,28 +1374,12 @@ def apply_external_signal_weight_tilts(
     if not adjusted:
         return adjusted, []
     notes: list[str] = []
-    stock_map = {item.symbol: item for item in state.stocks}
     for symbol in list(adjusted):
         info_state = state.stock_info_states.get(symbol, InfoAggregateState())
         event_risk = float(info_state.event_risk_level)
-        catalyst = float(info_state.catalyst_strength)
-        alpha_advantage = 0.0
-        stock = stock_map.get(symbol)
-        if stock is not None:
-            alpha_source = getattr(stock, "alpha_score", None)
-            if alpha_source is None:
-                try:
-                    alpha_source = stock_policy_score(stock, deps=deps)
-                except Exception:
-                    alpha_source = 0.55
-            alpha_advantage = max(0.0, float(alpha_source) - 0.55)
         if event_risk >= float(risk_cutoff):
             adjusted[symbol] *= max(0.0, 1.0 - min(0.85, event_risk))
             notes.append(f"{symbol}: event risk above cutoff, target trimmed.")
-        elif catalyst > 0.0 and alpha_advantage > 0.0:
-            boost = min(float(catalyst_boost_cap), 0.35 * catalyst + 0.80 * alpha_advantage)
-            adjusted[symbol] *= 1.0 + boost
-            notes.append(f"{symbol}: catalyst aligned with alpha, target boosted.")
     total = float(sum(adjusted.values()))
     if total <= 1e-9:
         return {}, notes
@@ -1646,10 +1709,12 @@ def apply_policy(
         and float(candidate_risk["durability_score"]) >= 0.58
         and float(market.drawdown_risk) <= 0.35
     )
+    mainline_risk_watched = False
 
     if mainlines:
         top_mainline = mainlines[0]
         if float(top_mainline.event_risk_level) >= float(policy_spec.event_risk_cutoff):
+            mainline_risk_watched = True
             target_exposure *= 0.94
             target_position_count = max(1, target_position_count - 1)
             turnover_cap = min(turnover_cap, 0.20)
@@ -1713,6 +1778,14 @@ def apply_policy(
     if candidate_stocks:
         target_position_count = min(target_position_count, len(candidate_stocks))
     if (
+        mainline_risk_watched
+        and not confirmed_mainlines
+        and not current_live_symbols
+        and state.risk_regime != "risk_off"
+    ):
+        target_position_count = min(target_position_count, 1)
+        risk_notes.append("Risk-watched mainline keeps fresh portfolio concentrated until confirmation improves.")
+    if (
         state.risk_regime == "risk_off"
         and not current_live_symbols
         and risk_off_pilot is None
@@ -1752,7 +1825,7 @@ def apply_policy(
         max_single_position = min(max_single_position, 0.18 if state.risk_regime == "risk_on" else 0.16)
         risk_notes.append("Fragile tape: single-name cap tightened.")
     if alpha_breadth >= 0.12 and alpha_headroom >= 0.02 and not concentration_preference:
-        target_position_count = max(target_position_count, 2)
+        target_position_count = max(target_position_count, 1 if mainline_risk_watched else 2)
         max_single_position = min(max_single_position, 0.18 if state.risk_regime == "risk_off" else 0.22)
         risk_notes.append("Alpha breadth strong: concentration reduced across more names.")
     elif concentration_preference:

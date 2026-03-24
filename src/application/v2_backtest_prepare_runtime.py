@@ -60,7 +60,26 @@ class BacktestPrepareDependencies:
     enrich_state_with_info: Callable[..., object]
     attach_external_signals_to_composite_state: Callable[..., tuple[object, dict[str, object]]]
     attach_insight_memory_to_state: Callable[..., object]
+    apply_leader_candidate_overlay: Callable[..., object]
+    resolve_latest_leader_rank_model: Callable[..., dict[str, object] | None]
     sha256_file: Callable[[object], str]
+
+
+def _merge_info_overlay_state(
+    state: object,
+    overlay_state: object | None,
+) -> object:
+    if overlay_state is None:
+        return state
+    try:
+        return replace(
+            state,
+            market_info_state=getattr(overlay_state, "market_info_state", getattr(state, "market_info_state", None)),
+            sector_info_states=dict(getattr(overlay_state, "sector_info_states", {}) or {}),
+            stock_info_states=dict(getattr(overlay_state, "stock_info_states", {}) or {}),
+        )
+    except Exception:
+        return state
 
 
 def trajectory_cache_key(
@@ -69,7 +88,7 @@ def trajectory_cache_key(
     overlay_cache_token: str = "",
 ) -> str:
     payload = {
-        "version": "v2-trajectory-cache-6",
+        "version": "v2-trajectory-cache-9",
         "raw_cache_key": str(raw_cache_key),
         "overlay_cache_token": str(overlay_cache_token),
     }
@@ -96,7 +115,7 @@ def raw_trajectory_cache_key(
     end: str = "",
 ) -> str:
     payload = {
-        "version": "v2-trajectory-raw-cache-2",
+        "version": "v2-trajectory-raw-cache-3",
         "config_path": str(Path(config_path).resolve()),
         "source": "" if source is None else str(source),
         "universe_file": "" if universe_file is None else str(Path(universe_file).resolve()),
@@ -142,11 +161,12 @@ def _research_overlay_cache_token(
     settings: dict[str, object],
     deps: BacktestPrepareDependencies,
 ) -> str:
+    leader_rank_model = deps.resolve_latest_leader_rank_model()
     payload = {
         "use_info_fusion": bool(settings.get("use_info_fusion", False)),
         "use_learned_info_fusion": bool(settings.get("use_learned_info_fusion", settings.get("use_learned_news_fusion", False))),
-        "external_signals": bool(settings.get("external_signals", True)),
-        "enable_insight_memory": bool(settings.get("enable_insight_memory", True)),
+        "external_signals": bool(settings.get("external_signals", False)),
+        "enable_insight_memory": bool(settings.get("enable_insight_memory", False)),
         "info_source_mode": str(settings.get("info_source_mode", "layered")),
         "info_types": [str(item) for item in settings.get("info_types", [])],
         "info_subsets": [str(item) for item in settings.get("info_subsets", [])],
@@ -170,6 +190,9 @@ def _research_overlay_cache_token(
         "macro_file_hash": _hashed_path(settings.get("macro_file", ""), deps=deps),
         "insight_notes_dir": _normalized_path(settings.get("insight_notes_dir", "")),
         "insight_notes_hash": _hashed_path(settings.get("insight_notes_dir", ""), deps=deps),
+        "leader_rank_model_hash": hashlib.sha256(
+            json.dumps(leader_rank_model or {}, sort_keys=True, ensure_ascii=False).encode("utf-8")
+        ).hexdigest()[:24],
     }
     raw = json.dumps(payload, sort_keys=True, ensure_ascii=False)
     return hashlib.sha256(raw.encode("utf-8")).hexdigest()[:24]
@@ -271,9 +294,11 @@ def decorate_research_trajectory(
 
     use_info_fusion = bool(settings.get("use_info_fusion", False))
     use_learned_info_fusion = bool(settings.get("use_learned_info_fusion", settings.get("use_learned_news_fusion", False)))
-    use_external_signals = bool(settings.get("external_signals", True))
-    use_insight_memory = bool(settings.get("enable_insight_memory", True))
-    if not (use_info_fusion or use_learned_info_fusion or use_external_signals or use_insight_memory):
+    info_shadow_only = bool(settings.get("info_shadow_only", False))
+    info_shadow_requested = bool(use_info_fusion or use_learned_info_fusion or info_shadow_only)
+    use_external_signals = bool(settings.get("external_signals", False))
+    use_insight_memory = bool(settings.get("enable_insight_memory", False))
+    if not (info_shadow_requested or use_external_signals or use_insight_memory):
         return trajectory
 
     step_list = list(steps)
@@ -282,12 +307,13 @@ def decorate_research_trajectory(
         (
             "decorating research states: "
             f"steps={len(step_list)}, "
-            f"info={use_info_fusion}, learned_info={use_learned_info_fusion}, external={use_external_signals}, insight={use_insight_memory}"
+            f"info={use_info_fusion}, learned_info={use_learned_info_fusion}, shadow_only={info_shadow_only}, external={use_external_signals}, insight={use_insight_memory}"
         ),
     )
     info_items_by_date: dict[str, list[object]] = {}
     previous_roles: dict[str, object] = {}
     decorated_steps: list[object] = []
+    leader_rank_model = deps.resolve_latest_leader_rank_model()
 
     def _load_info_items(as_of_date: pd.Timestamp) -> list[object]:
         key = str(as_of_date.date())
@@ -313,13 +339,16 @@ def decorate_research_trajectory(
         as_of_date = _step_as_of_date(step)
         info_items = _load_info_items(as_of_date)
         decorated_state = state
-        if use_info_fusion and info_items:
-            decorated_state = deps.enrich_state_with_info(
+        if info_shadow_requested and info_items:
+            shadow_state = deps.enrich_state_with_info(
                 state=decorated_state,
                 as_of_date=as_of_date,
                 info_items=info_items,
                 settings=settings,
             )
+            decorated_state = _merge_info_overlay_state(decorated_state, shadow_state)
+            if use_info_fusion and not info_shadow_only:
+                decorated_state = shadow_state
         if use_external_signals:
             decorated_state, _ = deps.attach_external_signals_to_composite_state(
                 state=decorated_state,
@@ -342,6 +371,10 @@ def decorate_research_trajectory(
             previous_roles = dict(getattr(decorated_state, "stock_role_states", {}) or {})
         else:
             previous_roles = {}
+        decorated_state = deps.apply_leader_candidate_overlay(
+            state=decorated_state,
+            leader_rank_model=leader_rank_model,
+        )
         decorated_steps.append(
             _replace_trajectory_step(
                 step,

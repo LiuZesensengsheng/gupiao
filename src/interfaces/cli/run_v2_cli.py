@@ -5,16 +5,20 @@ import json
 from pathlib import Path
 
 from src.application.v2_services import (
+    persist_v2_info_research_artifacts,
     persist_v2_ranking_research_artifacts,
+    run_v2_info_research,
     run_v2_ranking_research,
     summarize_daily_run,
     summarize_v2_backtest,
     summarize_v2_calibration,
+    summarize_v2_info_research,
     summarize_v2_ranking_research,
     summarize_v2_policy_learning,
 )
 from src.application.v2_workflow import (
     build_daily_run_blueprint,
+    build_info_research_blueprint,
     build_ranking_research_blueprint,
     build_research_run_blueprint,
     describe_v2_stack,
@@ -23,13 +27,17 @@ from src.artifact_registry.v2_registry import (
     load_published_v2_policy_model,
     publish_v2_research_artifacts,
 )
-from src.contracts.runtime import DailyRunOptions, RankingResearchOptions, ResearchMatrixOptions, ResearchRunOptions
+from src.contracts.runtime import DailyRunOptions, InfoResearchOptions, RankingResearchOptions, ResearchMatrixOptions, ResearchRunOptions
 from src.infrastructure.market_data import set_tushare_token
 from src.interfaces.presenters.html_dashboard import write_v2_daily_dashboard, write_v2_research_dashboard
 from src.interfaces.presenters.markdown_reports import write_v2_daily_report, write_v2_research_report
 from src.interfaces.presenters.v2_ranking_research_presenters import (
     write_v2_ranking_research_dashboard,
     write_v2_ranking_research_report,
+)
+from src.interfaces.presenters.v2_info_research_presenters import (
+    write_v2_info_research_dashboard,
+    write_v2_info_research_report,
 )
 from src.workflows.daily_workflow import run_daily_v2_live
 from src.workflows.research_workflow import last_research_trajectory, run_v2_research_matrix, run_v2_research_workflow
@@ -192,6 +200,30 @@ def build_parser() -> argparse.ArgumentParser:
     ranking.add_argument("--exit-candidate-limit", type=int, default=8, help="Candidate cap when building exit labels")
     ranking.add_argument("--signal-l2", type=float, default=1.0, help="L2 strength for lightweight ridge signal models")
 
+    info_research = sub.add_parser("info-research-run", help="Run standalone info-layer diagnostics without policy backtest")
+    _add_runtime_identity_args(info_research, strategy_help="Target strategy id")
+    _add_universe_args(info_research)
+    _add_info_args(info_research)
+    _add_external_context_args(info_research)
+    _add_history_window_args(info_research)
+    _add_output_args(
+        info_research,
+        report_default="reports/v2_info_research_report.md",
+        dashboard_default="reports/v2_info_research_dashboard.html",
+        report_help="Markdown info research report output path",
+    )
+    info_research.add_argument("--artifact-root", default="artifacts/v2", help="Artifact output root for info research runs")
+    info_research.add_argument("--cache-root", default="artifacts/v2/cache", help="On-disk cache root for prepared data and trajectories")
+    info_research.add_argument("--refresh-cache", action="store_true", help="Ignore existing cached trajectory and rebuild it")
+    info_research.add_argument("--retrain-days", type=int, default=20, help="Trajectory retraining cadence in trading days")
+    info_research.add_argument("--forecast-backend", default="linear", help="Forecast backend id for info diagnostics")
+    info_research.add_argument("--training-window-days", type=int, default=480, help="Rolling training window in trading days; use 0 to keep expanding history")
+    info_research.add_argument("--split-mode", default="purged_wf", choices=["purged_wf", "simple"], help="Research split mode")
+    info_research.add_argument("--embargo-days", type=int, default=20, help="Embargo days for purged walk-forward split")
+    info_research.add_argument("--horizons", default="1d,2d,3d,5d,10d,20d", help="Comma-separated horizons to evaluate")
+    info_research.add_argument("--min-tag-count", type=int, default=5, help="Minimum item count required for event tag diagnostics")
+    info_research.add_argument("--max-tag-count", type=int, default=12, help="Maximum number of event tags to render")
+
     matrix = sub.add_parser("research-matrix", help="Run the fixed 16/80/150/300 universe matrix")
     _add_runtime_identity_args(matrix, strategy_help="Target strategy id")
     _add_history_window_args(matrix)
@@ -316,6 +348,26 @@ def main() -> int:
         print(json.dumps(summarize_v2_calibration(calibration), ensure_ascii=False, indent=2))
         print("[V2] learned policy:")
         print(json.dumps(summarize_v2_policy_learning(learning), ensure_ascii=False, indent=2))
+        return 0
+
+    if args.task == "info-research-run":
+        options = InfoResearchOptions.from_namespace(args)
+        bp = build_info_research_blueprint()
+        _print_blueprint(
+            bp.name,
+            options.strategy_id,
+            [(stage.name, stage.purpose, stage.produces) for stage in bp.stages],
+        )
+        result = run_v2_info_research(**options.workflow_kwargs())
+        artifacts = persist_v2_info_research_artifacts(result, artifact_root=options.artifact_root)
+        report_path = write_v2_info_research_report(str(args.report), result)
+        dashboard_path = write_v2_info_research_dashboard(str(args.dashboard), result)
+        print(f"[V2] info research report: {Path(report_path).resolve()}")
+        print(f"[V2] info research dashboard: {Path(dashboard_path).resolve()}")
+        print(f"[V2] info research artifacts: {Path(str(artifacts['run_dir'])).resolve()}")
+        print(f"[V2] info research run_id: {artifacts.get('run_id', '')}")
+        print("[V2] info research summary:")
+        print(json.dumps(summarize_v2_info_research(result), ensure_ascii=False, indent=2))
         return 0
 
     if args.task == "ranking-research-run":

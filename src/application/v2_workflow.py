@@ -45,6 +45,18 @@ def build_ranking_research_blueprint() -> WorkflowBlueprint:
     )
 
 
+def build_info_research_blueprint() -> WorkflowBlueprint:
+    return WorkflowBlueprint(
+        name="info-research-run",
+        stages=[
+            WorkflowStage("load-trajectory", "load or reuse the cached research trajectory", "trajectory slice"),
+            WorkflowStage("load-info", "freeze the learned-window info snapshot for evaluation", "info manifest"),
+            WorkflowStage("evaluate-variants", "compare source/timestamp/tag variants across horizons", "info diagnostics"),
+            WorkflowStage("render-report", "write markdown/html summaries for fast iteration", "info research report"),
+        ],
+    )
+
+
 def build_daily_run_blueprint() -> WorkflowBlueprint:
     return WorkflowBlueprint(
         name="daily-run",

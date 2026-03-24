@@ -26,6 +26,7 @@ from src.application.v2_contracts import (
     PolicySpec,
     SectorForecastState,
     StockForecastState,
+    ThemeEpisode,
     V2BacktestSummary,
     V2CalibrationResult,
     V2PolicyLearningResult,
@@ -250,6 +251,28 @@ def test_load_v2_runtime_settings_resolves_training_window_days(tmp_path: Path) 
     assert settings["training_window_days"] == 360
     assert override_settings["training_window_days"] == 480
     assert disabled_settings["training_window_days"] is None
+
+
+def test_load_v2_runtime_settings_disables_info_layers_by_default(tmp_path: Path) -> None:
+    config_path = tmp_path / "api.json"
+    config_path.write_text(
+        json.dumps(
+            {
+                "common": {"source": "local"},
+                "daily": {},
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    settings = _load_v2_runtime_settings(config_path=str(config_path))
+
+    assert settings["use_info_fusion"] is False
+    assert settings["use_learned_info_fusion"] is False
+    assert settings["info_shadow_only"] is False
+    assert settings["external_signals"] is False
+    assert settings["enable_insight_memory"] is False
+    assert settings["execution_overlay_enabled"] is False
 
 
 def test_load_v2_runtime_settings_resolves_lookback_years_window(tmp_path: Path) -> None:
@@ -871,7 +894,7 @@ def test_publish_artifacts_records_universe_metadata_and_keeps_non_default_lates
     assert len(dataset_manifest["symbols"]) == 3
     assert dataset_manifest["source_universe_manifest_path"]
     assert dataset_manifest["dynamic_universe_enabled"] is True
-    assert dataset_manifest["generator_version"] == "dynamic_universe_v2_leaders"
+    assert dataset_manifest["generator_version"] == "dynamic_universe_v3_fresh_pool"
     assert dataset_manifest["generator_hash"]
     assert dataset_manifest["coarse_pool_size"] >= 3
     assert dataset_manifest["refined_pool_size"] >= 3
@@ -893,7 +916,7 @@ def test_publish_artifacts_records_universe_metadata_and_keeps_non_default_lates
     assert manifest["info_hash"]
     assert manifest["use_us_index_context"] is True
     assert manifest["us_index_source"] == "akshare"
-    assert manifest["generator_version"] == "dynamic_universe_v2_leaders"
+    assert manifest["generator_version"] == "dynamic_universe_v3_fresh_pool"
     assert manifest["generator_hash"]
     assert manifest["selected_pool_size"] == 3
     assert len(manifest["theme_allocations"]) >= 1
@@ -2563,6 +2586,117 @@ def test_load_or_build_v2_backtest_trajectory_invalidates_cache_when_insight_not
     )
 
     assert seen["build_calls"] == 1
+
+
+def test_load_or_build_v2_backtest_trajectory_reapplies_overlay_after_insight_without_model(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    note_dir = tmp_path / "insight_notes"
+    note_dir.mkdir(parents=True, exist_ok=True)
+    (note_dir / "2026-03-01.md").write_text("---\ndate: 2026-03-01\n---\n", encoding="utf-8")
+    base_state = _make_state()
+    state = replace(
+        base_state,
+        market=replace(base_state.market, as_of_date="2026-03-01"),
+    )
+    settings = {
+        "config_path": "config/api.json",
+        "source": "local",
+        "watchlist": "config/watchlist.json",
+        "universe_file": "config/universe_smoke_5.json",
+        "universe_limit": 1,
+        "universe_tier": "favorites_16",
+        "source_universe_manifest_path": "config/universe_smoke_5.json",
+        "data_dir": str(tmp_path / "data"),
+        "start": "2024-01-01",
+        "end": "2026-03-01",
+        "min_train_days": 2,
+        "use_margin_features": False,
+        "margin_market_file": str(tmp_path / "margin_market.csv"),
+        "margin_stock_file": str(tmp_path / "margin_stock.csv"),
+        "use_us_index_context": False,
+        "us_index_source": "akshare",
+        "info_file": "",
+        "event_file": "",
+        "use_info_fusion": False,
+        "external_signals": False,
+        "enable_insight_memory": True,
+        "insight_notes_dir": str(note_dir),
+        "training_window_days": 480,
+    }
+    overlay_calls: list[dict[str, object]] = []
+
+    monkeypatch.setattr("src.application.v2_services._load_v2_runtime_settings", lambda **_: dict(settings))
+    monkeypatch.setattr("src.application.v2_services._resolve_v2_universe_settings", lambda settings, cache_root: dict(settings))
+    monkeypatch.setattr(
+        "src.application.v2_services._prepare_v2_backtest_data",
+        lambda **_: SimpleNamespace(settings=dict(settings), stock_frames={}, market_valid=pd.DataFrame()),
+    )
+    monkeypatch.setattr(
+        "src.application.v2_services._build_v2_backtest_trajectory_from_prepared",
+        lambda prepared, **_: _BacktestTrajectory(
+            prepared=prepared,
+            steps=[
+                _TrajectoryStep(
+                    date=pd.Timestamp("2026-03-01"),
+                    next_date=pd.Timestamp("2026-03-02"),
+                    composite_state=state,
+                    stock_states=list(state.stocks),
+                    horizon_metrics={},
+                )
+            ],
+        ),
+    )
+    monkeypatch.setattr("src.application.v2_services._load_v2_info_items_for_date", lambda **_: ("info.json", []))
+    monkeypatch.setattr(
+        "src.application.v2_services._attach_insight_memory_to_state",
+        lambda *, state, settings, as_of_date, info_items: replace(
+            state,
+            theme_episodes=[
+                ThemeEpisode(
+                    theme="colored",
+                    phase="fading",
+                    conviction=0.22,
+                    event_risk=0.58,
+                    sectors=["鏈夎壊"],
+                    representative_symbols=["AAA"],
+                )
+            ],
+        ),
+    )
+    monkeypatch.setattr("src.application.v2_services._load_latest_v2_leader_rank_model", lambda: None)
+
+    def _fake_overlay(*, state: object, leader_rank_model: object | None = None) -> object:
+        overlay_calls.append(
+            {
+                "leader_rank_model": leader_rank_model,
+                "theme_count": len(getattr(state, "theme_episodes", []) or []),
+            }
+        )
+        selection = getattr(state, "candidate_selection")
+        return replace(
+            state,
+            candidate_selection=replace(
+                selection,
+                selection_notes=list(getattr(selection, "selection_notes", []) or []) + ["overlay reapplied"],
+            ),
+        )
+
+    monkeypatch.setattr("src.application.v2_services._apply_leader_candidate_overlay", _fake_overlay)
+
+    trajectory = _load_or_build_v2_backtest_trajectory(
+        config_path="config/api.json",
+        cache_root=str(tmp_path),
+        refresh_cache=True,
+        forecast_backend="linear",
+    )
+
+    assert trajectory is not None
+    assert overlay_calls
+    assert overlay_calls[0]["leader_rank_model"] is None
+    assert overlay_calls[0]["theme_count"] == 1
+    assert "overlay reapplied" in trajectory.steps[0].composite_state.candidate_selection.selection_notes
 
 
 def test_research_workflow_passes_training_window_days_to_trajectory_builder(tmp_path: Path) -> None:

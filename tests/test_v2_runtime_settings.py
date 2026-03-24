@@ -5,6 +5,7 @@ from tests.v2_research_cases import (
     test_generated_80_learning_targets_prefer_realizable_alpha_and_ranking,
     test_load_v2_runtime_settings_applies_tushare_token_from_config,
     test_load_v2_runtime_settings_defaults_to_generated_300_tiers_for_large_universe,
+    test_load_v2_runtime_settings_disables_info_layers_by_default,
     test_load_v2_runtime_settings_reads_info_cutoff_time,
     test_load_v2_runtime_settings_prefers_generated_base_file_for_dynamic_universe,
     test_load_v2_runtime_settings_reads_main_board_recommendation_flag,

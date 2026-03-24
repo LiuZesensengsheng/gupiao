@@ -34,7 +34,7 @@ from src.infrastructure.universe_feature_cache import (
     store_universe_generator_cache,
 )
 
-_GENERATOR_VERSION = "dynamic_universe_v3_fresh_pool"
+_GENERATOR_VERSION = "dynamic_universe_v2_leaders_extfields"
 
 _FRESH_POOL_RULES: dict[str, float] = {
     "min_close": 5.0,
@@ -599,7 +599,6 @@ def generate_dynamic_universe(
     eligible["breakout_rank"] = _safe_rank(eligible, "breakout_pos_120")
     eligible["trend_rank"] = _safe_rank(eligible, "trend_persistence")
     eligible["amount_trend_rank"] = _safe_rank(eligible, "amount_trend")
-    eligible["fresh_pool_rank"] = _safe_rank(eligible, "fresh_pool_score")
     eligible["leadership_score"] = (
         eligible["amount_rank"] * 0.58
         + eligible["ret20_rank"] * 0.10
@@ -617,12 +616,10 @@ def generate_dynamic_universe(
         + eligible["volatility_rank"] * 0.06
         + eligible["tradeability_rank"] * (0.06 + float(turnover_quality_weight) * 0.08)
         + eligible["theme_strength_rank"] * float(theme_weight)
-        + eligible["fresh_pool_rank"] * 0.10
-        + eligible["fresh_pool_pass"].astype(float) * 0.04
     )
     eligible = eligible.sort_values(
-        ["fresh_pool_pass", "coarse_score", "fresh_pool_score", "leadership_score", "median_amount60", "history_days"],
-        ascending=[False, False, False, False, False, False],
+        ["coarse_score", "leadership_score", "median_amount60", "history_days"],
+        ascending=[False, False, False, False],
     )
     coarse = eligible.head(max(int(target_size), int(coarse_size))).copy()
 
@@ -645,7 +642,6 @@ def generate_dynamic_universe(
     coarse["breakout_rank"] = _safe_rank(coarse, "breakout_pos_120")
     coarse["trend_rank"] = _safe_rank(coarse, "trend_persistence")
     coarse["amount_trend_rank"] = _safe_rank(coarse, "amount_trend")
-    coarse["fresh_pool_rank"] = _safe_rank(coarse, "fresh_pool_score")
     coarse["leadership_score"] = (
         coarse["amount_rank"] * 0.60
         + coarse["ret20_rank"] * 0.10
@@ -662,19 +658,12 @@ def generate_dynamic_universe(
         + coarse["tradeability_rank"] * 0.08
         + coarse["volatility_rank"] * 0.03
         + coarse["history_rank"] * 0.03
-        + coarse["fresh_pool_rank"] * 0.10
-        + coarse["fresh_pool_pass"].astype(float) * 0.04
     )
     coarse["theme_score"] = coarse["theme_rank"] * 0.65 + coarse["ret20_rank"] * 0.20 + coarse["ret60_rank"] * 0.15
-    coarse["refined_score"] = (
-        coarse["quality_score"] * (1.0 - float(theme_weight))
-        + coarse["theme_score"] * float(theme_weight)
-        + coarse["fresh_pool_score"] * 0.10
-        + coarse["fresh_pool_pass"].astype(float) * 0.04
-    )
+    coarse["refined_score"] = coarse["quality_score"] * (1.0 - float(theme_weight)) + coarse["theme_score"] * float(theme_weight)
     coarse = coarse.sort_values(
-        ["fresh_pool_pass", "refined_score", "fresh_pool_score", "leadership_score", "quality_score", "median_amount60"],
-        ascending=[False, False, False, False, False, False],
+        ["refined_score", "leadership_score", "quality_score", "median_amount60"],
+        ascending=[False, False, False, False],
     )
     refined = coarse.head(max(int(target_size), min(len(coarse), max(120, int(target_size) * 2)))).copy()
 
@@ -692,8 +681,8 @@ def generate_dynamic_universe(
             if slot_count <= 0:
                 continue
             picked = theme_frame.sort_values(
-                ["fresh_pool_pass", "refined_score", "fresh_pool_score", "leadership_score", "quality_score"],
-                ascending=[False, False, False, False, False],
+                ["refined_score", "leadership_score", "quality_score"],
+                ascending=[False, False, False],
             ).head(slot_count)
             if not picked.empty:
                 selected_frames.append(picked)
@@ -719,8 +708,8 @@ def generate_dynamic_universe(
         if not top_up.empty:
             selected = pd.concat([selected, top_up], ignore_index=True)
     selected = selected.sort_values(
-        ["fresh_pool_pass", "refined_score", "fresh_pool_score", "leadership_score", "quality_score", "median_amount60"],
-        ascending=[False, False, False, False, False, False],
+        ["refined_score", "leadership_score", "quality_score", "median_amount60"],
+        ascending=[False, False, False, False],
     ).head(int(target_size))
 
     if not allocations_raw:
@@ -746,12 +735,20 @@ def generate_dynamic_universe(
             "symbol": str(row["symbol"]),
             "name": str(row["name"]),
             "sector": str(row["theme"]),
+            "close": float(row["close"]),
+            "ma20": float(row["ma20"]),
+            "ma60": float(row["ma60"]),
             "coarse_score": float(row["coarse_score"]),
             "refined_score": float(row["refined_score"]),
             "theme_score": float(row["theme_score"]),
             "quality_score": float(row["quality_score"]),
             "leadership_score": float(row["leadership_score"]),
             "median_amount60": float(row["median_amount60"]),
+            "ret20": float(row["ret20"]),
+            "ret60": float(row["ret60"]),
+            "breakout_pos_120": float(row["breakout_pos_120"]),
+            "volatility20": float(row["volatility20"]),
+            "tradeability": float(row["tradeability"]),
             "fresh_pool_score": float(row["fresh_pool_score"]),
             "fresh_pool_pass": bool(row["fresh_pool_pass"]),
             "recent_high_gap20": float(row["recent_high_gap20"]),

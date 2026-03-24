@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
 from pathlib import Path
 from typing import Any, Callable
 
@@ -28,6 +28,20 @@ class DailyUniverseContext:
     current_holdings: list[object]
     stocks: list[object]
     sector_map: dict[str, str]
+
+
+def _merge_info_overlay_state(
+    state: CompositeState,
+    overlay_state: CompositeState | None,
+) -> CompositeState:
+    if overlay_state is None:
+        return state
+    return replace(
+        state,
+        market_info_state=getattr(overlay_state, "market_info_state", state.market_info_state),
+        sector_info_states=dict(getattr(overlay_state, "sector_info_states", {}) or {}),
+        stock_info_states=dict(getattr(overlay_state, "stock_info_states", {}) or {}),
+    )
 
 
 @dataclass(frozen=True)
@@ -59,6 +73,8 @@ class DailyStateRuntimeDependencies:
     quant_info_divergence_rows: Callable[..., list[InfoDivergenceRecord]]
     attach_external_signals_to_composite_state: Callable[..., tuple[CompositeState, dict[str, object]]]
     attach_insight_memory_to_state: Callable[..., CompositeState]
+    apply_leader_candidate_overlay: Callable[..., CompositeState]
+    resolve_latest_leader_rank_model: Callable[..., dict[str, object] | None]
 
 
 def build_daily_universe_context(
@@ -289,7 +305,8 @@ def attach_daily_info_overlay(
                 info_items=info_items,
                 settings=settings,
             )
-            if bool(settings.get("use_info_fusion", False)):
+            composite_state = _merge_info_overlay_state(composite_state, shadow_state)
+            if bool(settings.get("use_info_fusion", False)) and not bool(settings.get("info_shadow_only", True)):
                 composite_state = shadow_state
             info_shadow_enabled = bool(info_shadow_enabled or info_shadow_requested)
             top_negative_info_events = deps.top_negative_events(
@@ -363,9 +380,14 @@ def attach_daily_insight_overlay(
     info_items: list[InfoItem],
     deps: DailyStateRuntimeDependencies,
 ) -> CompositeState:
-    return deps.attach_insight_memory_to_state(
+    state = deps.attach_insight_memory_to_state(
         state=composite_state,
         settings=settings,
         as_of_date=pd.Timestamp(composite_state.market.as_of_date),
         info_items=info_items,
+    )
+    leader_rank_model = deps.resolve_latest_leader_rank_model()
+    return deps.apply_leader_candidate_overlay(
+        state=state,
+        leader_rank_model=leader_rank_model,
     )

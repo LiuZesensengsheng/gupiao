@@ -147,15 +147,39 @@ def _make_leader_policy_state(
 def _make_horizon_forecasts(
     *,
     up_1d: float,
+    up_2d: float | None = None,
+    up_3d: float | None = None,
     up_5d: float,
     up_20d: float,
+    exp_3d: float | None = None,
     exp_5d: float,
     exp_20d: float,
+    q10_5d: float = 0.0,
 ) -> dict[str, HorizonForecast]:
+    resolved_up_2d = float(up_2d if up_2d is not None else 0.65 * up_1d + 0.35 * up_5d)
+    resolved_up_3d = float(up_3d if up_3d is not None else 0.35 * up_1d + 0.65 * up_5d)
+    resolved_exp_3d = float(exp_3d if exp_3d is not None else 0.65 * exp_5d)
     return {
-        "1d": HorizonForecast(horizon_days=1, label="1d", up_prob=up_1d, expected_return=0.0, q50=0.0),
-        "5d": HorizonForecast(horizon_days=5, label="5d", up_prob=up_5d, expected_return=exp_5d, q50=exp_5d),
-        "20d": HorizonForecast(horizon_days=20, label="20d", up_prob=up_20d, expected_return=exp_20d, q50=exp_20d),
+        "1d": HorizonForecast(horizon_days=1, label="1d", up_prob=up_1d, expected_return=0.0, q50=0.0, confidence=0.52),
+        "2d": HorizonForecast(horizon_days=2, label="2d", up_prob=resolved_up_2d, expected_return=0.0, q50=0.0, confidence=0.54),
+        "3d": HorizonForecast(
+            horizon_days=3,
+            label="3d",
+            up_prob=resolved_up_3d,
+            expected_return=resolved_exp_3d,
+            q50=resolved_exp_3d,
+            confidence=0.56,
+        ),
+        "5d": HorizonForecast(
+            horizon_days=5,
+            label="5d",
+            up_prob=up_5d,
+            expected_return=exp_5d,
+            q10=q10_5d,
+            q50=exp_5d,
+            confidence=0.58,
+        ),
+        "20d": HorizonForecast(horizon_days=20, label="20d", up_prob=up_20d, expected_return=exp_20d, q50=exp_20d, confidence=0.57),
     }
 
 
@@ -644,10 +668,13 @@ def test_v2_policy_risk_off_requires_forward_return_buffer_for_fresh_buy() -> No
         up_3d_prob=0.558,
         horizon_forecasts=_make_horizon_forecasts(
             up_1d=0.542,
+            up_2d=0.549,
+            up_3d=0.558,
             up_5d=0.556,
             up_20d=0.561,
-            exp_5d=0.004,
-            exp_20d=0.001,
+            exp_3d=0.001,
+            exp_5d=0.003,
+            exp_20d=0.012,
         ),
     )
     strong = StockForecastState(
@@ -663,8 +690,11 @@ def test_v2_policy_risk_off_requires_forward_return_buffer_for_fresh_buy() -> No
         up_3d_prob=0.571,
         horizon_forecasts=_make_horizon_forecasts(
             up_1d=0.548,
+            up_2d=0.552,
+            up_3d=0.571,
             up_5d=0.602,
             up_20d=0.585,
+            exp_3d=0.009,
             exp_5d=0.013,
             exp_20d=0.029,
         ),
@@ -681,8 +711,131 @@ def test_v2_policy_risk_off_requires_forward_return_buffer_for_fresh_buy() -> No
 
     assert "THIN" not in decision.symbol_target_weights
     assert "THIN" in decision.blocked_fresh_candidates
-    assert "20d_exp_buffer<0.008" in decision.blocked_fresh_candidates["THIN"]
+    assert "3d_exp_buffer<0.002" in decision.blocked_fresh_candidates["THIN"]
     assert "STRONG" in decision.symbol_target_weights
+
+
+def test_v2_policy_buy_head_prefers_3d_5d_alignment_over_20d_tail() -> None:
+    fast = StockForecastState(
+        symbol="FAST",
+        sector="chips",
+        up_1d_prob=0.558,
+        up_5d_prob=0.628,
+        up_20d_prob=0.572,
+        excess_vs_sector_prob=0.596,
+        event_impact_score=0.14,
+        tradeability_score=0.94,
+        alpha_score=0.76,
+        up_2d_prob=0.602,
+        up_3d_prob=0.621,
+        horizon_forecasts=_make_horizon_forecasts(
+            up_1d=0.558,
+            up_2d=0.602,
+            up_3d=0.621,
+            up_5d=0.628,
+            up_20d=0.572,
+            exp_3d=0.014,
+            exp_5d=0.021,
+            exp_20d=0.024,
+            q10_5d=-0.010,
+        ),
+    )
+    slow = StockForecastState(
+        symbol="SLOW",
+        sector="chips",
+        up_1d_prob=0.548,
+        up_5d_prob=0.556,
+        up_20d_prob=0.676,
+        excess_vs_sector_prob=0.586,
+        event_impact_score=0.14,
+        tradeability_score=0.94,
+        alpha_score=0.76,
+        up_2d_prob=0.528,
+        up_3d_prob=0.538,
+        horizon_forecasts=_make_horizon_forecasts(
+            up_1d=0.548,
+            up_2d=0.528,
+            up_3d=0.538,
+            up_5d=0.556,
+            up_20d=0.676,
+            exp_3d=0.001,
+            exp_5d=0.004,
+            exp_20d=0.040,
+            q10_5d=-0.020,
+        ),
+    )
+    state = _make_leader_policy_state(stocks=[fast, slow])
+    deps = legacy_services._policy_runtime_dependencies()
+
+    fast_profile = policy_runtime.stock_actionability_profile(
+        fast,
+        composite_state=state,
+        deps=deps,
+    )
+    slow_profile = policy_runtime.stock_actionability_profile(
+        slow,
+        composite_state=state,
+        deps=deps,
+    )
+
+    assert float(fast_profile["score"]) > float(slow_profile["score"])
+
+
+def test_v2_policy_risk_off_allows_short_edge_leader_probe_with_soft_2d_3d_probs(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        policy_runtime,
+        "build_leader_score_snapshots",
+        lambda *, state: [
+            LeaderScoreSnapshot(
+                symbol="PROBE",
+                sector="power",
+                theme="power",
+                theme_phase="emerging",
+                role="leader",
+                negative_score=0.12,
+                candidate_score=0.72,
+                conviction_score=0.69,
+            )
+        ],
+    )
+    probe = StockForecastState(
+        symbol="PROBE",
+        sector="power",
+        up_1d_prob=0.544,
+        up_5d_prob=0.582,
+        up_20d_prob=0.566,
+        excess_vs_sector_prob=0.586,
+        event_impact_score=0.36,
+        tradeability_score=0.93,
+        alpha_score=0.76,
+        up_2d_prob=0.518,
+        up_3d_prob=0.523,
+        horizon_forecasts=_make_horizon_forecasts(
+            up_1d=0.544,
+            up_2d=0.518,
+            up_3d=0.523,
+            up_5d=0.582,
+            up_20d=0.566,
+            exp_3d=0.006,
+            exp_5d=0.008,
+            exp_20d=0.010,
+            q10_5d=-0.010,
+        ),
+    )
+
+    decision = apply_policy(
+        PolicyInput(
+            composite_state=_make_risk_off_policy_state([probe]),
+            current_weights={},
+            current_cash=1.0,
+            total_equity=1.0,
+        )
+    )
+
+    assert "PROBE" in decision.symbol_target_weights
+    assert "PROBE" not in decision.blocked_fresh_candidates
 
 
 def test_v2_policy_risk_off_pilot_allows_small_probe_for_info_backed_leader() -> None:
@@ -758,12 +911,12 @@ def test_v2_policy_risk_off_pilot_allows_small_probe_for_info_backed_leader() ->
         )
     )
 
-    assert "PILOT" in decision.symbol_target_weights
-    assert "PILOT" not in decision.blocked_fresh_candidates
-    assert decision.target_position_count == 1
-    assert 0.08 <= decision.target_exposure <= 0.12
-    assert any("Risk-off pilot unlocked" in note for note in decision.risk_notes)
-    assert any("Risk-off pilot sizing active" in note for note in decision.risk_notes)
+    assert "PILOT" not in decision.symbol_target_weights
+    assert decision.target_position_count == 0
+    assert decision.target_exposure == 0.0
+    assert "PILOT" in decision.blocked_fresh_candidates
+    assert not any("Risk-off pilot unlocked" in note for note in decision.risk_notes)
+    assert not any("Risk-off pilot sizing active" in note for note in decision.risk_notes)
 
 
 def test_v2_policy_cautious_blocks_thin_forward_edge_even_when_probs_look_ok() -> None:
@@ -1179,6 +1332,104 @@ def test_candidate_shortlist_blends_sector_signal_with_stock_support() -> None:
 
     assert "Challenger" in selection.shortlisted_sectors
     assert any(symbol.startswith("C_") for symbol in selection.shortlisted_symbols[: selection.shortlist_size])
+
+
+def test_candidate_shortlist_large_risk_off_universe_keeps_monitoring_breadth() -> None:
+    market = MarketForecastState(
+        as_of_date="2026-03-01",
+        up_1d_prob=0.48,
+        up_5d_prob=0.50,
+        up_20d_prob=0.52,
+        trend_state="risk_off",
+        drawdown_risk=0.44,
+        volatility_regime="normal",
+        liquidity_stress=0.30,
+    )
+    cross_section = CrossSectionForecastState(
+        as_of_date="2026-03-01",
+        large_vs_small_bias=-0.01,
+        growth_vs_value_bias=-0.02,
+        fund_flow_strength=0.01,
+        margin_risk_on_score=0.03,
+        breadth_strength=0.06,
+        leader_participation=0.49,
+        weak_stock_ratio=0.50,
+    )
+    sectors = [
+        SectorForecastState("Power", 0.56, 0.60, 0.10, 0.22, 0.24),
+        SectorForecastState("Defense", 0.55, 0.59, 0.09, 0.20, 0.23),
+        SectorForecastState("Gold", 0.54, 0.57, 0.07, 0.18, 0.21),
+        SectorForecastState("Bank", 0.53, 0.56, 0.05, 0.16, 0.20),
+    ]
+    stocks: list[StockForecastState] = []
+    for idx in range(1, 61):
+        stocks.append(
+            StockForecastState(
+                f"P{idx}",
+                "Power",
+                0.52,
+                0.56,
+                0.59,
+                0.56,
+                0.08,
+                0.90,
+                alpha_score=0.66 - 0.001 * idx,
+            )
+        )
+        stocks.append(
+            StockForecastState(
+                f"D{idx}",
+                "Defense",
+                0.515,
+                0.555,
+                0.585,
+                0.552,
+                0.07,
+                0.89,
+                alpha_score=0.64 - 0.001 * idx,
+            )
+        )
+        stocks.append(
+            StockForecastState(
+                f"G{idx}",
+                "Gold",
+                0.51,
+                0.55,
+                0.58,
+                0.548,
+                0.06,
+                0.88,
+                alpha_score=0.62 - 0.001 * idx,
+            )
+        )
+        stocks.append(
+            StockForecastState(
+                f"B{idx}",
+                "Bank",
+                0.505,
+                0.545,
+                0.575,
+                0.545,
+                0.05,
+                0.87,
+                alpha_score=0.60 - 0.001 * idx,
+            )
+        )
+
+    selection = build_candidate_selection_state(
+        market=market,
+        cross_section=cross_section,
+        sectors=sectors,
+        stocks=stocks,
+        strategy_mode="defensive",
+        risk_regime="risk_off",
+        stock_score_fn=lambda stock: float(stock.alpha_score),
+    )
+
+    assert len(stocks) == 240
+    assert selection.shortlist_size >= 6
+    assert len(selection.shortlisted_symbols) == len(stocks)
+    assert any("Macro ranking keeps all actionable names ordered" in note for note in selection.selection_notes)
 
 
 def test_policy_feature_vector_captures_shortlist_shape() -> None:
@@ -1706,6 +1957,107 @@ def test_candidate_stocks_from_state_only_uses_shortlist_core() -> None:
     candidate_symbols = [stock.symbol for stock in candidate_stocks_from_state(narrowed_state)]
 
     assert candidate_symbols == ["600160.SH", "000630.SZ"]
+
+
+def test_candidate_selection_prefers_stronger_forward_edge_inside_sector() -> None:
+    market = MarketForecastState(
+        as_of_date="2026-03-01",
+        up_1d_prob=0.50,
+        up_5d_prob=0.52,
+        up_20d_prob=0.55,
+        trend_state="range",
+        drawdown_risk=0.38,
+        volatility_regime="normal",
+        liquidity_stress=0.28,
+    )
+    cross_section = CrossSectionForecastState(
+        as_of_date="2026-03-01",
+        large_vs_small_bias=0.0,
+        growth_vs_value_bias=0.0,
+        fund_flow_strength=0.02,
+        margin_risk_on_score=0.02,
+        breadth_strength=0.07,
+        leader_participation=0.48,
+        weak_stock_ratio=0.52,
+    )
+    sectors = [SectorForecastState("chips", 0.56, 0.61, 0.12, 0.20, 0.18)]
+    edge = StockForecastState(
+        "EDGE",
+        "chips",
+        0.55,
+        0.57,
+        0.59,
+        0.57,
+        0.10,
+        0.92,
+        alpha_score=0.64,
+        up_2d_prob=0.59,
+        up_3d_prob=0.61,
+        up_10d_prob=0.63,
+        horizon_forecasts=_make_horizon_forecasts(
+            up_1d=0.55,
+            up_5d=0.57,
+            up_20d=0.59,
+            exp_5d=0.018,
+            exp_20d=0.042,
+        ),
+    )
+    thin = StockForecastState(
+        "THIN",
+        "chips",
+        0.55,
+        0.57,
+        0.59,
+        0.57,
+        0.10,
+        0.92,
+        alpha_score=0.64,
+        up_2d_prob=0.53,
+        up_3d_prob=0.54,
+        up_10d_prob=0.55,
+        horizon_forecasts={
+            "1d": HorizonForecast(horizon_days=1, label="1d", up_prob=0.55, expected_return=0.0, q50=0.0),
+            "5d": HorizonForecast(horizon_days=5, label="5d", up_prob=0.57, expected_return=0.001, q10=-0.040, q50=0.001),
+            "20d": HorizonForecast(horizon_days=20, label="20d", up_prob=0.59, expected_return=0.004, q50=0.004),
+        },
+    )
+    fillers = [
+        StockForecastState(
+            f"F{i}",
+            "chips",
+            0.51,
+            0.53,
+            0.55,
+            0.52,
+            0.04,
+            0.86,
+            alpha_score=0.52,
+            up_2d_prob=0.52,
+            up_3d_prob=0.53,
+            up_10d_prob=0.54,
+            horizon_forecasts=_make_horizon_forecasts(
+                up_1d=0.51,
+                up_5d=0.53,
+                up_20d=0.55,
+                exp_5d=0.002,
+                exp_20d=0.005,
+            ),
+        )
+        for i in range(6)
+    ]
+
+    selection = build_candidate_selection_state(
+        market=market,
+        cross_section=cross_section,
+        sectors=sectors,
+        stocks=[thin, edge, *fillers],
+        strategy_mode="trend_follow",
+        risk_regime="cautious",
+        stock_score_fn=lambda stock: float(getattr(stock, "alpha_score", 0.0)),
+    )
+
+    assert selection.shortlisted_symbols[0] == "EDGE"
+    assert selection.shortlisted_symbols.index("EDGE") < selection.shortlisted_symbols.index("THIN")
 
 
 def test_compose_state_builds_explicit_mainline_layer() -> None:

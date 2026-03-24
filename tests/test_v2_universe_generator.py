@@ -226,6 +226,8 @@ def test_dynamic_universe_generator_prefers_liquid_leaders(monkeypatch, tmp_path
     assert result.selected_300[0]["symbol"] == "600001.SH"
     assert result.selected_300[0]["leadership_score"] >= result.selected_300[0]["quality_score"] * 0.5
     assert "leadership_score" in result.coarse_pool[0]
+    for field in ("close", "ma20", "ma60", "ret20", "ret60", "breakout_pos_120", "volatility20", "tradeability"):
+        assert field in result.selected_300[0]
 
 
 def test_dynamic_universe_generator_can_limit_to_main_board(monkeypatch, tmp_path: Path) -> None:
@@ -275,7 +277,7 @@ def test_dynamic_universe_generator_can_limit_to_main_board(monkeypatch, tmp_pat
     assert result.generator_manifest.source_universe_size == 1
 
 
-def test_dynamic_universe_generator_prefers_fresh_pool_names_and_exports_funnel(
+def test_dynamic_universe_generator_prefers_leaders_while_exporting_fresh_pool_metadata(
     monkeypatch,
     tmp_path: Path,
 ) -> None:
@@ -318,8 +320,9 @@ def test_dynamic_universe_generator_prefers_fresh_pool_names_and_exports_funnel(
         refresh_cache=True,
     )
 
-    assert result.selected_300[0]["symbol"] == "600010.SH"
-    assert result.selected_300[0]["fresh_pool_pass"] is True
-    assert result.coarse_pool[0]["fresh_pool_score"] >= result.coarse_pool[1]["fresh_pool_score"]
+    assert result.selected_300[0]["symbol"] == "600011.SH"
+    assert "fresh_pool_score" in result.selected_300[0]
+    assert "fresh_pool_pass" in result.selected_300[0]
+    assert any(item["fresh_pool_pass"] is True for item in result.coarse_pool)
     assert result.generator_manifest.config["fresh_pool_pass_count"] >= 1
     assert result.generator_manifest.config["fresh_pool_funnel"][-1]["count"] >= 1

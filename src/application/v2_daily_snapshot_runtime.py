@@ -161,6 +161,9 @@ def build_snapshot_from_manifest(
 ) -> StrategySnapshot:
     dataset_path = path_from_manifest_entry(manifest.get("dataset_manifest"), run_dir=manifest_path.parent)
     dataset_manifest = load_json_dict(dataset_path) if dataset_path is not None else {}
+    use_live_dynamic_universe = parse_boolish(settings.get("dynamic_universe_enabled", False), False) and bool(
+        str(settings.get("generator_manifest_path", "")).strip()
+    )
     config_hash = str(manifest.get("config_hash", "")) or stable_json_hash(settings)
     model_hashes_raw = manifest.get("model_hashes", {})
     model_hashes = (
@@ -169,7 +172,7 @@ def build_snapshot_from_manifest(
         else {}
     )
     policy_hash = str(manifest.get("policy_hash", ""))
-    universe_hash = str(manifest.get("universe_hash", ""))
+    universe_hash = str(settings.get("universe_hash", "")) if use_live_dynamic_universe else str(manifest.get("universe_hash", ""))
     run_id = str(manifest.get("run_id", ""))
     snapshot_hash = str(manifest.get("snapshot_hash", "")) or compose_run_snapshot_hash(
         run_id=run_id,
@@ -179,23 +182,35 @@ def build_snapshot_from_manifest(
         universe_hash=universe_hash,
         model_hashes=model_hashes,
     )
-    universe_file = str(dataset_manifest.get("universe_file", settings.get("universe_file", "")))
-    universe_id = (
-        str(dataset_manifest.get("universe_id", "")).strip()
-        or Path(universe_file).stem
-        or Path(str(settings.get("universe_file", ""))).stem
-        or "v2_universe"
+    universe_file = str(settings.get("universe_file", "")) if use_live_dynamic_universe else str(
+        dataset_manifest.get("universe_file", settings.get("universe_file", ""))
     )
+    universe_id = str(settings.get("universe_id", "")).strip() if use_live_dynamic_universe else str(
+        dataset_manifest.get("universe_id", "")
+    ).strip()
+    if not universe_id:
+        universe_id = Path(universe_file).stem or Path(str(settings.get("universe_file", ""))).stem or "v2_universe"
     start = str(dataset_manifest.get("start", settings.get("start", "")))
     end = str(dataset_manifest.get("end", settings.get("end", "")))
     data_window = f"{start}~{end}" if start or end else ""
     return build_strategy_snapshot(
         strategy_id=strategy_id,
         universe_id=universe_id,
-        universe_size=int(dataset_manifest.get("universe_size", dataset_manifest.get("symbol_count", 0)) or 0),
-        universe_generation_rule=str(dataset_manifest.get("universe_generation_rule", "")),
+        universe_size=int(
+            settings.get("universe_size", settings.get("symbol_count", 0))
+            if use_live_dynamic_universe
+            else dataset_manifest.get("universe_size", dataset_manifest.get("symbol_count", 0))
+            or 0
+        ),
+        universe_generation_rule=str(
+            settings.get("universe_generation_rule", "")
+            if use_live_dynamic_universe
+            else dataset_manifest.get("universe_generation_rule", "")
+        ),
         source_universe_manifest_path=str(
-            dataset_manifest.get("source_universe_manifest_path", dataset_manifest.get("universe_file", ""))
+            settings.get("source_universe_manifest_path", settings.get("universe_file", ""))
+            if use_live_dynamic_universe
+            else dataset_manifest.get("source_universe_manifest_path", dataset_manifest.get("universe_file", ""))
         ),
         info_manifest_path=str(manifest.get("info_manifest", "")),
         info_hash=str(manifest.get("info_hash", dataset_manifest.get("info_hash", ""))),
@@ -220,16 +235,45 @@ def build_snapshot_from_manifest(
             manifest.get("macro_context_snapshot", dataset_manifest.get("macro_context_snapshot", {}))
         ),
         generator_manifest_path=str(
-            manifest.get("generator_manifest", dataset_manifest.get("generator_manifest", ""))
+            settings.get("generator_manifest_path", "")
+            if use_live_dynamic_universe
+            else manifest.get("generator_manifest", dataset_manifest.get("generator_manifest", ""))
         ),
-        generator_version=str(manifest.get("generator_version", dataset_manifest.get("generator_version", ""))),
-        generator_hash=str(manifest.get("generator_hash", dataset_manifest.get("generator_hash", ""))),
-        coarse_pool_size=int(manifest.get("coarse_pool_size", dataset_manifest.get("coarse_pool_size", 0)) or 0),
-        refined_pool_size=int(manifest.get("refined_pool_size", dataset_manifest.get("refined_pool_size", 0)) or 0),
-        selected_pool_size=int(manifest.get("selected_pool_size", dataset_manifest.get("selected_pool_size", 0)) or 0),
+        generator_version=str(
+            settings.get("generator_version", "")
+            if use_live_dynamic_universe
+            else manifest.get("generator_version", dataset_manifest.get("generator_version", ""))
+        ),
+        generator_hash=str(
+            settings.get("generator_hash", "")
+            if use_live_dynamic_universe
+            else manifest.get("generator_hash", dataset_manifest.get("generator_hash", ""))
+        ),
+        coarse_pool_size=int(
+            settings.get("coarse_pool_size", 0)
+            if use_live_dynamic_universe
+            else manifest.get("coarse_pool_size", dataset_manifest.get("coarse_pool_size", 0))
+            or 0
+        ),
+        refined_pool_size=int(
+            settings.get("refined_pool_size", 0)
+            if use_live_dynamic_universe
+            else manifest.get("refined_pool_size", dataset_manifest.get("refined_pool_size", 0))
+            or 0
+        ),
+        selected_pool_size=int(
+            settings.get("selected_pool_size", 0)
+            if use_live_dynamic_universe
+            else manifest.get("selected_pool_size", dataset_manifest.get("selected_pool_size", 0))
+            or 0
+        ),
         theme_allocations=[
             dict(item)
-            for item in manifest.get("theme_allocations", dataset_manifest.get("theme_allocations", []))
+            for item in (
+                settings.get("theme_allocations", [])
+                if use_live_dynamic_universe
+                else manifest.get("theme_allocations", dataset_manifest.get("theme_allocations", []))
+            )
             if isinstance(item, dict)
         ],
         run_id=run_id,
@@ -330,19 +374,19 @@ def hydrate_daily_settings_from_dataset_manifest(
     hydrated["capital_flow_file"] = str(dataset_manifest.get("capital_flow_file", hydrated.get("capital_flow_file", "")))
     hydrated["macro_file"] = str(dataset_manifest.get("macro_file", hydrated.get("macro_file", "")))
     hydrated["external_signals"] = parse_boolish(
-        dataset_manifest.get("external_signal_enabled", hydrated.get("external_signals", True)),
-        True,
+        dataset_manifest.get("external_signal_enabled", hydrated.get("external_signals", False)),
+        False,
     )
     hydrated["enable_insight_memory"] = parse_boolish(
-        dataset_manifest.get("enable_insight_memory", hydrated.get("enable_insight_memory", True)),
-        True,
+        dataset_manifest.get("enable_insight_memory", hydrated.get("enable_insight_memory", False)),
+        False,
     )
     hydrated["insight_notes_dir"] = str(
         dataset_manifest.get("insight_notes_dir", hydrated.get("insight_notes_dir", "input/insight_notes"))
     )
     hydrated["execution_overlay_enabled"] = parse_boolish(
-        dataset_manifest.get("execution_overlay_enabled", hydrated.get("execution_overlay_enabled", True)),
-        True,
+        dataset_manifest.get("execution_overlay_enabled", hydrated.get("execution_overlay_enabled", False)),
+        False,
     )
     hydrated["external_signal_version"] = str(
         dataset_manifest.get("external_signal_version", hydrated.get("external_signal_version", "v1"))
@@ -415,7 +459,7 @@ def build_daily_snapshot_context(
     info_types: str | None,
     info_source_mode: str | None,
     info_subsets: str | None,
-    info_cutoff_time: str | None,
+    info_cutoff_time: str | None = None,
     external_signals: bool | None,
     event_file: str | None,
     capital_flow_file: str | None,
@@ -468,6 +512,30 @@ def build_daily_snapshot_context(
     )
     settings["refresh_cache"] = bool(refresh_cache)
     settings = resolve_v2_universe_settings(settings=settings, cache_root=cache_root)
+    live_universe_settings: dict[str, object] = {}
+    if parse_boolish(settings.get("dynamic_universe_enabled", False), False) and str(
+        settings.get("generator_manifest_path", "")
+    ).strip():
+        live_universe_settings = {
+            "dynamic_universe_enabled": settings.get("dynamic_universe_enabled", False),
+            "universe_file": settings.get("universe_file", ""),
+            "universe_limit": settings.get("universe_limit", 0),
+            "universe_tier": settings.get("universe_tier", ""),
+            "universe_id": settings.get("universe_id", ""),
+            "universe_size": settings.get("universe_size", 0),
+            "universe_generation_rule": settings.get("universe_generation_rule", ""),
+            "source_universe_manifest_path": settings.get("source_universe_manifest_path", ""),
+            "symbols": list(settings.get("symbols", [])),
+            "symbol_count": settings.get("symbol_count", 0),
+            "universe_hash": settings.get("universe_hash", ""),
+            "generator_manifest_path": settings.get("generator_manifest_path", ""),
+            "generator_version": settings.get("generator_version", ""),
+            "generator_hash": settings.get("generator_hash", ""),
+            "coarse_pool_size": settings.get("coarse_pool_size", 0),
+            "refined_pool_size": settings.get("refined_pool_size", 0),
+            "selected_pool_size": settings.get("selected_pool_size", 0),
+            "theme_allocations": [dict(item) for item in settings.get("theme_allocations", []) if isinstance(item, dict)],
+        }
 
     manifest: dict[str, object] = {}
     manifest_path: Path | None = None
@@ -499,6 +567,8 @@ def build_daily_snapshot_context(
                 universe_tier=universe_tier,
                 universe_file=universe_file,
             )
+            if live_universe_settings:
+                settings.update(live_universe_settings)
             snapshot = build_snapshot_from_manifest_fn(
                 strategy_id=strategy_id,
                 settings=settings,
