@@ -88,7 +88,7 @@ def trajectory_cache_key(
     overlay_cache_token: str = "",
 ) -> str:
     payload = {
-        "version": "v2-trajectory-cache-9",
+        "version": "v2-trajectory-cache-10",
         "raw_cache_key": str(raw_cache_key),
         "overlay_cache_token": str(overlay_cache_token),
     }
@@ -115,7 +115,7 @@ def raw_trajectory_cache_key(
     end: str = "",
 ) -> str:
     payload = {
-        "version": "v2-trajectory-raw-cache-3",
+        "version": "v2-trajectory-raw-cache-4",
         "config_path": str(Path(config_path).resolve()),
         "source": "" if source is None else str(source),
         "universe_file": "" if universe_file is None else str(Path(universe_file).resolve()),

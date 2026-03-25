@@ -24,6 +24,7 @@ from src.application.v2_leader_runtime import (
     evaluate_leader_candidates,
     top_leader_candidates,
 )
+from src.application.v2_signal_training_runtime import build_exit_behavior_runtime_rows
 
 
 def _leader_state() -> CompositeState:
@@ -50,9 +51,69 @@ def _leader_state() -> CompositeState:
         ),
         sectors=[SectorForecastState("chips", 0.61, 0.67, 0.18, 0.20, 0.18)],
         stocks=[
-            StockForecastState("AAA", "chips", 0.61, 0.69, 0.74, 0.67, 0.14, 0.93, alpha_score=0.88),
-            StockForecastState("BBB", "chips", 0.57, 0.61, 0.66, 0.58, 0.10, 0.89, alpha_score=0.72),
-            StockForecastState("CCC", "chips", 0.49, 0.46, 0.52, 0.47, 0.04, 0.73, alpha_score=0.41),
+            StockForecastState(
+                "AAA",
+                "chips",
+                0.61,
+                0.69,
+                0.74,
+                0.67,
+                0.14,
+                0.93,
+                alpha_score=0.88,
+                breakout_quality_score=0.82,
+                exhaustion_reversal_risk=0.18,
+                pullback_reclaim_score=0.74,
+                distance_to_20d_high=0.02,
+                distance_to_20d_low=0.17,
+                volume_breakout_ratio=1.85,
+                upper_shadow_ratio_1=0.12,
+                body_ratio_1=0.68,
+                narrow_range_rank_20=0.32,
+                breakdown_below_20_low=0.0,
+            ),
+            StockForecastState(
+                "BBB",
+                "chips",
+                0.57,
+                0.61,
+                0.66,
+                0.58,
+                0.10,
+                0.89,
+                alpha_score=0.72,
+                breakout_quality_score=0.52,
+                exhaustion_reversal_risk=0.34,
+                pullback_reclaim_score=0.48,
+                distance_to_20d_high=-0.03,
+                distance_to_20d_low=0.10,
+                volume_breakout_ratio=1.18,
+                upper_shadow_ratio_1=0.24,
+                body_ratio_1=0.46,
+                narrow_range_rank_20=0.54,
+                breakdown_below_20_low=0.0,
+            ),
+            StockForecastState(
+                "CCC",
+                "chips",
+                0.49,
+                0.46,
+                0.52,
+                0.47,
+                0.04,
+                0.73,
+                alpha_score=0.41,
+                breakout_quality_score=0.16,
+                exhaustion_reversal_risk=0.82,
+                pullback_reclaim_score=0.10,
+                distance_to_20d_high=-0.14,
+                distance_to_20d_low=-0.02,
+                volume_breakout_ratio=0.58,
+                upper_shadow_ratio_1=0.72,
+                body_ratio_1=0.18,
+                narrow_range_rank_20=0.88,
+                breakdown_below_20_low=1.0,
+            ),
         ],
         strategy_mode="trend_follow",
         risk_regime="risk_on",
@@ -97,9 +158,19 @@ def test_build_leader_score_snapshots_separates_strong_and_weak_names() -> None:
     assert snapshots[0].symbol == "AAA"
     assert snapshot_map["AAA"].candidate_score > snapshot_map["BBB"].candidate_score > snapshot_map["CCC"].candidate_score
     assert snapshot_map["AAA"].conviction_score > snapshot_map["CCC"].conviction_score
+    assert snapshot_map["AAA"].breakout_quality_score > snapshot_map["CCC"].breakout_quality_score
+    assert snapshot_map["CCC"].exhaustion_reversal_risk > snapshot_map["AAA"].exhaustion_reversal_risk
     assert snapshot_map["CCC"].hard_negative is True
     assert "theme strengthening" in snapshot_map["AAA"].reasons
     assert "role downgrade active" in snapshot_map["CCC"].reasons
+
+
+def test_build_exit_behavior_runtime_rows_carries_technical_features() -> None:
+    rows = build_exit_behavior_runtime_rows(state=_leader_state())
+
+    assert rows["aaa"]["breakout_quality_score"] > rows["ccc"]["breakout_quality_score"]
+    assert rows["ccc"]["exhaustion_reversal_risk"] > rows["aaa"]["exhaustion_reversal_risk"]
+    assert rows["ccc"]["breakdown_below_20_low"] == 1.0
 
 
 def test_build_leader_score_snapshots_uses_info_and_shortlist_support() -> None:

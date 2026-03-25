@@ -22,6 +22,25 @@ class LeaderScoreSnapshot:
     theme_rank: int = 0
     theme_size: int = 0
     hard_negative: bool = False
+    alpha_score: float = 0.0
+    excess_prob: float = 0.5
+    up_1d_prob: float = 0.5
+    up_5d_prob: float = 0.5
+    up_20d_prob: float = 0.5
+    tradeability_score: float = 0.5
+    breakdown_risk: float = 0.0
+    short_term_spike: float = 0.0
+    theme_event_risk: float = 0.0
+    breakout_quality_score: float = 0.0
+    exhaustion_reversal_risk: float = 0.0
+    pullback_reclaim_score: float = 0.0
+    distance_to_20d_high: float = 0.0
+    distance_to_20d_low: float = 0.0
+    volume_breakout_ratio: float = 0.0
+    upper_shadow_ratio_1: float = 0.0
+    body_ratio_1: float = 0.0
+    narrow_range_rank_20: float = 0.0
+    breakdown_below_20_low: float = 0.0
     reasons: list[str] = field(default_factory=list)
 
 
@@ -48,6 +67,9 @@ class LeaderTrainingLabel:
     future_theme_percentile: float = 0.0
     is_true_leader: bool = False
     leader_bucket: str = "neutral"
+    leader_tri_label: str = "not_leader"
+    is_possible_leader: bool = False
+    is_confirmed_leader: bool = False
 
 
 @dataclass(frozen=True)
@@ -67,10 +89,37 @@ class ExitTrainingLabel:
     candidate_score: float = 0.0
     conviction_score: float = 0.0
     hard_negative: bool = False
+    alpha_score: float = 0.0
+    excess_prob: float = 0.5
+    up_1d_prob: float = 0.5
+    up_5d_prob: float = 0.5
+    up_20d_prob: float = 0.5
+    tradeability_score: float = 0.5
+    breakdown_risk: float = 0.0
+    short_term_spike: float = 0.0
+    theme_event_risk: float = 0.0
+    breakout_quality_score: float = 0.0
+    exhaustion_reversal_risk: float = 0.0
+    pullback_reclaim_score: float = 0.0
+    distance_to_20d_high: float = 0.0
+    distance_to_20d_low: float = 0.0
+    volume_breakout_ratio: float = 0.0
+    upper_shadow_ratio_1: float = 0.0
+    body_ratio_1: float = 0.0
+    narrow_range_rank_20: float = 0.0
+    breakdown_below_20_low: float = 0.0
     future_ret_1d: float = 0.0
     future_excess_1d_vs_mkt: float = 0.0
+    future_ret_2d: float = 0.0
+    future_ret_3d: float = 0.0
+    future_ret_5d: float = 0.0
     future_excess_5d_vs_sector: float = 0.0
     future_excess_20d_vs_sector: float = 0.0
+    future_excess_2d_vs_sector: float = 0.0
+    future_excess_3d_vs_sector: float = 0.0
+    path_failure_score: float = 0.0
+    rebound_failure_score: float = 0.0
+    breakdown_path_score: float = 0.0
     future_drag_score: float = 0.0
     hold_score: float = 0.0
     exit_pressure_score: float = 0.0
@@ -697,6 +746,25 @@ def build_leader_score_snapshots(
                     theme_rank=idx,
                     theme_size=theme_size,
                     hard_negative=hard_negative,
+                    alpha_score=_safe_float(getattr(stock, "alpha_score", 0.0), 0.0),
+                    excess_prob=_safe_float(getattr(stock, "excess_vs_sector_prob", 0.5), 0.5),
+                    up_1d_prob=_safe_float(getattr(stock, "up_1d_prob", 0.5), 0.5),
+                    up_5d_prob=_safe_float(getattr(stock, "up_5d_prob", 0.5), 0.5),
+                    up_20d_prob=_safe_float(getattr(stock, "up_20d_prob", 0.5), 0.5),
+                    tradeability_score=_safe_float(getattr(stock, "tradeability_score", 0.5), 0.5),
+                    breakdown_risk=_safe_float(getattr(role_state, "breakdown_risk", 0.0), 0.0),
+                    short_term_spike=short_spike,
+                    theme_event_risk=theme_event_risk,
+                    breakout_quality_score=_safe_float(getattr(stock, "breakout_quality_score", 0.0), 0.0),
+                    exhaustion_reversal_risk=_safe_float(getattr(stock, "exhaustion_reversal_risk", 0.0), 0.0),
+                    pullback_reclaim_score=_safe_float(getattr(stock, "pullback_reclaim_score", 0.0), 0.0),
+                    distance_to_20d_high=_safe_float(getattr(stock, "distance_to_20d_high", 0.0), 0.0),
+                    distance_to_20d_low=_safe_float(getattr(stock, "distance_to_20d_low", 0.0), 0.0),
+                    volume_breakout_ratio=_safe_float(getattr(stock, "volume_breakout_ratio", 0.0), 0.0),
+                    upper_shadow_ratio_1=_safe_float(getattr(stock, "upper_shadow_ratio_1", 0.0), 0.0),
+                    body_ratio_1=_safe_float(getattr(stock, "body_ratio_1", 0.0), 0.0),
+                    narrow_range_rank_20=_safe_float(getattr(stock, "narrow_range_rank_20", 0.0), 0.0),
+                    breakdown_below_20_low=_safe_float(getattr(stock, "breakdown_below_20_low", 0.0), 0.0),
                     reasons=_reason_list(
                         stock=stock,
                         role=role,
@@ -1122,7 +1190,12 @@ def _future_theme_frame(
             {
                 "symbol": str(item.symbol),
                 "future_ret_1": _safe_float(row.get("fwd_ret_1", 0.0), 0.0),
+                "future_ret_2": _safe_float(row.get("fwd_ret_2", float("nan")), float("nan")),
+                "future_ret_3": _safe_float(row.get("fwd_ret_3", float("nan")), float("nan")),
+                "future_ret_5": _safe_float(row.get("fwd_ret_5", float("nan")), float("nan")),
                 "future_excess_1": _safe_float(row.get("excess_ret_1_vs_mkt", 0.0), 0.0),
+                "excess_2": _safe_float(row.get("excess_ret_2_vs_sector", float("nan")), float("nan")),
+                "excess_3": _safe_float(row.get("excess_ret_3_vs_sector", float("nan")), float("nan")),
                 "excess_5": excess_5,
                 "excess_20": excess_20,
             }
@@ -1161,6 +1234,34 @@ def _leader_bucket(
     if future_score >= 0.70 or future_excess_5 > 0.0:
         return "contender"
     return "neutral"
+
+
+def _leader_tri_label(
+    *,
+    is_true_leader: bool,
+    future_score: float,
+    future_percentile: float,
+    hard_negative: bool,
+    future_excess_5: float,
+    future_excess_20: float,
+) -> str:
+    if is_true_leader:
+        return "confirmed_leader"
+    if (
+        hard_negative
+        and future_score <= 0.50
+        and future_excess_5 <= 0.0
+        and future_excess_20 <= 0.0
+    ):
+        return "not_leader"
+    if (
+        future_score >= 0.65
+        or future_percentile >= 0.55
+        or future_excess_5 > 0.0
+        or future_excess_20 > 0.0
+    ):
+        return "possible_leader"
+    return "not_leader"
 
 
 def _hold_score(
@@ -1210,28 +1311,107 @@ def _future_drag_score(
     )
 
 
+def _finite_metric_values(*values: float) -> list[float]:
+    out: list[float] = []
+    for value in values:
+        number = _safe_float(value, float("nan"))
+        if math.isnan(number):
+            continue
+        out.append(float(number))
+    return out
+
+
+def _fallback_metric(primary: float, *fallbacks: float) -> float:
+    for value in (primary, *fallbacks):
+        number = _safe_float(value, float("nan"))
+        if not math.isnan(number):
+            return float(number)
+    return 0.0
+
+
+def _future_path_failure_components(
+    *,
+    future_ret_1: float,
+    future_ret_2: float,
+    future_ret_3: float,
+    future_ret_5: float,
+    future_excess_1: float,
+    future_excess_2: float,
+    future_excess_3: float,
+    future_excess_5: float,
+) -> dict[str, float]:
+    ret_values = _finite_metric_values(future_ret_1, future_ret_2, future_ret_3, future_ret_5)
+    excess_values = _finite_metric_values(future_excess_1, future_excess_2, future_excess_3, future_excess_5)
+    if not ret_values and not excess_values:
+        return {
+            "path_failure_score": 0.0,
+            "rebound_failure_score": 0.0,
+            "breakdown_path_score": 0.0,
+        }
+
+    min_ret = min(ret_values) if ret_values else 0.0
+    min_excess = min(excess_values) if excess_values else 0.0
+    ret_negative_ratio = float(sum(1 for value in ret_values if value < 0.0) / max(1, len(ret_values)))
+    excess_negative_ratio = float(sum(1 for value in excess_values if value < 0.0) / max(1, len(excess_values)))
+
+    ret_3 = _fallback_metric(future_ret_3, future_ret_5, future_ret_2, future_ret_1)
+    ret_5 = _fallback_metric(future_ret_5, future_ret_3, future_ret_2, future_ret_1)
+    excess_3 = _fallback_metric(future_excess_3, future_excess_5, future_excess_2, future_excess_1)
+    excess_5 = _fallback_metric(future_excess_5, future_excess_3, future_excess_2, future_excess_1)
+
+    breakdown_path_score = _clip01(
+        0.52 * max(0.0, -min_ret / 0.06)
+        + 0.38 * max(0.0, -min_excess / 0.05)
+        + 0.10 * max(ret_negative_ratio, excess_negative_ratio)
+    )
+    rebound_failure_score = _clip01(
+        0.45 * max(0.0, future_ret_1 - max(ret_3, ret_5)) / 0.06
+        + 0.35 * max(0.0, future_excess_1 - max(excess_3, excess_5)) / 0.05
+        + 0.20 * (1.0 if future_ret_1 > 0.0 and min(ret_3, ret_5) < 0.0 else 0.0)
+    )
+    persistence_score = _clip01(
+        0.55 * excess_negative_ratio
+        + 0.25 * ret_negative_ratio
+        + 0.20 * (1.0 if min_excess < 0.0 and excess_5 < 0.0 else 0.0)
+    )
+    return {
+        "path_failure_score": _clip01(
+            0.46 * breakdown_path_score + 0.32 * rebound_failure_score + 0.22 * persistence_score
+        ),
+        "rebound_failure_score": rebound_failure_score,
+        "breakdown_path_score": breakdown_path_score,
+    }
+
+
 def _exit_severity_label(
     *,
     phase: str,
     role_downgrade: bool,
     hard_negative: bool,
     future_drag_score: float,
+    exit_pressure_score: float,
+    path_failure_score: float,
+    rebound_failure_score: float,
+    breakdown_path_score: float,
 ) -> str:
     phase_value = _normalize_text(phase).lower()
     if (
-        future_drag_score >= 0.72
-        or (hard_negative and future_drag_score >= 0.44)
-        or (phase_value == "fading" and future_drag_score >= 0.36)
+        exit_pressure_score >= 0.78
+        or breakdown_path_score >= 0.72
+        or (hard_negative and exit_pressure_score >= 0.46)
+        or (phase_value == "fading" and exit_pressure_score >= 0.40)
     ):
         return "exit_fast"
     if (
-        future_drag_score >= 0.50
-        or (role_downgrade and future_drag_score >= 0.26)
-        or (phase_value in {"crowded", "diverging", "fading"} and future_drag_score >= 0.32)
+        exit_pressure_score >= 0.58
+        or rebound_failure_score >= 0.56
+        or (role_downgrade and path_failure_score >= 0.28)
+        or (phase_value in {"crowded", "diverging", "fading"} and exit_pressure_score >= 0.34)
     ):
         return "reduce"
     if (
-        future_drag_score >= 0.24
+        exit_pressure_score >= 0.32
+        or path_failure_score >= 0.36
         or role_downgrade
         or hard_negative
         or phase_value in {"crowded", "diverging", "fading"}
@@ -1265,7 +1445,8 @@ def _exit_sample_source(
 def _exit_sample_weight(
     *,
     sample_source: str,
-    future_drag_score: float,
+    exit_pressure_score: float,
+    path_failure_score: float,
     role_downgrade: bool,
     hard_negative: bool,
 ) -> float:
@@ -1278,7 +1459,7 @@ def _exit_sample_weight(
     return float(
         1.0
         * base
-        * (1.0 + 0.85 * float(future_drag_score))
+        * (1.0 + 0.70 * float(exit_pressure_score) + 0.25 * float(path_failure_score))
         * (1.10 if role_downgrade else 1.0)
         * (1.15 if hard_negative else 1.0)
     )
@@ -1333,6 +1514,16 @@ def build_leader_training_labels(
                 future_score = _safe_float(metrics.get("future_score", 0.0), 0.0)
                 future_excess_5 = _safe_float(metrics.get("excess_5", 0.0), 0.0)
                 future_excess_20 = _safe_float(metrics.get("excess_20", 0.0), 0.0)
+                future_percentile = _safe_float(metrics.get("future_percentile", 0.0), 0.0)
+                is_true_leader = str(item.symbol) in true_leaders
+                tri_label = _leader_tri_label(
+                    is_true_leader=is_true_leader,
+                    future_score=future_score,
+                    future_percentile=future_percentile,
+                    hard_negative=bool(item.hard_negative),
+                    future_excess_5=future_excess_5,
+                    future_excess_20=future_excess_20,
+                )
                 rows.append(
                     LeaderTrainingLabel(
                         date=str(step_date.date()),
@@ -1353,14 +1544,17 @@ def build_leader_training_labels(
                         future_excess_20d_vs_sector=future_excess_20,
                         future_theme_score=future_score,
                         future_theme_rank=int(metrics.get("future_rank", 0) or 0),
-                        future_theme_percentile=_safe_float(metrics.get("future_percentile", 0.0), 0.0),
-                        is_true_leader=str(item.symbol) in true_leaders,
+                        future_theme_percentile=future_percentile,
+                        is_true_leader=is_true_leader,
                         leader_bucket=_leader_bucket(
-                            is_true_leader=str(item.symbol) in true_leaders,
+                            is_true_leader=is_true_leader,
                             future_score=future_score,
                             hard_negative=bool(item.hard_negative),
                             future_excess_5=future_excess_5,
                         ),
+                        leader_tri_label=tri_label,
+                        is_possible_leader=tri_label == "possible_leader",
+                        is_confirmed_leader=tri_label == "confirmed_leader",
                     )
                 )
     return rows
@@ -1432,7 +1626,12 @@ def build_exit_training_labels(
                 if not sample_source:
                     continue
                 future_ret_1 = _safe_float(metrics.get("future_ret_1", 0.0), 0.0)
+                future_ret_2 = _safe_float(metrics.get("future_ret_2", float("nan")), float("nan"))
+                future_ret_3 = _safe_float(metrics.get("future_ret_3", float("nan")), float("nan"))
+                future_ret_5 = _safe_float(metrics.get("future_ret_5", float("nan")), float("nan"))
                 future_excess_1 = _safe_float(metrics.get("future_excess_1", 0.0), 0.0)
+                future_excess_2 = _safe_float(metrics.get("excess_2", float("nan")), float("nan"))
+                future_excess_3 = _safe_float(metrics.get("excess_3", float("nan")), float("nan"))
                 future_excess_5 = _safe_float(metrics.get("excess_5", 0.0), 0.0)
                 future_excess_20 = _safe_float(metrics.get("excess_20", 0.0), 0.0)
                 hold_score = _hold_score(
@@ -1448,15 +1647,34 @@ def build_exit_training_labels(
                     future_excess_5=future_excess_5,
                     future_excess_20=future_excess_20,
                 )
+                path_components = _future_path_failure_components(
+                    future_ret_1=future_ret_1,
+                    future_ret_2=future_ret_2,
+                    future_ret_3=future_ret_3,
+                    future_ret_5=future_ret_5,
+                    future_excess_1=future_excess_1,
+                    future_excess_2=future_excess_2,
+                    future_excess_3=future_excess_3,
+                    future_excess_5=future_excess_5,
+                )
+                path_failure_score = float(path_components["path_failure_score"])
+                rebound_failure_score = float(path_components["rebound_failure_score"])
+                breakdown_path_score = float(path_components["breakdown_path_score"])
+                exit_pressure_score = _clip01(0.58 * future_drag_score + 0.42 * path_failure_score)
                 severity_label = _exit_severity_label(
                     phase=str(item.theme_phase),
                     role_downgrade=bool(item.role_downgrade),
                     hard_negative=bool(item.hard_negative),
                     future_drag_score=future_drag_score,
+                    exit_pressure_score=exit_pressure_score,
+                    path_failure_score=path_failure_score,
+                    rebound_failure_score=rebound_failure_score,
+                    breakdown_path_score=breakdown_path_score,
                 )
                 sample_weight = _exit_sample_weight(
                     sample_source=sample_source,
-                    future_drag_score=future_drag_score,
+                    exit_pressure_score=exit_pressure_score,
+                    path_failure_score=path_failure_score,
                     role_downgrade=bool(item.role_downgrade),
                     hard_negative=bool(item.hard_negative),
                 )
@@ -1477,13 +1695,40 @@ def build_exit_training_labels(
                         candidate_score=float(item.candidate_score),
                         conviction_score=float(item.conviction_score),
                         hard_negative=bool(item.hard_negative),
+                        alpha_score=float(item.alpha_score),
+                        excess_prob=float(item.excess_prob),
+                        up_1d_prob=float(item.up_1d_prob),
+                        up_5d_prob=float(item.up_5d_prob),
+                        up_20d_prob=float(item.up_20d_prob),
+                        tradeability_score=float(item.tradeability_score),
+                        breakdown_risk=float(item.breakdown_risk),
+                        short_term_spike=float(item.short_term_spike),
+                        theme_event_risk=float(item.theme_event_risk),
+                        breakout_quality_score=float(item.breakout_quality_score),
+                        exhaustion_reversal_risk=float(item.exhaustion_reversal_risk),
+                        pullback_reclaim_score=float(item.pullback_reclaim_score),
+                        distance_to_20d_high=float(item.distance_to_20d_high),
+                        distance_to_20d_low=float(item.distance_to_20d_low),
+                        volume_breakout_ratio=float(item.volume_breakout_ratio),
+                        upper_shadow_ratio_1=float(item.upper_shadow_ratio_1),
+                        body_ratio_1=float(item.body_ratio_1),
+                        narrow_range_rank_20=float(item.narrow_range_rank_20),
+                        breakdown_below_20_low=float(item.breakdown_below_20_low),
                         future_ret_1d=future_ret_1,
                         future_excess_1d_vs_mkt=future_excess_1,
+                        future_ret_2d=0.0 if math.isnan(future_ret_2) else future_ret_2,
+                        future_ret_3d=0.0 if math.isnan(future_ret_3) else future_ret_3,
+                        future_ret_5d=0.0 if math.isnan(future_ret_5) else future_ret_5,
                         future_excess_5d_vs_sector=future_excess_5,
                         future_excess_20d_vs_sector=future_excess_20,
+                        future_excess_2d_vs_sector=0.0 if math.isnan(future_excess_2) else future_excess_2,
+                        future_excess_3d_vs_sector=0.0 if math.isnan(future_excess_3) else future_excess_3,
+                        path_failure_score=path_failure_score,
+                        rebound_failure_score=rebound_failure_score,
+                        breakdown_path_score=breakdown_path_score,
                         future_drag_score=future_drag_score,
                         hold_score=hold_score,
-                        exit_pressure_score=future_drag_score,
+                        exit_pressure_score=exit_pressure_score,
                         exit_severity_label=severity_label,
                         exit_label=severity_label,
                         should_watch=severity_label in {"watch", "reduce", "exit_fast"},
@@ -1513,8 +1758,12 @@ def build_research_label_artifact_payloads(
         candidate_limit=exit_candidate_limit,
     )
     leader_bucket_counts: dict[str, int] = {}
+    leader_tri_label_counts: dict[str, int] = {}
     for item in leader_rows:
         leader_bucket_counts[item.leader_bucket] = int(leader_bucket_counts.get(item.leader_bucket, 0) + 1)
+        leader_tri_label_counts[item.leader_tri_label] = int(
+            leader_tri_label_counts.get(item.leader_tri_label, 0) + 1
+        )
     exit_label_counts: dict[str, int] = {}
     exit_source_counts: dict[str, int] = {}
     exit_severity_counts: dict[str, int] = {}
@@ -1530,6 +1779,10 @@ def build_research_label_artifact_payloads(
         "leader_true_count": int(sum(1 for item in leader_rows if item.is_true_leader)),
         "leader_hard_negative_count": int(sum(1 for item in leader_rows if item.hard_negative)),
         "leader_bucket_counts": leader_bucket_counts,
+        "leader_tri_label_counts": leader_tri_label_counts,
+        "leader_confirmed_count": int(sum(1 for item in leader_rows if item.leader_tri_label == "confirmed_leader")),
+        "leader_possible_count": int(sum(1 for item in leader_rows if item.leader_tri_label == "possible_leader")),
+        "leader_not_count": int(sum(1 for item in leader_rows if item.leader_tri_label == "not_leader")),
         "exit_row_count": int(len(exit_rows)),
         "exit_watch_count": int(sum(1 for item in exit_rows if item.exit_severity_label == "watch")),
         "exit_reduce_count": int(sum(1 for item in exit_rows if item.exit_label == "reduce")),
@@ -1539,6 +1792,12 @@ def build_research_label_artifact_payloads(
         "exit_sample_sources": exit_source_counts,
         "exit_avg_future_drag_score": float(
             sum(float(item.future_drag_score) for item in exit_rows) / max(1, len(exit_rows))
+        ),
+        "exit_avg_exit_pressure_score": float(
+            sum(float(item.exit_pressure_score) for item in exit_rows) / max(1, len(exit_rows))
+        ),
+        "exit_avg_path_failure_score": float(
+            sum(float(item.path_failure_score) for item in exit_rows) / max(1, len(exit_rows))
         ),
         "exit_avg_future_drag_by_source": {
             key: float(sum(values) / max(1, len(values)))
@@ -1568,6 +1827,9 @@ def evaluate_leader_candidates(
             "true_leader_count": 0,
             "candidate_recall_at_k": 0.0,
             "conviction_precision_at_1": 0.0,
+            "confirmed_precision_at_1": 0.0,
+            "possible_recall_at_k": 0.0,
+            "not_leader_avoid_rate": 0.0,
             "ndcg_at_k": 0.0,
             "hard_negative_survival_recall": 0.0,
             "hard_negative_filter_rate": 0.0,
@@ -1579,10 +1841,12 @@ def evaluate_leader_candidates(
     true_leader_count = 0
     candidate_hits = 0.0
     conviction_hits = 0.0
+    possible_hits = 0.0
     ndcg_values: list[float] = []
     surviving_true_leaders = 0
     total_true_leaders = 0
     filtered_stock_count = 0
+    not_leader_avoid_values: list[float] = []
 
     for step in getattr(trajectory, "steps", []) or []:
         step_date = pd.Timestamp(getattr(step, "date"))
@@ -1593,11 +1857,29 @@ def evaluate_leader_candidates(
         for group in grouped.values():
             if len(group) < 3:
                 continue
-            future_scores, true_leaders, valid_stock_count = _future_theme_scores(
+            future_frame = _future_theme_frame(
                 group=group,
                 step_date=step_date,
                 future_lookup=future_lookup,
             )
+            if future_frame.empty:
+                continue
+            valid_stock_count = int(len(future_frame))
+            future_scores = {
+                str(row["symbol"]): float(row["future_score"])
+                for row in future_frame.to_dict(orient="records")
+            }
+            top_score = float(future_frame["future_score"].max())
+            leader_cut = max(0.80, top_score - 0.05)
+            true_leaders = {
+                str(row.symbol)
+                for row in future_frame.itertuples(index=False)
+                if float(row.future_score) >= leader_cut and float(row.excess_5) > 0.0
+            }
+            if not true_leaders and top_score >= 0.70:
+                best = future_frame.sort_values(["future_score", "excess_5", "excess_20"], ascending=False).iloc[0]
+                if float(best["excess_5"]) > 0.0 or float(best["excess_20"]) > 0.0:
+                    true_leaders.add(str(best["symbol"]))
             if valid_stock_count < 2 or not true_leaders:
                 continue
             theme_group_count += 1
@@ -1613,6 +1895,40 @@ def evaluate_leader_candidates(
                 candidate_hits += 1.0
             if conviction_ranked and conviction_ranked[0].symbol in true_leaders:
                 conviction_hits += 1.0
+
+            future_map = {
+                str(row["symbol"]): row
+                for row in future_frame.to_dict(orient="records")
+            }
+            tri_label_map: dict[str, str] = {}
+            for item in group:
+                metrics = future_map.get(str(item.symbol))
+                if metrics is None:
+                    continue
+                future_score = _safe_float(metrics.get("future_score", 0.0), 0.0)
+                future_percentile = _safe_float(metrics.get("future_percentile", 0.0), 0.0)
+                tri_label_map[str(item.symbol)] = _leader_tri_label(
+                    is_true_leader=str(item.symbol) in true_leaders,
+                    future_score=future_score,
+                    future_percentile=future_percentile,
+                    hard_negative=bool(item.hard_negative),
+                    future_excess_5=_safe_float(metrics.get("excess_5", 0.0), 0.0),
+                    future_excess_20=_safe_float(metrics.get("excess_20", 0.0), 0.0),
+                )
+            possible_leaders = {
+                symbol for symbol, tri_label in tri_label_map.items()
+                if tri_label in {"possible_leader", "confirmed_leader"}
+            }
+            not_leaders = {
+                symbol for symbol, tri_label in tri_label_map.items()
+                if tri_label == "not_leader"
+            }
+            if top_candidate_symbols & possible_leaders:
+                possible_hits += 1.0
+            if not_leaders:
+                not_leader_avoid_values.append(
+                    float(sum(1 for symbol in not_leaders if symbol not in top_candidate_symbols) / max(1, len(not_leaders)))
+                )
 
             predicted = [float(future_scores.get(item.symbol, 0.0)) for item in conviction_ranked[: max(1, int(top_k))]]
             ideal = sorted(future_scores.values(), reverse=True)[: max(1, int(top_k))]
@@ -1630,6 +1946,9 @@ def evaluate_leader_candidates(
         "true_leader_count": int(true_leader_count),
         "candidate_recall_at_k": float(candidate_hits / max(1, theme_group_count)),
         "conviction_precision_at_1": float(conviction_hits / max(1, theme_group_count)),
+        "confirmed_precision_at_1": float(conviction_hits / max(1, theme_group_count)),
+        "possible_recall_at_k": float(possible_hits / max(1, theme_group_count)),
+        "not_leader_avoid_rate": float(sum(not_leader_avoid_values) / max(1, len(not_leader_avoid_values))),
         "ndcg_at_k": float(sum(ndcg_values) / max(1, len(ndcg_values))),
         "hard_negative_survival_recall": float(surviving_true_leaders / max(1, total_true_leaders)),
         "hard_negative_filter_rate": float(filtered_stock_count / filter_denominator),

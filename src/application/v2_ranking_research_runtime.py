@@ -73,6 +73,9 @@ class V2RankingResearchResult:
             "leader_metrics": {
                 "candidate_recall_at_k": float(leader_eval.get("candidate_recall_at_k", 0.0)),
                 "conviction_precision_at_1": float(leader_eval.get("conviction_precision_at_1", 0.0)),
+                "confirmed_precision_at_1": float(leader_eval.get("confirmed_precision_at_1", 0.0)),
+                "possible_recall_at_k": float(leader_eval.get("possible_recall_at_k", 0.0)),
+                "not_leader_avoid_rate": float(leader_eval.get("not_leader_avoid_rate", 0.0)),
                 "ndcg_at_k": float(leader_eval.get("ndcg_at_k", 0.0)),
                 "hard_negative_survival_recall": float(leader_eval.get("hard_negative_survival_recall", 0.0)),
                 "hard_negative_filter_rate": float(leader_eval.get("hard_negative_filter_rate", 0.0)),
@@ -84,16 +87,55 @@ class V2RankingResearchResult:
                 "leader_eval_top3_recall": float(
                     self.signal_training_manifest.get("leader_eval_top3_recall", 0.0)
                 ),
+                "leader_eval_possible_recall_at_k": float(
+                    self.signal_training_manifest.get("leader_eval_possible_recall_at_k", 0.0)
+                ),
+                "leader_eval_confirmed_precision_at_1": float(
+                    self.signal_training_manifest.get("leader_eval_confirmed_precision_at_1", 0.0)
+                ),
+                "leader_eval_not_leader_avoid_rate": float(
+                    self.signal_training_manifest.get("leader_eval_not_leader_avoid_rate", 0.0)
+                ),
                 "leader_eval_ndcg_at_3": float(
                     self.signal_training_manifest.get("leader_eval_ndcg_at_3", 0.0)
                 ),
+                "leader_eval_filter_possible_recall": float(
+                    self.signal_training_manifest.get("leader_eval_filter_possible_recall", 0.0)
+                ),
+                "leader_eval_filter_confirmed_recall": float(
+                    self.signal_training_manifest.get("leader_eval_filter_confirmed_recall", 0.0)
+                ),
+                "leader_eval_filter_not_leader_rate": float(
+                    self.signal_training_manifest.get("leader_eval_filter_not_leader_rate", 0.0)
+                ),
                 "exit_eval_rank_corr": float(self.signal_training_manifest.get("exit_eval_rank_corr", 0.0)),
+                "exit_eval_path_corr": float(self.signal_training_manifest.get("exit_eval_path_corr", 0.0)),
                 "exit_eval_precision": float(self.signal_training_manifest.get("exit_eval_precision", 0.0)),
                 "exit_eval_recall": float(self.signal_training_manifest.get("exit_eval_recall", 0.0)),
                 "exit_eval_accuracy": float(self.signal_training_manifest.get("exit_eval_accuracy", 0.0)),
+                "exit_eval_label_accuracy": float(
+                    self.signal_training_manifest.get("exit_eval_label_accuracy", 0.0)
+                ),
+                "exit_eval_keep_precision": float(
+                    self.signal_training_manifest.get("exit_eval_keep_precision", 0.0)
+                ),
+                "exit_eval_watch_or_worse_recall": float(
+                    self.signal_training_manifest.get("exit_eval_watch_or_worse_recall", 0.0)
+                ),
+                "exit_eval_reduce_or_worse_recall": float(
+                    self.signal_training_manifest.get("exit_eval_reduce_or_worse_recall", 0.0)
+                ),
+                "exit_eval_exit_fast_recall": float(
+                    self.signal_training_manifest.get("exit_eval_exit_fast_recall", 0.0)
+                ),
             },
             "candidate_count": int(len(self.leader_candidates)),
             "top_candidate_symbols": [str(item.get("symbol", "")) for item in self.leader_candidates[:5]],
+            "label_coverage": {
+                "confirmed": int(self.full_training_label_manifest.get("leader_confirmed_count", 0)),
+                "possible": int(self.full_training_label_manifest.get("leader_possible_count", 0)),
+                "not_leader": int(self.full_training_label_manifest.get("leader_not_count", 0)),
+            },
         }
 
 
@@ -176,7 +218,7 @@ def _ranking_result_cache_key(
     trajectory: object | None,
 ) -> str:
     payload = {
-        "version": "v2-ranking-research-cache-2",
+        "version": "v2-ranking-research-cache-19",
         "strategy_id": str(strategy_id),
         "forecast_backend": str(forecast_backend),
         "retrain_days": int(retrain_days),

@@ -90,6 +90,16 @@ class StockForecastState:
     up_3d_prob: float = 0.5
     up_10d_prob: float = 0.5
     latest_close: float = float("nan")
+    breakout_quality_score: float = 0.0
+    exhaustion_reversal_risk: float = 0.0
+    pullback_reclaim_score: float = 0.0
+    distance_to_20d_high: float = 0.0
+    distance_to_20d_low: float = 0.0
+    volume_breakout_ratio: float = 0.0
+    upper_shadow_ratio_1: float = 0.0
+    body_ratio_1: float = 0.0
+    narrow_range_rank_20: float = 0.0
+    breakdown_below_20_low: float = 0.0
     horizon_forecasts: Dict[str, HorizonForecast] = field(default_factory=dict)
     selection_reasons: List[str] = field(default_factory=list)
     ranking_reasons: List[str] = field(default_factory=list)

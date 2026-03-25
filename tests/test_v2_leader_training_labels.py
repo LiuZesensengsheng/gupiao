@@ -141,9 +141,14 @@ def test_build_leader_training_labels_marks_true_leader_and_negative_tail() -> N
     row_map = {item.symbol: item for item in rows}
     assert row_map["AAA"].is_true_leader is True
     assert row_map["AAA"].leader_bucket == "true_leader"
+    assert row_map["AAA"].leader_tri_label == "confirmed_leader"
+    assert row_map["AAA"].is_confirmed_leader is True
     assert row_map["CCC"].hard_negative is True
     assert row_map["CCC"].future_excess_5d_vs_sector < 0.0
     assert row_map["CCC"].leader_bucket in {"hard_negative", "neutral"}
+    assert row_map["CCC"].leader_tri_label == "not_leader"
+    assert row_map["BBB"].leader_tri_label == "possible_leader"
+    assert row_map["BBB"].is_possible_leader is True
 
 
 def test_build_exit_training_labels_generates_keep_and_exit_cases() -> None:
@@ -158,7 +163,8 @@ def test_build_exit_training_labels_generates_keep_and_exit_cases() -> None:
     assert row_map["CCC"].should_watch is True
     assert row_map["CCC"].should_reduce is True
     assert row_map["CCC"].exit_label in {"reduce", "exit_fast"}
-    assert row_map["CCC"].future_drag_score == row_map["CCC"].exit_pressure_score
+    assert row_map["CCC"].path_failure_score > row_map["AAA"].path_failure_score
+    assert row_map["CCC"].breakdown_path_score > row_map["AAA"].breakdown_path_score
     assert row_map["CCC"].exit_pressure_score > row_map["AAA"].exit_pressure_score
     assert row_map["CCC"].sample_weight > row_map["AAA"].sample_weight
 
@@ -171,6 +177,10 @@ def test_build_research_label_artifact_payloads_handles_empty_and_populated_traj
     payload = build_research_label_artifact_payloads(trajectory=_make_trajectory())
     assert payload["training_label_manifest"]["leader_row_count"] == 3
     assert payload["training_label_manifest"]["leader_true_count"] >= 1
+    assert payload["training_label_manifest"]["leader_confirmed_count"] >= 1
+    assert payload["training_label_manifest"]["leader_possible_count"] >= 1
+    assert payload["training_label_manifest"]["leader_not_count"] >= 1
     assert payload["training_label_manifest"]["exit_row_count"] == 3
     assert payload["training_label_manifest"]["exit_watch_count"] >= 0
     assert payload["training_label_manifest"]["exit_fast_count"] + payload["training_label_manifest"]["exit_reduce_count"] >= 1
+    assert payload["training_label_manifest"]["exit_avg_path_failure_score"] >= 0.0

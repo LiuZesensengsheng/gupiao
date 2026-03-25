@@ -41,6 +41,37 @@ class StateBuildRuntimeDependencies:
     apply_leader_candidate_overlay: Callable[..., CompositeState]
 
 
+_STOCK_TECHNICAL_FEATURE_COLUMNS = (
+    "breakout_quality_score",
+    "exhaustion_reversal_risk",
+    "pullback_reclaim_score",
+    "distance_to_20d_high",
+    "distance_to_20d_low",
+    "volume_breakout_ratio",
+    "upper_shadow_ratio_1",
+    "body_ratio_1",
+    "narrow_range_rank_20",
+    "breakdown_below_20_low",
+)
+
+
+def _panel_feature_arrays(panel_row: pd.DataFrame) -> dict[str, np.ndarray]:
+    return {
+        name: panel_row.get(name, pd.Series(0.0, index=panel_row.index)).astype(float).to_numpy()
+        for name in _STOCK_TECHNICAL_FEATURE_COLUMNS
+    }
+
+
+def _row_feature_value(
+    row: object,
+    name: str,
+    *,
+    deps: StateBuildRuntimeDependencies,
+    default: float = 0.0,
+) -> float:
+    return float(deps.safe_float(getattr(row, name, default), default))
+
+
 def build_stock_states_from_panel_slice(
     *,
     panel_row: pd.DataFrame,
@@ -97,6 +128,7 @@ def build_stock_states_from_panel_slice(
     realized_5d_arr = panel_row.get("excess_ret_5_vs_mkt", pd.Series(np.nan, index=panel_row.index)).astype(float).to_numpy()
     realized_20d_arr = panel_row.get("excess_ret_20_vs_sector", pd.Series(np.nan, index=panel_row.index)).astype(float).to_numpy()
     latest_close_arr = panel_row.get("close", pd.Series(np.nan, index=panel_row.index)).astype(float).to_numpy()
+    technical_feature_arrays = _panel_feature_arrays(panel_row)
     short_expected_arr = short_profiles["expected_return"].to_numpy(dtype=float)
     mid_expected_arr = mid_profiles["expected_return"].to_numpy(dtype=float)
 
@@ -197,6 +229,16 @@ def build_stock_states_from_panel_slice(
                 alpha_score=float(item["score"]),
                 tradability_status=status,
                 latest_close=float(latest_close_arr[idx]),
+                breakout_quality_score=float(technical_feature_arrays["breakout_quality_score"][idx]),
+                exhaustion_reversal_risk=float(technical_feature_arrays["exhaustion_reversal_risk"][idx]),
+                pullback_reclaim_score=float(technical_feature_arrays["pullback_reclaim_score"][idx]),
+                distance_to_20d_high=float(technical_feature_arrays["distance_to_20d_high"][idx]),
+                distance_to_20d_low=float(technical_feature_arrays["distance_to_20d_low"][idx]),
+                volume_breakout_ratio=float(technical_feature_arrays["volume_breakout_ratio"][idx]),
+                upper_shadow_ratio_1=float(technical_feature_arrays["upper_shadow_ratio_1"][idx]),
+                body_ratio_1=float(technical_feature_arrays["body_ratio_1"][idx]),
+                narrow_range_rank_20=float(technical_feature_arrays["narrow_range_rank_20"][idx]),
+                breakdown_below_20_low=float(technical_feature_arrays["breakdown_below_20_low"][idx]),
                 horizon_forecasts=deps.build_horizon_forecasts(
                     latest_close=float(latest_close_arr[idx]),
                     horizon_probs={
@@ -435,6 +477,16 @@ def build_stock_states_from_rows(
                 ),
                 tradability_status=status,
                 latest_close=latest_close,
+                breakout_quality_score=_row_feature_value(row, "breakout_quality_score", deps=deps),
+                exhaustion_reversal_risk=_row_feature_value(row, "exhaustion_reversal_risk", deps=deps),
+                pullback_reclaim_score=_row_feature_value(row, "pullback_reclaim_score", deps=deps),
+                distance_to_20d_high=_row_feature_value(row, "distance_to_20d_high", deps=deps),
+                distance_to_20d_low=_row_feature_value(row, "distance_to_20d_low", deps=deps),
+                volume_breakout_ratio=_row_feature_value(row, "volume_breakout_ratio", deps=deps),
+                upper_shadow_ratio_1=_row_feature_value(row, "upper_shadow_ratio_1", deps=deps),
+                body_ratio_1=_row_feature_value(row, "body_ratio_1", deps=deps),
+                narrow_range_rank_20=_row_feature_value(row, "narrow_range_rank_20", deps=deps),
+                breakdown_below_20_low=_row_feature_value(row, "breakdown_below_20_low", deps=deps),
                 horizon_forecasts=deps.build_horizon_forecasts(
                     latest_close=latest_close,
                     horizon_probs=horizon_probs,

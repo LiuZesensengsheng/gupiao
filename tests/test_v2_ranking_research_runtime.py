@@ -183,9 +183,14 @@ def test_run_v2_ranking_research_builds_metrics_and_candidates(tmp_path: Path) -
     assert result.leader_candidates[0]["symbol"] == "AAA"
     assert result.signal_training_manifest["leader_fit_rows"] == 3
     assert result.signal_training_manifest["leader_rank_train_rows"] >= 2
+    assert result.full_training_label_manifest["leader_confirmed_count"] >= 1
+    assert result.full_training_label_manifest["leader_possible_count"] >= 1
+    assert result.full_training_label_manifest["leader_not_count"] >= 1
     assert "leader_filter_model" in result.leader_rank_model
     assert result.signal_training_manifest["exit_fit_rows"] == 3
     assert result.summary()["leader_metrics"]["candidate_recall_at_k"] >= 1.0
+    assert result.summary()["leader_metrics"]["possible_recall_at_k"] >= 1.0
+    assert result.summary()["label_coverage"]["confirmed"] >= 1
     assert any(stage == "ranking" and "排序研究完成" in message for stage, message in progress)
 
     artifacts = persist_v2_ranking_research_artifacts(result, artifact_root=str(tmp_path / "artifacts"))
